@@ -1,0 +1,14 @@
+# Secrets
+.env
+*.env
+!.env.example
+
+# Docker runtime data (server-stack)
+server-stack/jellyfin/
+server-stack/nextcloud/
+server-stack/portainer/
+
+# Node
+node_modules/
+build/
+dist/
