@@ -9,6 +9,7 @@ import tarfile
 import time
 
 AIOS_DIR = "/home/nost/AI-OS"
+NOTIFIER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "send_telegram_notification.py")
 TASK_RUNNER_REL = "AI-OS/02_Systems/Automation/TaskRunner"
 BACKUP_DIR = os.path.join(AIOS_DIR, TASK_RUNNER_REL, "backups")
 RETENTION_DAYS = 7
@@ -29,6 +30,13 @@ EXCLUDE_RELATIVE_PATHS = {
     f"{TASK_RUNNER_REL}/backups",
     "server-stack/nextcloud/data",
     "server-stack/portainer/data",
+    # Jellyfin's cache is regenerable and grows without bound once real media
+    # is attached (transcodes especially) - nothing in it is worth restoring.
+    # jellyfin/config IS kept, but note its jellyfin.db is a live SQLite file:
+    # tarring it while the container is writing can capture an inconsistent
+    # snapshot. Acceptable for a media server's metadata, not for anything
+    # that would matter - don't extend this pattern to a real database.
+    "server-stack/jellyfin/cache",
 }
 
 
@@ -75,18 +83,39 @@ def cleanup_old_archives():
     return removed
 
 
+def notify_failure(message):
+    """This runs unattended from a systemd timer at 03:00 - a failure that only
+    lands in the journal is a failure nobody sees. send_telegram_notification.py
+    exists for exactly this and was never actually wired up to it."""
+    try:
+        subprocess.run([sys.executable, NOTIFIER, message], timeout=30, check=False)
+    except Exception as e:  # never let the notifier itself mask the real failure
+        print(f"Could not send failure notification: {e}", file=sys.stderr)
+
+
 def main():
     archive_path = create_archive()
     size_mb = os.path.getsize(archive_path) / (1024 * 1024)
 
     uploaded, upload_log = upload_to_drive(archive_path)
-    removed = cleanup_old_archives()
+
+    # Prune ONLY after a successful upload. Pruning unconditionally means a
+    # silently broken remote (an unconfigured rclone, an expired token) deletes
+    # local archives on schedule while nothing is landing in the cloud - after
+    # RETENTION_DAYS there would be no backup in either place.
+    removed = cleanup_old_archives() if uploaded else []
 
     print(f"Archive: {archive_path}")
     print(f"Size: {size_mb:.2f} MB")
     print(f"Uploaded to {RCLONE_REMOTE}:{RCLONE_TARGET_FOLDER}: {'OK' if uploaded else 'FAILED'}")
     if not uploaded:
         print(f"Upload output:\n{upload_log}")
+        print(f"Keeping all local archives - pruning is skipped while uploads fail.")
+        notify_failure(
+            "AI-OS backup FAILED to upload.\n"
+            f"Archive kept locally: {archive_path} ({size_mb:.2f} MB)\n"
+            f"rclone: {upload_log[:500]}"
+        )
     if removed:
         print(f"Removed local archives older than {RETENTION_DAYS}d: {', '.join(removed)}")
 
