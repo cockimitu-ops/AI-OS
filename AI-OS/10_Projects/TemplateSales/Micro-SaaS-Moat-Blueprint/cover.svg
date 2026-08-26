@@ -1,0 +1,78 @@
+<svg viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, 'SF Mono', 'Cascadia Code', 'JetBrains Mono', monospace">
+  <defs>
+    <radialGradient id="glow" cx="27%" cy="50%" r="55%">
+      <stop offset="0%" stop-color="#1B212B"/>
+      <stop offset="100%" stop-color="#12161C"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#glow)"/>
+  <rect x="0.5" y="0.5" width="1199" height="629" fill="none" stroke="#545B68" stroke-opacity="0.35"/>
+
+  <!-- Grid rings -->
+  <g fill="none" stroke="#545B68" stroke-opacity="0.35">
+    <polygon points="330,286 362.3,309.5 350,347.5 310,347.5 297.7,309.5"/>
+    <polygon points="330,252 394.7,299 370,375 290,375 265.3,299"/>
+    <polygon points="330,218 427,288.5 390,402.5 270,402.5 233,288.5"/>
+    <polygon points="330,184 459.3,278 410,430 250,430 200.7,278"/>
+    <polygon points="330,150 491.7,267.5 429.96,457.5 230.04,457.5 168.3,267.5"/>
+  </g>
+
+  <!-- Axis lines -->
+  <g stroke="#545B68" stroke-opacity="0.5" stroke-width="1">
+    <line x1="330" y1="320" x2="330" y2="150"/>
+    <line x1="330" y1="320" x2="491.7" y2="267.5"/>
+    <line x1="330" y1="320" x2="429.96" y2="457.5"/>
+    <line x1="330" y1="320" x2="230.04" y2="457.5"/>
+    <line x1="330" y1="320" x2="168.3" y2="267.5"/>
+  </g>
+
+  <!-- Competitors: surveyed AI-LinkedIn tools, scored on the same 5 axes -->
+  <polygon points="330,252 362.3,309.5 370,375 300,361.3 265.3,299"
+           fill="#8B93A3" fill-opacity="0.18" stroke="#8B93A3" stroke-width="1.5"/>
+
+  <!-- Your wedge: the gap this template is built to find -->
+  <polygon points="330,184 362.3,309.5 390,402.5 290,375 233,288.5"
+           fill="#E8A33D" fill-opacity="0.22" stroke="#E8A33D" stroke-width="2"/>
+
+  <!-- Axis labels -->
+  <g fill="#8B93A3" font-size="13" letter-spacing="1.5px">
+    <text x="330" y="120" text-anchor="middle">DATA MOAT</text>
+    <text x="515" y="255" text-anchor="start">NETWORK</text>
+    <text x="515" y="271" text-anchor="start">EFFECTS</text>
+    <text x="445" y="472" text-anchor="start">SWITCHING COST</text>
+    <text x="215" y="472" text-anchor="end">DISTRIBUTION</text>
+    <text x="145" y="255" text-anchor="end">TECHNICAL</text>
+    <text x="145" y="271" text-anchor="end">COMPLEXITY</text>
+  </g>
+
+  <!-- Legend -->
+  <g font-size="13" font-family="Helvetica, Arial, sans-serif">
+    <rect x="168" y="528" width="12" height="12" fill="#8B93A3" fill-opacity="0.5"/>
+    <text x="188" y="538" fill="#8B93A3">Them — surveyed competitors</text>
+    <rect x="168" y="552" width="12" height="12" fill="#E8A33D"/>
+    <text x="188" y="562" fill="#E9E7E0">You — the gap this finds</text>
+  </g>
+
+  <!-- Text column -->
+  <text x="680" y="168" fill="#8B93A3" font-size="14" letter-spacing="3px">COMPETITOR RESEARCH SYSTEM</text>
+
+  <text x="678" y="262" fill="#E9E7E0" font-size="58" font-weight="700">Micro-SaaS</text>
+  <text x="678" y="328" font-size="58" font-weight="700">
+    <tspan fill="#E8A33D">Moat</tspan><tspan fill="#E9E7E0"> Blueprint</tspan>
+  </text>
+
+  <g fill="#C7C4BB" font-size="21" font-family="Helvetica, Arial, sans-serif">
+    <text x="680" y="380">Turn competitor gaps into a</text>
+    <text x="680" y="408">validated feature roadmap — in ~60 min.</text>
+  </g>
+
+  <line x1="680" y1="452" x2="1140" y2="452" stroke="#545B68" stroke-opacity="0.35"/>
+
+  <g fill="#8B93A3" font-size="13" letter-spacing="1.5px">
+    <text x="680" y="488">6-MODULE NOTION TEMPLATE</text>
+    <text x="930" y="488">·</text>
+    <text x="948" y="488">PROMPTS INCLUDED</text>
+    <text x="680" y="514" fill="#E8A33D" font-size="20" font-weight="700" letter-spacing="0.5px">$29</text>
+  </g>
+</svg>
