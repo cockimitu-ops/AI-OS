@@ -1,5 +1,6 @@
 import os
 import glob
+import subprocess
 import time
 import sys
 from dotenv import load_dotenv
@@ -42,6 +43,15 @@ for folder in [INBOX, COMPLETED, LOGS]:
 # their providers; these are the current equivalents as of 2026-08-26.
 PRIMARY_MODEL = "groq/openai/gpt-oss-120b"
 FALLBACK_MODEL = "gemini/gemini-3.6-flash"
+# Last-resort escalation only - runs through Claude Code headless (`claude -p`),
+# billed against Felix's Pro subscription's 5h/weekly quota, not a metered API.
+# Same mechanism as 03_Capabilities/AI-Bridge's askClaude(). Deliberately not a
+# second fallback tier alongside Gemini: that quota is shared with normal chat
+# use, so this only fires when BOTH Groq and Gemini have already failed, to
+# keep it rare rather than routine. Needs a one-time `claude setup-token` on
+# this machine before it works - see TaskRunner/README.md.
+CLAUDE_MODEL = "sonnet"
+CLAUDE_TIMEOUT_S = 170  # stay under dispatch_task.py/telegram_bridge.py's 180s wait
 
 # 3. Open Interpreter Headless Setup
 interpreter.auto_run = True
@@ -102,6 +112,37 @@ def _attempt(model, instruction):
         raise RuntimeError(f"{model} produced no output (likely rate-limited)")
     return format_interpreter_output(raw_output)
 
+def _attempt_claude(instruction):
+    """Last-resort escalation - see CLAUDE_MODEL comment above. Mirrors
+    AI-Bridge's askClaude() directly instead of shelling out through
+    bridge.mjs, so this runs with the worker's own cwd (AIOS repo root)
+    rather than the AI-Bridge folder."""
+    try:
+        result = subprocess.run(
+            ["claude", "-p", "--model", CLAUDE_MODEL],
+            input=instruction,
+            capture_output=True,
+            text=True,
+            timeout=CLAUDE_TIMEOUT_S,
+        )
+    except FileNotFoundError:
+        raise RuntimeError(
+            "claude CLI not found on PATH - install with: npm install -g @anthropic-ai/claude-code"
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"claude -p timed out after {CLAUDE_TIMEOUT_S}s")
+
+    if result.returncode != 0:
+        # claude -p prints "Not logged in" to stdout, everything else to stderr
+        detail = (result.stderr.strip() or result.stdout.strip())[:500]
+        hint = " (run: claude setup-token)" if "logged in" in detail.lower() else ""
+        raise RuntimeError(f"claude -p exited {result.returncode}: {detail}{hint}")
+
+    output = result.stdout.strip()
+    if not output:
+        raise RuntimeError("claude -p produced no output")
+    return output
+
 def run_worker():
     print("[AI-OS Worker] Active. Polling tasks/inbox/ ...")
     while True:
@@ -132,11 +173,16 @@ def run_worker():
                     try:
                         output = _attempt(FALLBACK_MODEL, instruction)
                     except Exception as fallback_error:
-                        output = (
-                            f"ERROR during execution.\n"
-                            f"Primary ({PRIMARY_MODEL}): {type(retry_error).__name__}: {retry_error}\n"
-                            f"Fallback ({FALLBACK_MODEL}): {type(fallback_error).__name__}: {fallback_error}"
-                        )
+                        print(f"[!] {FALLBACK_MODEL} failed ({fallback_error}); escalating to Claude (Pro quota - last resort)")
+                        try:
+                            output = _attempt_claude(instruction)
+                        except Exception as claude_error:
+                            output = (
+                                f"ERROR during execution.\n"
+                                f"Primary ({PRIMARY_MODEL}): {type(retry_error).__name__}: {retry_error}\n"
+                                f"Fallback ({FALLBACK_MODEL}): {type(fallback_error).__name__}: {fallback_error}\n"
+                                f"Escalation (claude -p {CLAUDE_MODEL}): {type(claude_error).__name__}: {claude_error}"
+                            )
 
             log_path = os.path.join(LOGS, f"{filename}.log")
             with open(log_path, "w", encoding="utf-8") as lf:
