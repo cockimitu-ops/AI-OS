@@ -36,6 +36,17 @@ Every product is the same artifact set:
 To add a product: write `packs/<name>.py`, run `pack_builder.py`, then the
 five markdown files. Do not rewrite the PDF generator.
 
+Three notes on actually running it (all verified 2026-08-26):
+- `pack_builder.py` needs `reportlab`, which is installed nowhere on the server.
+  See `requirements.txt` here — use a venv, it is not a system package.
+- Each config's `output` key is a working filename (`moat-prompt-pack.pdf`), not
+  the shipped one. Products ship it as `prompt-pack.pdf` inside their own folder;
+  build, then move and rename.
+- `packs/moat.py` was missing until 2026-08-26 — product 1 shipped a PDF that
+  could not be regenerated, contradicting the rule above. Written by
+  reverse-engineering the shipped PDF; the rebuilt file's rendered text is
+  byte-identical to it, so the config is faithful, not approximate.
+
 ## PRODUCTS
 
 **1. Micro-SaaS Moat Blueprint** — competitor research → defensibility score
