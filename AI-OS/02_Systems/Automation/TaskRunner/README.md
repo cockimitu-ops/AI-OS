@@ -18,6 +18,7 @@ Related Documents: [[02_Systems/Automation/README|Automation]], [[Future_Integra
 | `scripts/cloud_backup.py` | Tars the whole repo (`/home/nost/AI-OS`), uploads to Google Drive via `rclone`, prunes local archives older than 7 days. |
 | `scripts/send_telegram_notification.py` | One-off outbound Telegram message, reusing the same bot token — for things other than task results. Now actually wired into `cloud_backup.py`'s failure path. Stdlib-only on purpose: systemd runs `cloud_backup.py` under `/usr/bin/python3`, which has no `python-dotenv`, so a notifier importing it would have failed exactly when it was needed. |
 | `requirements.txt` | Pinned dependencies for the venv at `/home/nost/interpreter-env`. Added 2026-08-26 — there was no dependency manifest at all before. |
+| `test_taskrunner.py` | Regression tests for every reliability fix below. stdlib `unittest`, no dependencies, no venv: `python3 -m unittest test_taskrunner -v`. Runs in well under a second. |
 
 `tasks/` (inbox/completed/logs) and `backups/` are runtime output, not source — gitignored except for structure.
 
@@ -76,6 +77,12 @@ Four failure modes found by reading the code against how the pieces actually cal
 4. **Empty task = 180s of nothing.** An empty task file was deleted with no log written, so a waiting caller blocked for its full timeout on an instantly-known failure. It now gets an error log immediately.
 
 Backup fixes are in the backup section below.
+
+**These are covered by tests now** — `test_taskrunner.py`, 20 cases, stdlib only. Each one maps to a bug that was actually live here, because all four of the above fail silently rather than loudly: a truncated instruction, a blank answer, a service that restarts forever. Nothing raises.
+
+The suite was mutation-checked rather than assumed to work: each fix was reverted in a throwaway copy and the tests re-run. All four reverts were caught, each by the intended test. A test that passes against the broken code is worse than no test, so this check is worth repeating if the suite is ever extended.
+
+`AIOS_WORKSPACE` is redirected to a temp directory before `aios_runner` is imported, and the open-interpreter import is stubbed — the tests never touch the live queue, and never call a model.
 
 ## Verified working (2026-08-26)
 
