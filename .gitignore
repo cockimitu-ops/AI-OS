@@ -12,3 +12,14 @@ server-stack/portainer/
 node_modules/
 build/
 dist/
+
+# Python
+__pycache__/
+*.pyc
+
+# TaskRunner runtime data (queue, logs, backup archives - not source)
+AI-OS/02_Systems/Automation/TaskRunner/tasks/inbox/*
+AI-OS/02_Systems/Automation/TaskRunner/tasks/completed/*
+AI-OS/02_Systems/Automation/TaskRunner/tasks/logs/*
+!AI-OS/02_Systems/Automation/TaskRunner/tasks/**/.gitkeep
+AI-OS/02_Systems/Automation/TaskRunner/backups/*.tar.gz

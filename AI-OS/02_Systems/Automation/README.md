@@ -1,11 +1,14 @@
 # Automation
 
-Purpose: Systems that run without a person actively driving each step. First real content as of Sprint 025 — an MCP server exposing the AI OS to any MCP-compatible AI client.
-Last Updated: 2026-08-13
-Status: Active — one real artifact, not run/verified yet
+Purpose: Systems that run without a person actively driving each step.
+Last Updated: 2026-08-26
+Status: Active — Task Runner is three live systemd services on the server; MCP Server is one real artifact, not run/verified yet
 Related Documents: [[02_Systems/README|02_Systems]], [[Future_Integration]]
 
 ---
+
+## Task Runner (added 2026-08-26)
+The actual live automation: a headless worker (Open Interpreter) that executes tasks dropped into a queue, reachable via CLI or Telegram, plus a daily cloud backup. Previously ran as loose scripts at the repo root, outside the vault; moved into [[02_Systems/Automation/TaskRunner/README|TaskRunner/]] so the vault reflects what's actually running on the server. Full detail — file roles, systemd wiring, why `backups/` excludes itself from its own backup — in that folder's README.
 
 ## AI OS MCP Server
 Read-only MCP server, source in `ai-os-mcp/` (delivered as a separate zip, not part of this vault's own file tree). Exposes `search_vault`, `get_page`, `list_projects`, `get_project_status` — reads from Notion, not local files. Docker-packaged.
