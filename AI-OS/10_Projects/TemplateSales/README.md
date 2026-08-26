@@ -1,8 +1,8 @@
 # Template Sales
 
 Purpose: Sell automation/content-system templates (n8n packs, documented system templates) — Candidate Option 3 from [[10_Projects/MoneyMaking/Candidate_Options|MoneyMaking's research]]. The only option that works fully on €50 with no ongoing fixed costs, since it sells what's already been built.
-Last Updated: 2026-08-06
-Status: Active — not yet packaged
+Last Updated: 2026-08-26
+Status: Active — three products BUILT, none published
 Related Documents: [[10_Projects/README|10_Projects]], [[10_Projects/MoneyMaking/Candidate_Options|MoneyMaking Candidate Options]]
 
 ---
@@ -24,15 +24,29 @@ Gumroad and Whop noted as low-fee options in the original research. Etsy, Shopif
 ## Constraint
 Whatever gets sold must be genuinely reusable by someone else, not this vault's specific content (the actual scripts, the actual client relationships) — selling the *pattern*, not the *instance*.
 
-## Priority (set 2026-08-13)
-Ship **one** product first: the AI OS pattern itself, stripped of personal/project content. Not three product lines at once — see [[Income_Portfolio]] for the full sequence and the distribution reasoning behind it.
+## Priority (set 2026-08-13, superseded 2026-08-25)
+The 2026-08-13 priority was: ship **one** product first, the AI OS pattern itself, stripped of personal content.
 
-The decisive factor per 2026 market research is distribution, not product quality — and short-form video is the #1 discovery channel for Notion templates, which is exactly the capability already built in [[10_Projects/SocialMediaContent/README|SocialMediaContent]].
+**That is not what got built.** What exists instead is a three-product "Solo-Founder Systems" line, none of which is the AI OS pattern. The strategy changed in execution and nothing recorded the change, so this README described an unpackaged project while three finished products sat in its own subfolders. Recorded here on 2026-08-26 rather than quietly overwritten — the earlier reasoning may still be right, and reversing it should be a decision, not a drift.
+
+What survives from the 2026-08-13 reasoning and still applies: **distribution decides this, not product quality.** Short-form video is the #1 discovery channel for Notion templates, and that capability already exists in [[10_Projects/SocialMediaContent/README|SocialMediaContent]] — currently unused for this. The launch plan instead routes through Reddit; see `_infra/LAUNCH-ORDER.md`.
+
+## What Is Actually Built (2026-08-25)
+Authoritative state lives in `_infra/AI-CONTEXT.md` — that file is maintained; this section mirrors it.
+
+| Product | Price | Built | Live | Revenue |
+|---|---|---|---|---|
+| Micro-SaaS Moat Blueprint | $29 | yes | no | 0 |
+| The Pricing Teardown | $29 | yes | no | 0 |
+| Retention Engineering | $39 | yes | no | 0 |
+| Validation Stack (bundle 1+2) | $45 | listing copy only | no | 0 |
+
+Each product ships the same artifact set: `notion-template-structure.md`, a prompt-pack PDF, `example-run-through.md`, listing copy, a free lead magnet, Reddit launch posts, and `cover.svg`.
 
 ## Status
-Nothing packaged yet, platform not committed to — see Platforms above.
+**Blocked on one manual step, not on building.** Every product is finished. Felix has to publish the Notion pages and create the Gumroad listings — roughly 20 minutes per product. Nothing else waits on anything. Covers are SVG and need a manual PNG export (no renderer available in the environment that built them).
 
 ## Next Steps
-1. Decide which piece of the AI OS to package first — the whole framework, or one focused piece (e.g., just the Context Engine pattern)
-2. Strip anything project-specific (story content, client details) before packaging
-3. Set up a Gumroad or Whop listing
+1. Publish Micro-SaaS Moat Blueprint first (Notion page + Gumroad listing + PNG cover) — it feeds product 2
+2. Follow `_infra/LAUNCH-ORDER.md` for spacing; do not launch all three at once
+3. Decide whether the AI-OS-pattern product from the 2026-08-13 priority is still wanted as product 4, or dropped
