@@ -46,7 +46,7 @@ Prüfen mit `/status` in Claude Code.
 **2. Gemini-Key eintragen**
 
 ```bash
-copy .env.example .env
+cp .env.example .env
 ```
 
 Key rein, dann die gültigen Modell-IDs abfragen:

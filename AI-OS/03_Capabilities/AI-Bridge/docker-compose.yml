@@ -4,7 +4,7 @@
 # Logs:   docker compose logs -f ai-bridge
 # n8n:    http://localhost:5678
 #
-# Vorher .env anlegen (siehe .env.docker.example).
+# Vorher .env anlegen (siehe .env.example).
 
 services:
   ai-bridge:

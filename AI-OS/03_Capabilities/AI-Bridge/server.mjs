@@ -13,6 +13,13 @@ import { createServer } from "node:http";
 import { askGemini, askClaude } from "./bridge.mjs";
 
 const PORT = Number(process.env.PORT || 8080);
+// Default auf Loopback, nicht 0.0.0.0. Dieser Server gibt unauthentifizierten
+// Zugriff auf Claude weiter, sobald BRIDGE_TOKEN leer ist (siehe authorized()) -
+// mit 0.0.0.0 als Default haette ein Start ausserhalb von Docker die Bridge
+// sofort im ganzen WLAN offen gehabt. Im Container ist HOST=0.0.0.0 richtig und
+// ungefaehrlich, weil docker-compose den Port auf 127.0.0.1 bindet; dort wird
+// die Variable explizit gesetzt.
+const HOST = process.env.HOST || "127.0.0.1";
 const BRIDGE_TOKEN = process.env.BRIDGE_TOKEN || "";
 const MAX_CLAUDE = Number(process.env.MAX_CONCURRENT_CLAUDE || 1);
 
@@ -186,8 +193,8 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`AI Bridge läuft auf Port ${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`AI Bridge läuft auf ${HOST}:${PORT}`);
   console.log(`Claude-Parallelität: max ${MAX_CLAUDE}`);
   console.log(BRIDGE_TOKEN ? "Auth: Token aktiv" : "Auth: offen (nur für localhost geeignet!)");
 });

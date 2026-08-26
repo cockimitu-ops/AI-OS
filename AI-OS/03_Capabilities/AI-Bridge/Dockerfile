@@ -14,7 +14,12 @@ RUN mkdir -p /app/space && chown -R node:node /app
 # Nicht als root laufen - Claude Code meckert sonst
 USER node
 
+# HOST=0.0.0.0 nur hier: im Container muss der Server auf allen Interfaces
+# lauschen, damit Docker den Port ueberhaupt weiterreichen kann. Nach aussen
+# bindet docker-compose ihn auf 127.0.0.1. Ausserhalb des Containers greift
+# server.mjs' eigener Loopback-Default.
 ENV NODE_ENV=production \
+    HOST=0.0.0.0 \
     PORT=8080 \
     CLAUDE_CONFIG_DIR=/app/.claude
 
