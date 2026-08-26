@@ -43,13 +43,43 @@ for folder in [INBOX, COMPLETED, LOGS]:
 # their providers; these are the current equivalents as of 2026-08-26.
 PRIMARY_MODEL = "groq/openai/gpt-oss-120b"
 FALLBACK_MODEL = "gemini/gemini-3.6-flash"
-# Last-resort escalation only - runs through Claude Code headless (`claude -p`),
-# billed against Felix's Pro subscription's 5h/weekly quota, not a metered API.
-# Same mechanism as 03_Capabilities/AI-Bridge's askClaude(). Deliberately not a
-# second fallback tier alongside Gemini: that quota is shared with normal chat
-# use, so this only fires when BOTH Groq and Gemini have already failed, to
-# keep it rare rather than routine. Needs a one-time `claude setup-token` on
-# this machine before it works - see TaskRunner/README.md.
+
+# Ordered chain of free models to try per task: (model, delay_before_seconds).
+# Everything here is genuinely free - Groq and Gemini both meter quota
+# per-model, not per-account, so a second model on the same provider is a
+# separate bucket, not just another name for the same limit. Added 2026-08-26
+# after both PRIMARY_MODEL and FALLBACK_MODEL failed live in the same test run
+# - Felix has no budget for a paid API, so more free tiers beat a paid one.
+MODEL_CHAIN = [
+    (PRIMARY_MODEL, 0),
+    # Groq's per-minute token bucket is small enough that open-interpreter's
+    # system prompt alone can trip it; that clears in well under a minute.
+    (PRIMARY_MODEL, 20),
+    # Smaller sibling of PRIMARY_MODEL on the same Groq key - separate quota.
+    ("groq/openai/gpt-oss-20b", 0),
+    (FALLBACK_MODEL, 0),
+    # Lite sibling of FALLBACK_MODEL on the same Gemini key - separate quota.
+    # NOT "gemini-flash-lite-latest": that alias currently resolves to a newer
+    # model that 400s inside Open Interpreter's tool-calling flow (missing
+    # thought_signature on function-call parts - a real API constraint on
+    # newer "thinking" Gemini models, not a config mistake). Verified
+    # 2026-08-26 that gemini-3.5-flash-lite works cleanly through the same
+    # tool-calling path the worker actually uses.
+    ("gemini/gemini-3.5-flash-lite", 0),
+]
+
+# Last-resort escalation via Claude Code headless (`claude -p`), billed against
+# Felix's Pro subscription's 5h/weekly quota rather than a metered API. DISABLED
+# as of 2026-08-26 pending a real answer on whether routing an unattended,
+# Telegram-triggerable backend service through Pro-subscription auth is
+# consistent with Claude Code's usage terms - a prior session's handoff
+# (~/HANDOFF-1.md) flagged the same pattern in AI-Bridge's askClaude() as
+# "likely a real ToS problem... parked until rebuilt with an actual API key."
+# `-p` mode is Anthropic's own documented CI/scripting feature, so this isn't
+# a clear-cut violation either way - genuinely unresolved, not dismissed.
+# Do not flip this back to True without Felix explicitly deciding to accept
+# that risk, or switching this to a real ANTHROPIC_API_KEY instead.
+CLAUDE_ESCALATION_ENABLED = False
 CLAUDE_MODEL = "sonnet"
 CLAUDE_TIMEOUT_S = 170  # stay under dispatch_task.py/telegram_bridge.py's 180s wait
 
@@ -157,32 +187,33 @@ def run_worker():
                 continue
 
             print(f"[*] Processing task: {filename}")
-            try:
-                output = _attempt(PRIMARY_MODEL, instruction)
-            except Exception as primary_error:
-                # Groq's per-minute token bucket is small enough that
-                # open-interpreter's system prompt alone can trip it; that
-                # clears in well under a minute, so retry once locally before
-                # burning the fallback model's much scarcer daily quota.
-                print(f"[!] {PRIMARY_MODEL} failed ({primary_error}); retrying once in 20s")
-                time.sleep(20)
+            output = None
+            errors = []
+            for model, delay in MODEL_CHAIN:
+                if delay:
+                    time.sleep(delay)
                 try:
-                    output = _attempt(PRIMARY_MODEL, instruction)
-                except Exception as retry_error:
-                    print(f"[!] {PRIMARY_MODEL} retry failed ({retry_error}); falling back to {FALLBACK_MODEL}")
-                    try:
-                        output = _attempt(FALLBACK_MODEL, instruction)
-                    except Exception as fallback_error:
-                        print(f"[!] {FALLBACK_MODEL} failed ({fallback_error}); escalating to Claude (Pro quota - last resort)")
-                        try:
-                            output = _attempt_claude(instruction)
-                        except Exception as claude_error:
-                            output = (
-                                f"ERROR during execution.\n"
-                                f"Primary ({PRIMARY_MODEL}): {type(retry_error).__name__}: {retry_error}\n"
-                                f"Fallback ({FALLBACK_MODEL}): {type(fallback_error).__name__}: {fallback_error}\n"
-                                f"Escalation (claude -p {CLAUDE_MODEL}): {type(claude_error).__name__}: {claude_error}"
-                            )
+                    output = _attempt(model, instruction)
+                    break
+                except Exception as e:
+                    print(f"[!] {model} failed ({e})")
+                    errors.append(f"{model}: {type(e).__name__}: {e}")
+
+            if output is None and CLAUDE_ESCALATION_ENABLED:
+                print("[!] All free models failed; escalating to Claude (Pro quota - last resort)")
+                try:
+                    output = _attempt_claude(instruction)
+                except Exception as e:
+                    errors.append(f"claude -p {CLAUDE_MODEL}: {type(e).__name__}: {e}")
+
+            if output is None:
+                error_lines = "\n".join(f"- {line}" for line in errors)
+                note = (
+                    ""
+                    if CLAUDE_ESCALATION_ENABLED
+                    else "\n(Escalation: disabled pending ToS review - see CLAUDE_ESCALATION_ENABLED comment)"
+                )
+                output = f"ERROR during execution. All models failed:\n{error_lines}{note}"
 
             log_path = os.path.join(LOGS, f"{filename}.log")
             with open(log_path, "w", encoding="utf-8") as lf:
