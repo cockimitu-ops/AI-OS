@@ -2,7 +2,9 @@
 
 Exposes Felix's AI OS (synced in Notion) as MCP tools, so any MCP-compatible AI client can query it directly instead of scraping a public link.
 
-**Honest limitation:** this was written without the ability to actually `npm install` or compile-test it (no network access in the environment it was built in). The code follows the current MCP TypeScript SDK and Notion client API shapes correctly as far as known, but **run the build step yourself and check for errors before trusting it** — don't assume it's flawless just because it was written carefully.
+**Build status:** verified 2026-08-26. `npm install` resolves cleanly (111 packages) and `npm run build` compiles with zero TypeScript errors on Node 22 / npm 9. The original "written without network access, never compiled" caveat is resolved.
+
+**Still unverified:** the Notion side. Nothing here has been run against a real Notion integration token, so whether `search_vault` returns useful results still depends on step 2 below actually having been done.
 
 ## Tools It Exposes
 - `search_vault(query)` — keyword search across the whole AI OS
@@ -38,15 +40,17 @@ For Claude Desktop, add to its MCP config (`claude_desktop_config.json`):
   "mcpServers": {
     "ai-os": {
       "command": "docker",
-      "args": ["compose", "-f", "/full/path/to/ai-os-mcp/docker-compose.yml", "run", "--rm", "ai-os-mcp"]
+      "args": ["compose", "-f", "/full/path/to/AI-OSmcp/docker-compose.yml", "run", "--rm", "-T", "ai-os-mcp"]
     }
   }
 }
 ```
 
+`-T` is required, not optional: without it `docker compose run` allocates a TTY, and a TTY corrupts the newline-delimited JSON-RPC that the stdio transport depends on.
+
 ## Things Worth Checking Before Trusting It
-- Does `npm install` succeed cleanly, or are there version mismatches with the SDK?
-- Does `npm run build` compile without errors?
+- ~~Does `npm install` succeed cleanly, or are there version mismatches with the SDK?~~ Verified 2026-08-26 — clean.
+- ~~Does `npm run build` compile without errors?~~ Verified 2026-08-26 — zero errors.
 - Does `search_vault` actually return results — this depends on the integration having been shared with the right pages (step 2).
 - Table content in `get_page` may render roughly — Notion's block API is nested and this pulls table rows one level deep, not deeply verified.
 

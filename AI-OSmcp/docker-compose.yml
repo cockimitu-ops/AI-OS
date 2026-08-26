@@ -3,5 +3,8 @@ services:
     build: .
     environment:
       - NOTION_API_KEY=${NOTION_API_KEY}
+    # stdin_open keeps stdin attached for the stdio transport.
+    # NO tty: an MCP stdio server speaks newline-delimited JSON-RPC on
+    # stdin/stdout - a pseudo-TTY echoes input and rewrites line endings,
+    # which corrupts that framing. This must stay a plain pipe.
     stdin_open: true
-    tty: true
