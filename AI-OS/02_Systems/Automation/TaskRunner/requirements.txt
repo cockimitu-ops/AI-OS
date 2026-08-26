@@ -1,0 +1,16 @@
+# TaskRunner dependencies — the venv the systemd units use is
+# /home/nost/interpreter-env. Pinned to what is actually installed and verified
+# working as of 2026-08-26, not to "latest": open-interpreter 0.4.3 in
+# particular has quirks aios_runner.py works around by hand (dead llm.model_list
+# fields, a NameError in its own rate-limit branch), and an unpinned upgrade
+# would silently invalidate those workarounds.
+#
+# Install:  /home/nost/interpreter-env/bin/pip install -r requirements.txt
+open-interpreter==0.4.3
+litellm==1.83.0
+python-dotenv==1.2.3
+python-telegram-bot==22.8
+
+# NOT required by scripts/send_telegram_notification.py — that one is
+# deliberately stdlib-only, because systemd runs cloud_backup.py (which calls
+# it on failure) under /usr/bin/python3, outside this venv.

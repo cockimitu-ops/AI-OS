@@ -33,8 +33,13 @@ def main():
     task_path = os.path.join(INBOX, task_filename)
     log_path = os.path.join(LOGS, f"{task_filename}.log")
 
-    with open(task_path, "w", encoding="utf-8") as f:
+    # Atomar einreihen: der Worker globt tasks/inbox/*.md im Sekundentakt und
+    # koennte sonst eine halb geschriebene Datei aufschnappen und eine
+    # abgeschnittene Anweisung ausfuehren. .part wird vom Glob nicht erfasst.
+    tmp_path = f"{task_path}.part"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         f.write(prompt)
+    os.replace(tmp_path, task_path)
 
     print(f"[*] Task eingereiht: {task_filename}")
 

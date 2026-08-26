@@ -181,54 +181,89 @@ def _attempt_claude(instruction):
         raise RuntimeError("claude -p produced no output")
     return output
 
+def _write_log(filename, output):
+    """Write the result log atomically. dispatch_task.py and telegram_bridge.py
+    poll for this file's *existence*, so a plain open("w") would let them read a
+    zero-byte or half-written log the instant it's created. Write to a temp name
+    the pollers don't look at, then rename - rename is atomic on the same
+    filesystem, so the log only ever appears complete."""
+    log_path = os.path.join(LOGS, f"{filename}.log")
+    tmp_path = f"{log_path}.partial"
+    with open(tmp_path, "w", encoding="utf-8") as lf:
+        lf.write(output)
+    os.replace(tmp_path, log_path)
+
+
+def _run_task(task_path, filename):
+    with open(task_path, "r", encoding="utf-8") as f:
+        instruction = f.read().strip()
+
+    if not instruction:
+        # Still write a log: a caller waiting on this file would otherwise
+        # block for its full 180s timeout on what is an instant, known failure.
+        _write_log(filename, "ERROR: task file was empty - nothing to execute.")
+        os.rename(task_path, os.path.join(COMPLETED, filename))
+        return
+
+    print(f"[*] Processing task: {filename}")
+    output = None
+    errors = []
+    for model, delay in MODEL_CHAIN:
+        if delay:
+            time.sleep(delay)
+        try:
+            output = _attempt(model, instruction)
+            break
+        except Exception as e:
+            print(f"[!] {model} failed ({e})")
+            errors.append(f"{model}: {type(e).__name__}: {e}")
+
+    if output is None and CLAUDE_ESCALATION_ENABLED:
+        print("[!] All free models failed; escalating to Claude (Pro quota - last resort)")
+        try:
+            output = _attempt_claude(instruction)
+        except Exception as e:
+            errors.append(f"claude -p {CLAUDE_MODEL}: {type(e).__name__}: {e}")
+
+    if output is None:
+        error_lines = "\n".join(f"- {line}" for line in errors)
+        note = (
+            ""
+            if CLAUDE_ESCALATION_ENABLED
+            else "\n(Escalation: disabled pending ToS review - see CLAUDE_ESCALATION_ENABLED comment)"
+        )
+        output = f"ERROR during execution. All models failed:\n{error_lines}{note}"
+
+    _write_log(filename, output)
+    os.rename(task_path, os.path.join(COMPLETED, filename))
+    print(f"[✓] Done: {filename}")
+
+
 def run_worker():
     print("[AI-OS Worker] Active. Polling tasks/inbox/ ...")
     while True:
         task_files = sorted(glob.glob(os.path.join(INBOX, "*.md")))
         for task_path in task_files:
             filename = os.path.basename(task_path)
-            with open(task_path, "r", encoding="utf-8") as f:
-                instruction = f.read().strip()
-
-            if not instruction:
-                os.remove(task_path)
-                continue
-
-            print(f"[*] Processing task: {filename}")
-            output = None
-            errors = []
-            for model, delay in MODEL_CHAIN:
-                if delay:
-                    time.sleep(delay)
+            try:
+                _run_task(task_path, filename)
+            except Exception as e:
+                # Anything the per-model handling above didn't already catch
+                # (unreadable task file, full disk, a rename failure, a library
+                # blowing up outside _attempt). Without this the exception
+                # escapes run_worker, systemd's Restart=always brings the worker
+                # straight back, it re-globs the SAME still-in-inbox task, and
+                # the service crash-loops on one poisoned file forever.
+                print(f"[!] Task {filename} failed hard: {type(e).__name__}: {e}")
                 try:
-                    output = _attempt(model, instruction)
+                    _write_log(filename, f"ERROR: worker failed on this task.\n{type(e).__name__}: {e}")
+                    os.rename(task_path, os.path.join(COMPLETED, filename))
+                except Exception as move_err:
+                    # Can't even quarantine it - drop out of the loop for this
+                    # pass rather than spinning on it at full speed.
+                    print(f"[!] Could not quarantine {filename}: {move_err}")
+                    time.sleep(10)
                     break
-                except Exception as e:
-                    print(f"[!] {model} failed ({e})")
-                    errors.append(f"{model}: {type(e).__name__}: {e}")
-
-            if output is None and CLAUDE_ESCALATION_ENABLED:
-                print("[!] All free models failed; escalating to Claude (Pro quota - last resort)")
-                try:
-                    output = _attempt_claude(instruction)
-                except Exception as e:
-                    errors.append(f"claude -p {CLAUDE_MODEL}: {type(e).__name__}: {e}")
-
-            if output is None:
-                error_lines = "\n".join(f"- {line}" for line in errors)
-                note = (
-                    ""
-                    if CLAUDE_ESCALATION_ENABLED
-                    else "\n(Escalation: disabled pending ToS review - see CLAUDE_ESCALATION_ENABLED comment)"
-                )
-                output = f"ERROR during execution. All models failed:\n{error_lines}{note}"
-
-            log_path = os.path.join(LOGS, f"{filename}.log")
-            with open(log_path, "w", encoding="utf-8") as lf:
-                lf.write(output)
-
-            os.rename(task_path, os.path.join(COMPLETED, filename))
-            print(f"[✓] Done: {filename}")
 
         time.sleep(2)
 

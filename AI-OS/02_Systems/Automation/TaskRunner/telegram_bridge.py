@@ -31,9 +31,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     task_path = os.path.join(INBOX, task_file)
     log_path = os.path.join(LOGS, f"{task_file}.log")
 
-    # In Inbox schreiben
-    with open(task_path, "w", encoding="utf-8") as f:
+    # In Inbox schreiben - atomar, siehe dispatch_task.py: der Worker pollt
+    # tasks/inbox/*.md und darf keine halb geschriebene Datei sehen.
+    tmp_path = f"{task_path}.part"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         f.write(instruction)
+    os.replace(tmp_path, task_path)
 
     status_msg = await update.message.reply_text(f"⏳ Task eingereiht (`{task_file}`). Worker führt aus...")
 
