@@ -1,5 +1,17 @@
 # AI Bridge — Claude × Gemini
 
+> ⚠️ **PARKIERT seit 2026-08-26 — nicht produktiv nutzen.** Eine frühere Session
+> (`~/HANDOFF-1.md`, 2026-08-24) hat genau das hier — Claude Code über
+> Pro-Abo-Auth statt über einen echten API-Key laufen zu lassen, um Metered
+> Billing zu umgehen — als "likely a real ToS problem" markiert und explizit
+> geparkt, bis auf einen echten `ANTHROPIC_API_KEY` umgestellt wird. Nicht
+> eindeutig geklärt: `-p`-Modus ist offiziell für Skripte/CI gedacht (siehe
+> unten), aber ein Dauerbetrieb als unbeaufsichtigter Hintergrunddienst ist
+> etwas anderes als eine CI-Pipeline. Technisch funktioniert `askClaude()`
+> nachweislich (verifiziert 2026-08-26) — das ist nicht die offene Frage.
+> Nicht wieder aktivieren, ohne dass Felix das bewusst entscheidet oder auf
+> einen echten API-Key umgestellt wird.
+
 Ein gemeinsamer Arbeitsraum, in dem sich beide Modelle gegenseitig aufrufen können.
 **Ohne Anthropic-API-Key.**
 
