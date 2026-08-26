@@ -495,3 +495,53 @@ Flagged that a Gemini text response presented as a video critique was actually a
 - Changelog/Suggestions/Roadmap history - append-only, accurate as of when written
 ### Notes
 Full audit run before and after - dead links, orphans, missing indexes all clean. One real stale reference (10_Projects/README.md) caught by the audit and fixed, not missed.
+
+## [0.34.0-alpha] - 2026-08-26
+Retroactive entry. Everything below was built and committed between 2026-08-25 and 2026-08-26 and was never logged here — the Changelog stopped at 0.33.0 (2026-08-13) while the repository kept moving. Reconstructed from git history and the live server, not from memory.
+
+### Added
+- `02_Systems/Automation/TaskRunner/` — the first real automation in the vault. Headless Open Interpreter worker (`aios_runner.py`), CLI dispatcher, Telegram bridge, daily rclone backup. Three systemd services (`aios-worker`, `aios-telegram`, `aios-backup.timer`) running continuously on the server. Moved in from loose scripts at the repo root.
+- `System_Prompt.md` — the worker's prompt, versioned as Markdown rather than hardcoded in Python. Gives it the vault's folder map so it stops rediscovering the layout per task.
+- `03_Capabilities/AI-Bridge/` — Claude×Gemini bridge (Node), plus an HTTP surface and an n8n service for it.
+- `10_Projects/TemplateSales/` — three complete products (Micro-SaaS Moat Blueprint $29, Pricing Teardown $29, Retention Engineering $39), a $45 bundle listing, a shared prompt-pack PDF generator, and a staged launch order.
+- `AI-OSmcp/` and `server-stack/` brought into the repository as siblings of the vault.
+
+### Changed
+- Free-model rotation expanded to five attempts across two providers after both the primary and fallback models failed live in the same test run.
+
+### Parked
+- Claude escalation tier in TaskRunner: built, verified working, then disabled the same day (`CLAUDE_ESCALATION_ENABLED = False`). Routing an unattended, Telegram-triggerable service through Pro-subscription auth is an unresolved ToS question. AI-Bridge is parked for the identical reason.
+
+## [0.35.0-alpha] - 2026-08-26
+### Fixed — live code
+- `aios_runner.py`: an unhandled exception anywhere in the per-task body escaped the polling loop. With systemd's `Restart=always` and the task still sitting in `tasks/inbox/`, that was an unbounded crash-loop on a single bad file. Per-task work now runs under a guard that quarantines the task and writes an error log.
+- `aios_runner.py`: result logs were written with a plain `open("w")`, but `dispatch_task.py` and `telegram_bridge.py` poll for that file's *existence* — both could read an empty or half-written log and report it as the answer. Logs are now written to a temp name and renamed atomically.
+- `dispatch_task.py`, `telegram_bridge.py`: task files were written non-atomically into a directory the worker globs every 2 seconds, so a half-written file could be picked up and a truncated instruction executed. Both now write `.part` and rename.
+- `aios_runner.py`: an empty task file was deleted with no log written, leaving any waiting caller to block for its full 180-second timeout on an instant, known failure.
+- `cloud_backup.py`: local archives were pruned on a 7-day schedule regardless of whether the upload succeeded. A silently broken remote plus scheduled pruning means no backup in either place after a week. Pruning now requires a successful upload.
+- `cloud_backup.py`: failures were silent — journal-only, on a job that runs unattended at 03:00. `send_telegram_notification.py` existed for exactly this and had never been wired to anything. It is now.
+- `send_telegram_notification.py`: depended on `python-dotenv`, which is not installed for the interpreter systemd runs `cloud_backup.py` with. The notifier would have failed precisely when called. Rewritten stdlib-only.
+- `cloud_backup.py`: added `server-stack/jellyfin/cache` to the excludes — regenerable, and unbounded once real media is attached.
+- `AI-OSmcp/docker-compose.yml`: `tty: true` on a stdio MCP server. A pseudo-TTY corrupts newline-delimited JSON-RPC. Removed, and the documented Claude Desktop command corrected to pass `-T`.
+- `AI-Bridge/server.mjs`: listened on `0.0.0.0` while its own auth is optional (no `BRIDGE_TOKEN` = open). Started outside Docker, that exposed unauthenticated Claude access to the whole LAN. Defaults to `127.0.0.1` now; the container sets `HOST=0.0.0.0` explicitly, where compose already binds it to loopback.
+- `AI-Bridge`: `.env.example` was referenced by the README and `.env.docker.example` by the compose file. Neither existed. One real `.env.example` added, both references fixed.
+
+### Verified
+- MCP server: `npm install` clean, `npm run build` compiles with zero errors (Node 22). Closes the "written blind, never compiled" caveat carried since Sprint 025.
+- TaskRunner: worker restarted on the patched code and a real `dispatch_task.py` round trip returned correctly.
+- `rclone gdrive:` remote confirmed reachable; `aios-backup.service`'s stale `failed` state (from a run that predated the rclone config) cleared.
+
+### Fixed — status drift
+- Root `README.md` said "Version 0.1.0-alpha, Sprint 001" — twenty-eight sprints stale. Root cause: it was never in `Development_Workflow.md`'s sprint-completion checklist. It is now, which is the second time that checklist has been the actual fix.
+- `Home.md` at 0.20.0-alpha, `Dashboard.md` at 0.33.0-alpha.
+- `Dashboard.md` contradicted itself: "Current Work: The_Doorbell_Camera — Ready to Publish" directly above "archived, never published."
+- `FundingApplications/README.md` header said "Closed — not pursued, by choice"; its own Status section said the futureSAX call was the highest-priority action across the whole effort.
+- `TemplateSales/README.md` said "nothing packaged yet" while three finished products sat in its subfolders, and still named a first product ("the AI OS pattern") that was never what got built.
+- `_infra/LAUNCH-ORDER.md` referenced `pricing/` and `retention/` folders that do not exist. All 14 file references now resolve.
+- `Knowledge_Core.md` — the always-loaded standing context — carried four stale facts: no automation, unverified MCP server, nothing packaged in TemplateSales, and funding as the top unclaimed action.
+- `02_Systems/Automation/README.md` claimed the whole folder stayed inside the no-automation boundary, in a file whose first section is a live unattended executor.
+- `03_Capabilities/README.md` never listed AI-Bridge, which lives in that folder.
+- `Repository_Structure.md` — the authoritative map — was missing TaskRunner, AI-Bridge, all three TemplateSales products, `AI-OSmcp/`, and `server-stack/`.
+
+### Notes
+Wikilink integrity was checked across all 216 Markdown files: zero dead links. The nine apparent hits are the same illustrative placeholders `Repository_Audit.md` identified in Sprint 013. Link hygiene is genuinely solid; *status* hygiene is where this vault repeatedly fails, and every drift item above was a file contradicting either itself or a sibling, not a broken reference.

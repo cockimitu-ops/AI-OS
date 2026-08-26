@@ -1,13 +1,24 @@
 # Repository Structure
 
 Purpose: The authoritative, current folder-and-file map of AI OS.
-Last Updated: 2026-08-05
+Last Updated: 2026-08-26
 Status: Active
 Related Documents: [[Architecture]], [[Naming_Convention]], [[ADR-0005_Project_Knowledge_Separation]]
 
 ---
 
-## Current Tree (as of Sprint 020)
+## Where This Tree Starts
+The vault (`AI-OS/`, below) is one folder inside a wider repository. The repo root also holds two non-vault siblings, and neither appeared in this "authoritative" map until 2026-08-26:
+
+```
+/home/nost/AI-OS/            <- git repository root
+├── .env                     Secrets for the TaskRunner services (gitignored)
+├── AI-OS/                   <- the Obsidian vault, mapped below
+├── AI-OSmcp/                Read-only Notion MCP server (TypeScript, Docker)
+└── server-stack/            docker-compose: Jellyfin, Nextcloud, Portainer
+```
+
+## Current Tree (vault only, as of Sprint 029)
 
 ```
 AI-OS/
@@ -103,7 +114,19 @@ AI-OS/
 │   │   ├── Review_Process.md
 │   │   ├── Review_Cadences.md
 │   │   └── Continuous_Improvement_Cycle.md
-│   ├── Automation/README.md
+│   ├── Automation/
+│   │   ├── README.md
+│   │   └── TaskRunner/
+│   │       ├── README.md
+│   │       ├── System_Prompt.md          the worker's system prompt, versioned as Markdown
+│   │       ├── aios_runner.py            the headless worker (systemd: aios-worker)
+│   │       ├── dispatch_task.py          CLI entry point
+│   │       ├── telegram_bridge.py        Telegram entry point (systemd: aios-telegram)
+│   │       ├── scripts/
+│   │       │   ├── cloud_backup.py       daily rclone backup (systemd: aios-backup.timer)
+│   │       │   └── send_telegram_notification.py
+│   │       ├── tasks/                    inbox/completed/logs — runtime, gitignored
+│   │       └── backups/                  local archives — runtime, gitignored
 │   ├── AI/README.md
 │   └── Architecture/README.md
 ├── 03_Capabilities/
@@ -124,7 +147,16 @@ AI-OS/
 │   ├── Series_Planning.md
 │   ├── Veo_Prompt_Design.md
 │   ├── Generation_Mode_Selection.md
-│   └── Watermark_Tier_Management.md
+│   ├── Watermark_Tier_Management.md
+│   └── AI-Bridge/                        code capability, PARKED — see its README
+│       ├── README.md
+│       ├── CLAUDE.md
+│       ├── bridge.mjs
+│       ├── server.mjs
+│       ├── roundtable.mjs
+│       ├── Dockerfile
+│       ├── docker-compose.yml
+│       └── space/                        session transcripts
 ├── 04_Agents/
 │   ├── README.md
 │   ├── Vault_Architect.md
@@ -183,7 +215,15 @@ AI-OS/
 │   │   ├── Fulfillment_Workflow.md
 │   │   └── Real_Time_Problem_Arbitrage.md
 │   ├── TemplateSales/
-│   │   └── README.md
+│   │   ├── README.md
+│   │   ├── _infra/
+│   │   │   ├── AI-CONTEXT.md             authoritative product/launch state
+│   │   │   ├── LAUNCH-ORDER.md
+│   │   │   ├── pack_builder.py           builds every product's prompt-pack PDF
+│   │   │   └── packs/                    per-product PDF configs (pricing, retention)
+│   │   ├── Micro-SaaS-Moat-Blueprint/    $29 — built, unpublished
+│   │   ├── Pricing-Teardown/             $29 — built, unpublished
+│   │   └── Retention-Engineering/        $39 — built, unpublished
 │   ├── FundingApplications/
 │   │   ├── README.md
 │   │   └── Funding_Opportunities.md

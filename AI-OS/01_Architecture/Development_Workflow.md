@@ -1,7 +1,7 @@
 # Development Workflow
 
 Purpose: How work actually gets done in AI OS — roles, sequencing, and how changes are proposed.
-Last Updated: 2026-08-03
+Last Updated: 2026-08-26
 Status: Active
 Related Documents: [[Roadmap]], [[01_Architecture/ADR/README|ADR README]]
 
@@ -18,7 +18,7 @@ The Engineer does not change the architecture unilaterally. Anything the Enginee
 2. Engineer implements the scope: files, folders, documentation.
 3. Engineer records suggestions and open questions, but does not act on them.
 4. Architect reviews, approves, and either authorizes the next sprint or requests changes to the current one.
-5. `Changelog.md`, `Dashboard.md`, **and `Roadmap.md`** are updated to reflect the completed sprint. All three, every time — Roadmap was originally omitted here, and drifted four sprints behind before it was caught (Sprint 026). A status document that isn't in the completion checklist will go stale, regardless of intent.
+5. `Changelog.md`, `Dashboard.md`, `Roadmap.md`, **and the root `README.md`** are updated to reflect the completed sprint. All four, every time — Roadmap was originally omitted here and drifted four sprints behind before it was caught (Sprint 026); the root `README.md` was omitted too and sat frozen on "Sprint 001, 0.1.0-alpha" for twenty-eight sprints until Sprint 029 caught it. A status document that isn't in this checklist will go stale, regardless of intent. That is now twice-demonstrated, not a theory.
 
 ## Proposing Structural Change
 Structural changes (new top-level folders, renamed responsibilities, changed conventions) go through an ADR, not a direct edit:

@@ -1,7 +1,7 @@
 # Dashboard
 
 Purpose: The operating-system home screen — what's happening right now, and how to act on it, without navigating the rest of the vault.
-Last Updated: 2026-08-03
+Last Updated: 2026-08-26
 Status: Active
 Stability: Dynamic
 Related Documents: [[Home]], [[Roadmap]], [[Changelog]], [[00_System/Commands/Command_Index|Command Index]]
@@ -16,10 +16,10 @@ Full list: [[00_System/Commands/Command_Index|Command Index]]. Most common:
 - "Create captions" → [[Multi_Platform_Caption_Generation]]
 
 ## Current Work
-[[The_Doorbell_Camera]] — Ready to Publish. Two Publishing Checklist items still open: an actual audio TTS read-through, and series sequencing (no second story exists yet to sequence against).
+Infrastructure, not content. Three systemd services run continuously on the server ([[02_Systems/Automation/TaskRunner/README|TaskRunner]]); three [[10_Projects/TemplateSales/README|TemplateSales]] products are built and waiting on Felix to publish Notion pages + Gumroad listings (~20 min each). No story is in production — a new topic still hasn't been chosen since the Horror archival.
 
 ## Recent Stories
-The Doorbell Camera — archived 2026-08-13, never published. See [[99_Archive/HorrorProject/README|HorrorProject]].
+The Doorbell Camera — archived 2026-08-13, never published. See [[99_Archive/HorrorProject/README|HorrorProject]]. (This section and Current Work contradicted each other until 2026-08-26: Current Work still called it "Ready to Publish".)
 
 ## Analytics Waiting
 [[Hook_Database]], [[Ending_Database]], and [[Retention_Database]] all have zero entries.
@@ -34,15 +34,15 @@ None tracked yet. See [[Experiment_Tracking]].
 - [[10_Projects/SocialMediaContent/README|SocialMediaContent]] — Horror archived; AI Video active (Glass Crush Loop); new story topic not yet chosen
 - [[10_Projects/ContentAgency/README|ContentAgency]] — not yet launched
 - [[10_Projects/QuickTurnaroundGigs/README|QuickTurnaroundGigs]] — structure only, not yet executed
-- [[10_Projects/TemplateSales/README|TemplateSales]] — not yet packaged
-- [[10_Projects/FundingApplications/README|FundingApplications]] — futureSAX call is the top priority action
+- [[10_Projects/TemplateSales/README|TemplateSales]] — three products built (Moat Blueprint $29, Pricing Teardown $29, Retention Engineering $39); blocked only on publishing Notion pages + Gumroad listings
+- [[10_Projects/FundingApplications/README|FundingApplications]] — **closed by choice 2026-08-13**, not pursued
 - [[10_Projects/MoneyMaking/README|MoneyMaking]] — research complete, now the historical record
 
 ## Commands
 [[00_System/Commands/Command_Index|Full Command Index]] · [[00_System/Commands/Quick_Start|Quick Start]]
 
 ## Current Version
-`0.33.0-alpha`
+`0.35.0-alpha`
 
 ## Repository Health
 Structural audit: [[00_System/Repository_Audit|Repository Audit]] (Sprint 013). Strategic review: [[00_System/Design_Review|Design Review]] (Sprint 014) — confirms the actual business is original horror content, not Reddit adaptation; 17 ranked recommendations, 5 critical.
@@ -52,7 +52,7 @@ Structural audit: [[00_System/Repository_Audit|Repository Audit]] (Sprint 013). 
 |---|---|
 | Content (Knowledge) | 20 notes — general Knowledge Core plus Horror-specific, shared across every project |
 | Analytics | Methodology complete; output structures built, zero real entries |
-| Automation | MCP server documented (Sprint 025) — written, not yet run/verified |
+| Automation | **Live.** TaskRunner = 3 systemd services (worker, Telegram bridge, daily backup). MCP server build verified 2026-08-26 (compiles clean); Notion side still untested |
 | Research / AI / Architecture | Not started |
 
 See Projects above for what those knowledge notes and capabilities are actually being used for.
@@ -61,7 +61,10 @@ See Projects above for what those knowledge notes and capabilities are actually 
 [[ADR-0001_Naming_Disambiguation]], [[ADR-0002_Git_Workflow_Conventions]], [[ADR-0003_Execution_Engine_Placement]], [[ADR-0004_Template_Framework_Placement]], [[ADR-0005_Project_Knowledge_Separation]] — all Accepted.
 
 ## Open Items
-- Agents: decided (manual, chat-triggered) and built — 4 scoped roles as of Sprint 024.
+- Agents: decided (manual, chat-triggered) and built — 4 scoped roles as of Sprint 024. Note this is about `04_Agents/` personas only; TaskRunner is infrastructure and sits outside that decision — see [[02_Systems/Automation/README|Automation]].
+- **Publish the three TemplateSales products.** The only step between built product and possible first revenue.
+- **Decide the Claude-via-Pro-subscription ToS question** — gates both `CLAUDE_ESCALATION_ENABLED` in TaskRunner and the whole [[03_Capabilities/AI-Bridge/README|AI-Bridge]] capability, both currently parked.
+- Choose a new story topic — the content pillar has had none since the Horror archival.
 - First real production run of [[Reddit_Story_Production]].
 - Universe Support — deferred pending confirmation; see `Suggestions.md`.
 

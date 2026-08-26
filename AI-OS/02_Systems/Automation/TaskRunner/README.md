@@ -2,7 +2,7 @@
 
 Purpose: The live automation loop that lets Felix hand AI-OS a task from anywhere (shell or Telegram) and get it executed headlessly on the server. Moved here from the repo root on 2026-08-26 so the vault's own README reflects what's actually running, instead of the automation living as loose scripts beside it.
 Last Updated: 2026-08-26
-Status: Active — three systemd services running continuously on the server
+Status: Active — three systemd services running continuously on the server; hardened and re-verified 2026-08-26
 Related Documents: [[02_Systems/Automation/README|Automation]], [[Future_Integration]]
 
 ---
@@ -16,7 +16,8 @@ Related Documents: [[02_Systems/Automation/README|Automation]], [[Future_Integra
 | `dispatch_task.py` | CLI entry point. Drops a task file into `tasks/inbox/`, then polls for the matching log (up to 180s) and prints the result. `--no-wait` to fire and return immediately. |
 | `telegram_bridge.py` | Same idea, over Telegram — only replies to the one allowed user ID, edits its own status message once the worker's log appears. |
 | `scripts/cloud_backup.py` | Tars the whole repo (`/home/nost/AI-OS`), uploads to Google Drive via `rclone`, prunes local archives older than 7 days. |
-| `scripts/send_telegram_notification.py` | One-off outbound Telegram message, reusing the same bot token — for things other than task results (e.g. backup failures). |
+| `scripts/send_telegram_notification.py` | One-off outbound Telegram message, reusing the same bot token — for things other than task results. Now actually wired into `cloud_backup.py`'s failure path. Stdlib-only on purpose: systemd runs `cloud_backup.py` under `/usr/bin/python3`, which has no `python-dotenv`, so a notifier importing it would have failed exactly when it was needed. |
+| `requirements.txt` | Pinned dependencies for the venv at `/home/nost/interpreter-env`. Added 2026-08-26 — there was no dependency manifest at all before. |
 
 `tasks/` (inbox/completed/logs) and `backups/` are runtime output, not source — gitignored except for structure.
 
@@ -50,13 +51,35 @@ Content-wise it gives the worker: what AI-OS actually is, the real top-level fol
 
 Verified live: worker restarted, then a real `dispatch_task.py` call asked it to name TemplateSales's and the capabilities' folders "without searching first" — answered both correctly on the first response, no filesystem discovery.
 
+## Backup: what was actually broken
+
+**Pruning ran even when the upload failed.** `cleanup_old_archives()` deleted local archives older than 7 days regardless of whether anything reached Google Drive. Combined with the next item, that is a real path to having no backup in either place: uploads fail silently, pruning keeps running on schedule, and after a week the local copies are gone too. Pruning is now conditional on a successful upload.
+
+**Failures were invisible.** This runs unattended from a timer at 03:00, and a failure only reached the journal. `aios-backup.service` was in fact sitting in a `failed` state — the 19:40 run on 2026-08-26 predated the `rclone config`, so the upload had never actually succeeded from systemd. Nothing said so anywhere. `cloud_backup.py` now calls `send_telegram_notification.py` on upload failure. The stale failed state was cleared and the `gdrive:` remote confirmed reachable.
+
+**One open item:** the timer's first *scheduled* run since rclone was configured has not happened yet. The remote is confirmed working and the script path is confirmed working; the systemd-triggered combination of the two is the piece still unproven.
+
 ## Why backups/ excludes itself
 
 `cloud_backup.py` tars the entire repo including this folder. Without an explicit exclude, every new archive would embed all previous archives inside itself, growing without bound. `EXCLUDE_RELATIVE_PATHS` in the script excludes its own `backups/` and `tasks/logs/` for exactly that reason — don't remove those excludes without addressing that.
 
+## Reliability fixes (2026-08-26)
+
+Four failure modes found by reading the code against how the pieces actually call each other, all fixed:
+
+1. **Crash-loop on one bad task.** Nothing guarded the per-task body in `run_worker()`. An unreadable task file, a full disk, a failed rename — anything outside `_attempt()`'s own handling — escaped the loop, systemd's `Restart=always` brought the worker straight back, it re-globbed the *same* still-queued file, and repeated forever. Per-task work now runs under a guard that writes an error log and quarantines the task into `completed/`.
+
+2. **Half-written logs read as answers.** `dispatch_task.py` and `telegram_bridge.py` poll for the *existence* of `tasks/logs/<task>.log`. The worker created it with a plain `open("w")`, so both could read a zero-byte or partial file and print it as the result. Logs are now written to `<name>.log.partial` and `os.replace`d into place — the pollers never see an incomplete file.
+
+3. **Half-written tasks executed.** The same race in the other direction: both entry points wrote task files directly into `tasks/inbox/`, which the worker globs every two seconds. A truncated instruction could be picked up and run. Both now write `.part` and rename.
+
+4. **Empty task = 180s of nothing.** An empty task file was deleted with no log written, so a waiting caller blocked for its full timeout on an instantly-known failure. It now gets an error log immediately.
+
+Backup fixes are in the backup section below.
+
 ## Verified working (2026-08-26)
 
-Moved from repo root into this vault path; systemd units, `.env`, and both scripts' hardcoded fallback paths updated to match. Confirmed via `sudo systemctl restart` on both continuous services plus a live `dispatch_task.py` round trip (task landed in the new inbox, worker picked it up, log + completed file appeared in the new location). The round trip's *LLM* result errored — Groq per-minute limit plus Gemini's daily free-tier quota both exhausted at the time — unrelated to the move itself, worth re-testing once quota resets.
+Moved from repo root into this vault path; systemd units, `.env`, and both scripts' hardcoded fallback paths updated to match. Confirmed via `sudo systemctl restart` on both continuous services plus a live `dispatch_task.py` round trip (task landed in the new inbox, worker picked it up, log + completed file appeared in the new location). The round trip's *LLM* result errored at the time — Groq per-minute limit plus Gemini's daily free-tier quota both exhausted — unrelated to the move itself. **Re-tested 2026-08-26 after the reliability fixes above: worker restarted on the patched code, `dispatch_task.py` round trip returned the expected answer through the free chain.** The model rotation works; that earlier failure was quota, as suspected.
 
 **Also fixed the same day:** the move had left `aios-worker.service`'s `WorkingDirectory` pointing into this nested folder instead of the repo root — harmless for `aios_runner.py` itself (it resolves its own paths via `AIOS_WORKSPACE`), but it silently changed the cwd that Open Interpreter's shell commands execute *tasks'* file operations from. Reverted to `/home/nost/AI-OS`.
 
