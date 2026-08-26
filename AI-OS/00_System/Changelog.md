@@ -545,3 +545,22 @@ Retroactive entry. Everything below was built and committed between 2026-08-25 a
 
 ### Notes
 Wikilink integrity was checked across all 216 Markdown files: zero dead links. The nine apparent hits are the same illustrative placeholders `Repository_Audit.md` identified in Sprint 013. Link hygiene is genuinely solid; *status* hygiene is where this vault repeatedly fails, and every drift item above was a file contradicting either itself or a sibling, not a broken reference.
+
+## [0.36.0-alpha] - 2026-08-26
+Second half of Sprint 029: the decisions the audit surfaced, plus the two build items that came out of them.
+
+### Added
+- `01_Architecture/ADR/ADR-0006_Project_Folder_Naming.md` — closes the Sprint 018 backlog item (open eleven sprints). Amends the rule rather than renaming ten project folders: `PascalCase` for projects under `10_Projects/`, `kebab-case` for product folders inside a project, leading underscore for tooling. Renaming was rejected on evidence — the vault's link integrity is currently perfect and renaming would put every wikilink into `10_Projects/` at risk to satisfy a rule nobody had been confused by.
+- `02_Systems/Automation/TaskRunner/test_taskrunner.py` — 20 regression tests, stdlib `unittest`, no dependencies, 0.06s. Covers every reliability fix from 0.35.0. Mutation-checked: each fix was reverted in a throwaway copy and all four reverts were caught by the intended test. The suite redirects `AIOS_WORKSPACE` to a temp directory and stubs the open-interpreter import, so it never touches the live queue and never calls a model.
+- `10_Projects/TemplateSales/_infra/packs/moat.py` — product 1 shipped a prompt-pack PDF with no config behind it, so unlike the other two it could not be regenerated. Reconstructed by decoding the shipped PDF's ASCII85+Flate content streams; the rebuilt PDF's rendered text is byte-identical to the shipped file across all 108 lines.
+- `_infra/requirements.txt` — `reportlab` is installed nowhere on this machine, so `pack_builder.py` could not run at all.
+
+### Decided
+- **Claude via the Pro subscription: both paths stay parked.** TaskRunner's escalation tier and the whole AI-Bridge capability. The free Groq/Gemini chain is verified working and costs nothing; the ToS question isn't worth resolving for capacity that isn't currently needed. Both are a flag away from returning. Moved from "genuinely blocked" to Off the Table — it was a question being carried, not a blocker.
+- **Universe Support: dropped**, after eleven sprints queued-and-approved. Its justification was written for the horror brand archived in Sprint 027.
+- **AI Video Production status and the new story topic: deferred by decision**, until the three built TemplateSales products are published. Both stay untouched rather than half-pursued.
+- **`.env` stays inside the backup archive.** A restore needs it. Recorded as a conscious tradeoff rather than left as an unexamined default.
+- **Jellyfin's media path stays a placeholder** — no media attached yet.
+
+### Notes
+Two things worth carrying forward. First, the mutation check on the test suite mattered: a test that passes against the broken code is worse than no test, and that is only knowable by breaking the code on purpose. Second, `moat.py`'s reconstruction was verified by diffing rendered output rather than by reading it over — the config *looking* right and the config *reproducing the product* are different claims, and only the second one is worth stating.
