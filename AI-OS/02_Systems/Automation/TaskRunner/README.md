@@ -12,6 +12,7 @@ Related Documents: [[02_Systems/Automation/README|Automation]], [[Future_Integra
 | File | Role |
 |---|---|
 | `aios_runner.py` | The worker. Polls `tasks/inbox/` in a loop, runs each task through Open Interpreter (headless, `auto_run=True`), writes the result to `tasks/logs/`, moves the task to `tasks/completed/`. Tries a chain of free models in order (`MODEL_CHAIN`) before giving up — see below. A Claude tier (`claude -p --model sonnet`) exists but is **disabled** — see further below. |
+| `System_Prompt.md` | The worker's actual system prompt — see below. |
 | `dispatch_task.py` | CLI entry point. Drops a task file into `tasks/inbox/`, then polls for the matching log (up to 180s) and prints the result. `--no-wait` to fire and return immediately. |
 | `telegram_bridge.py` | Same idea, over Telegram — only replies to the one allowed user ID, edits its own status message once the worker's log appears. |
 | `scripts/cloud_backup.py` | Tars the whole repo (`/home/nost/AI-OS`), uploads to Google Drive via `rclone`, prunes local archives older than 7 days. |
@@ -36,6 +37,18 @@ All three load secrets via `EnvironmentFile=/home/nost/AI-OS/.env` — the `.env
 Felix has no budget for a paid API, so the whole chain stays free by construction. `MODEL_CHAIN` in `aios_runner.py` tries, in order: `groq/openai/gpt-oss-120b` → same model again after a 20s cooldown (Groq's per-minute bucket clears fast) → `groq/openai/gpt-oss-20b` → `gemini/gemini-3.6-flash` → `gemini/gemini-3.5-flash-lite`. The two "second sibling" models (`gpt-oss-20b`, `flash-lite`) cost nothing new — same `GROQ_API_KEY`/`GEMINI_API_KEY` already in `.env`, no new signup — and each is metered as a separate quota bucket from its sibling, so they're genuinely additional headroom, not the same limit under a different name.
 
 **One real dead end during this, worth remembering:** the obvious pick, `gemini/gemini-flash-lite-latest`, works fine as a raw API call but 400s specifically inside Open Interpreter's tool-calling flow (`Function call is missing a thought_signature` — a real constraint newer "thinking" Gemini models impose on function-call parts, not a config mistake). Always verify a new model through the *actual* code path (`_attempt()`), not just a raw curl — that's what caught this before it shipped silently broken. `gemini-3.5-flash-lite` was checked the same way and works cleanly.
+
+## Vault-aware system prompt (added 2026-08-26)
+
+The system prompt used to be a generic six-line string hardcoded in `aios_runner.py` — no awareness this worker runs inside a specific, structured vault. Every task that needed to find something (e.g. "check TemplateSales status") burned a `find`/`grep` round-trip rediscovering the folder layout from scratch, which costs more on the small free models in `MODEL_CHAIN` than on a large one.
+
+Moved to [[02_Systems/Automation/TaskRunner/System_Prompt|System_Prompt.md]] instead — same "Markdown is the source of truth" convention the rest of the vault already follows, so it's editable/versioned like everything else, not buried in Python. `_load_system_prompt()` reads it at startup and extracts everything between two HTML-comment markers (plain text only in there — no wikilinks, the worker can't resolve Obsidian syntax).
+
+Content-wise it gives the worker: what AI-OS actually is, the real top-level folder map (so `10_Projects/<name>/` vs `02_Systems/` isn't rediscovered every time), and one new guardrail that didn't exist before — no destructive/hard-to-reverse actions (`rm -rf`, force-push, deleting outside scratch, overwriting uncommitted git changes) unless the task text explicitly asks for that exact thing. Everything else stays exactly as unattended as before.
+
+**Deliberately not filed under `04_Agents/`.** That folder's own README states plainly it introduces no automation — every entry there is "invoked manually, in chat" with "no separate infrastructure." TaskRunner is precisely that infrastructure, for a different purpose (fire-and-forget execution while Felix isn't at a keyboard) — filing it there would misrepresent both what `04_Agents/` means and what this actually is. `System_Prompt.md`'s own "What you are, and aren't" section says this explicitly, so a future session reading either file lands on the same answer.
+
+Verified live: worker restarted, then a real `dispatch_task.py` call asked it to name TemplateSales's and the capabilities' folders "without searching first" — answered both correctly on the first response, no filesystem discovery.
 
 ## Why backups/ excludes itself
 

@@ -83,7 +83,25 @@ CLAUDE_ESCALATION_ENABLED = False
 CLAUDE_MODEL = "sonnet"
 CLAUDE_TIMEOUT_S = 170  # stay under dispatch_task.py/telegram_bridge.py's 180s wait
 
-# 3. Open Interpreter Headless Setup
+# 3. System prompt - loaded from the vault (System_Prompt.md), not hardcoded
+# here, so it's visible/editable/versioned like the rest of AI-OS instead of
+# buried in this file. See that file's own header for why it isn't a
+# 04_Agents/ entry.
+SYSTEM_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "System_Prompt.md")
+
+def _load_system_prompt():
+    with open(SYSTEM_PROMPT_PATH, "r", encoding="utf-8") as f:
+        content = f.read()
+    start_marker = "<!-- WORKER_PROMPT_START -->"
+    end_marker = "<!-- WORKER_PROMPT_END -->"
+    try:
+        start = content.index(start_marker) + len(start_marker)
+        end = content.index(end_marker)
+    except ValueError:
+        raise RuntimeError(f"{SYSTEM_PROMPT_PATH} is missing {start_marker}/{end_marker} markers")
+    return content[start:end].strip()
+
+# 4. Open Interpreter Headless Setup
 interpreter.auto_run = True
 interpreter.safe_mode = "off"
 interpreter.offline = False
@@ -93,17 +111,7 @@ interpreter.verbose = False
 # AttributeError and crash-loops the service.
 interpreter.disable_telemetry = True
 interpreter.llm.model = PRIMARY_MODEL
-
-interpreter.system_message = """
-You are the headless execution worker of AI-OS on Ubuntu Server.
-Run all necessary shell and file commands non-interactively without user prompts.
-Return concise, structured Markdown summaries of the results.
-Commands that can produce a lot of output (recursive find/grep, listing many
-files, printing whole directory trees) are truncated after a few thousand
-characters - bound the output yourself instead (head, wc -l, a narrower path
-or -maxdepth, grep -c, etc.) rather than dumping everything and re-reading
-a truncation notice.
-"""
+interpreter.system_message = _load_system_prompt()
 
 def format_interpreter_output(messages):
     if isinstance(messages, str):
