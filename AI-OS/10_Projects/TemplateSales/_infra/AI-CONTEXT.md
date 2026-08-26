@@ -84,6 +84,7 @@ Product 3 is standalone (1972 Andes crash, public record).
   template business.
 
 ## OPEN / UNRESOLVED
+- **`GUMROAD_LISTINGS_READY_TO_POST.md` recovered 2026-08-26.** Draft listing copy for two products that were never built here: "The AI-OS Framework" ($27, launch $19) — likely the "AI OS pattern" product #4 this file's own LAUNCH ORDER section left unresolved — and a separate "Short-Form AI Content Production Engine" ($29), not previously named anywhere in TemplateSales. Recovered from `~/AI_OS_Launch_Package.zip`, a home-directory archive that had never been synced into the vault. Not acted on — the AI-OS-pattern question was explicitly deferred 2026-08-26 (see [[Roadmap]]). Kept here so it isn't lost, not as a signal to build it.
 - All covers are SVG. No renderer in container, no network. Felix exports PNG
   manually (browser screenshot or Canva).
 - Notion connector is read-only in Claude sessions — can list/read pages,
