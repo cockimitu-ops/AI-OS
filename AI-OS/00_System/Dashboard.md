@@ -58,15 +58,15 @@ Structural audit: [[00_System/Repository_Audit|Repository Audit]] (Sprint 013). 
 See Projects above for what those knowledge notes and capabilities are actually being used for.
 
 ## Governance
-[[ADR-0001_Naming_Disambiguation]], [[ADR-0002_Git_Workflow_Conventions]], [[ADR-0003_Execution_Engine_Placement]], [[ADR-0004_Template_Framework_Placement]], [[ADR-0005_Project_Knowledge_Separation]] — all Accepted.
+[[ADR-0001_Naming_Disambiguation]], [[ADR-0002_Git_Workflow_Conventions]], [[ADR-0003_Execution_Engine_Placement]], [[ADR-0004_Template_Framework_Placement]], [[ADR-0005_Project_Knowledge_Separation]], [[ADR-0006_Project_Folder_Naming]] — all Accepted.
 
 ## Open Items
 - Agents: decided (manual, chat-triggered) and built — 4 scoped roles as of Sprint 024. Note this is about `04_Agents/` personas only; TaskRunner is infrastructure and sits outside that decision — see [[02_Systems/Automation/README|Automation]].
 - **Publish the three TemplateSales products.** The only step between built product and possible first revenue.
-- **Decide the Claude-via-Pro-subscription ToS question** — gates both `CLAUDE_ESCALATION_ENABLED` in TaskRunner and the whole [[03_Capabilities/AI-Bridge/README|AI-Bridge]] capability, both currently parked.
-- Choose a new story topic — the content pillar has had none since the Horror archival.
-- First real production run of [[Reddit_Story_Production]].
-- Universe Support — deferred pending confirmation; see `Suggestions.md`.
+- ~~Claude-via-Pro ToS question~~ — decided 2026-08-26: both stay parked. See [[Roadmap]]'s *Off the Table*.
+- ~~Universe Support~~ — dropped 2026-08-26; it was scoped for the archived Horror pillar.
+- Choose a new story topic, and settle AI Video Production's status — **both deliberately deferred** until the TemplateSales products are published. Not blocking anything.
+- First real production run of [[Reddit_Story_Production]] — waits on the topic above.
 
 ## Notes
 This dashboard is maintained manually.

@@ -1,7 +1,7 @@
 # Naming Convention
 
 Purpose: Naming rules for folders, files, and links across AI OS.
-Last Updated: 2026-08-03
+Last Updated: 2026-08-26
 Status: Active
 Stability: Core
 Related Documents: [[Repository_Structure]], [[Development_Workflow]]
@@ -13,6 +13,12 @@ Related Documents: [[Repository_Structure]], [[Development_Workflow]]
 - Top-level folders carry a two-digit numeric prefix for fixed ordering: `00_System`, `01_Architecture`, ... `99_Archive`.
 - Subfolders below the top level do not carry numeric prefixes unless ordering matters within that folder specifically.
 - Acronyms (e.g., `AI`) are kept as-is rather than forced into mixed case — see `02_Systems/AI/`. Ratified in [[ADR-0001_Naming_Disambiguation]].
+
+### Two scoped exceptions — [[ADR-0006_Project_Folder_Naming]]
+- **Project folders under `10_Projects/` use `PascalCase` without underscores** (`SocialMediaContent`, `QuickTurnaroundGigs`). A project name reads as one compound identifier, closer to a proper noun than a descriptive filename.
+- **Product folders inside a project may use `kebab-case`** (`Micro-SaaS-Moat-Blueprint`), and a leading underscore marks tooling rather than product content (`_infra`). These names usually mirror a public artifact — a Gumroad slug, a URL, a file a buyer downloads — and rewriting them to match an internal rule breaks that correspondence for nothing.
+
+Both are narrow by design: they cover `10_Projects/` and its contents, and are not a general licence to pick a style per folder.
 
 ## Files
 - `Pascal_Case.md` — no spaces, no numeric prefixes unless the file is explicitly part of an ordered sequence (see ADR naming below).
