@@ -1,13 +1,21 @@
-# Today: r/SaaS, Post 1
+# r/SaaS Post 1 — warm up first, then post
 
-Purpose: Everything for today's specific action per `_infra/LAUNCH-ORDER.md` and `launch-checklist.md` — just Post 1, not the other two (X-thread day 3, r/indiehackers day 7). Posting all three at once is exactly what the launch order says not to do.
+Purpose: Everything for the r/SaaS post per `_infra/LAUNCH-ORDER.md` and `launch-checklist.md` — just Post 1, not the other two (X-thread day 3, r/indiehackers day 7). Renamed from "ready today" on 2026-08-27: Felix confirmed the account has no comment history in r/SaaS specifically, so this isn't a same-day action anymore.
 Last Updated: 2026-08-27
-Status: Action item — post today, then watch for 3 hours
+Status: Blocked on warm-up — do not post yet
 
 ---
 
-## Before you post — check this first
-Do you have comment history in r/SaaS? A brand-new account dropping this reads as spam regardless of quality, and burns the account for every future post too. If you don't have history there, warm up with a few genuine comments first, or pick a sub you already have standing in.
+## Why this actually matters, not just a formality
+Confirmed via research, not assumed: r/SaaS has been actively auto-removing posters with no prior subreddit participation. General benchmark across SaaS-adjacent subs (not officially published by r/SaaS itself, but consistent across sources): 30+ days account age, visible comment history, activity across a handful of subs rather than only the target one. As of April 2026, r/SaaS also caps self-promotion — posts, comment plugs, and product mentions all count — to once every 60 days.
+
+**That last part is the one to actually watch:** don't mention the product, the Notion template, or anything promotional in ANY warm-up comment. That would spend the 60-day allowance on a throwaway comment instead of the actual launch post. Warm-up comments should be 100% about the other person's post — genuine input, nothing about you.
+
+## Warm-up plan
+Over the next 3–5 days, leave a handful of genuine comments on other people's posts in r/SaaS — not about your product, just real input. The natural angle: you've been building the exact competitor-research process this post describes, so posts about "how do I know if my SaaS idea is worth building," pricing questions, or "why did my last idea fail" are places you can add something specific and useful without it reading as setup for a pitch. Once you've got a few real comments with real replies under them, the account has the standing this post needs.
+
+## When you're ready to actually post
+Everything below is unchanged from the original draft — title, body, and the reply templates for once it's live.
 
 ## Title
 I scored my own SaaS idea 13/25 on defensibility and killed it. Here's the framework I used.

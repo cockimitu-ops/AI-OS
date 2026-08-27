@@ -122,6 +122,25 @@ def _filename(title):
     return "_".join(p[:1].upper() + p[1:] for p in parts)[:80] + ".md"
 
 
+def _first_sentence_for_purpose(body):
+    """The Purpose: line needs one prose sentence, not the body's literal first
+    line. Found live: a worker-written note started its body with "## Context",
+    and that heading landed as Purpose: verbatim - a markdown header is not a
+    sentence, and the worker has no reason to know Purpose: needs one.
+    Skips heading lines, list markers, and blank lines to find the first real
+    prose line instead."""
+    for line in body.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.lstrip("#").strip() == "" or line.startswith("#"):
+            continue  # a heading line, not prose
+        if line.startswith(("-", "*", ">")):
+            continue  # a list/quote marker line, not a standalone sentence
+        return line[:160]
+    return "Generated note."
+
+
 def write_note(folder, title, body, status="Active", related=None, dry_run=False):
     body = _clean(body)
     if not body:
@@ -141,9 +160,10 @@ def write_note(folder, title, body, status="Active", related=None, dry_run=False
         path = os.path.join(target_dir, name)
 
     rel_links = related or ["[[" + folder + "/README|" + folder + "]]"]
+    purpose = _first_sentence_for_purpose(body)
     content = (
         f"# {title.strip()}\n\n"
-        f"Purpose: {(body.strip().splitlines() or ['Generated note.'])[0][:160]}\n"
+        f"Purpose: {purpose}\n"
         f"Last Updated: {_today()}\n"
         f"Status: {status}\n"
         f"Related Documents: {', '.join(rel_links)}\n\n"

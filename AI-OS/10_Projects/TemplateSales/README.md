@@ -44,7 +44,7 @@ Authoritative state lives in `_infra/AI-CONTEXT.md` — that file is maintained;
 Each product ships the same artifact set: `notion-template-structure.md`, a prompt-pack PDF, `example-run-through.md`, listing copy, a free lead magnet, Reddit launch posts, and `cover.svg`.
 
 ## Launch kits — pull to publish
-Micro-SaaS Moat Blueprint (live): `_infra/pull_moat_blueprint_launch_kit.sh` / `.ps1`.
+Micro-SaaS Moat Blueprint (live, distribution blocked on Reddit warm-up — see `reddit_post1_warmup_then_post.md`): `_infra/pull_moat_blueprint_launch_kit.sh` / `.ps1`.
 Pricing Teardown (staged for Week 3-4 per `_infra/LAUNCH-ORDER.md`, not yet published — do not publish before Moat Blueprint's Reddit cycle finishes): `_infra/pull_pricing_teardown_launch_kit.sh` / `.ps1`.
 Both over Tailscale, both include a rendered `cover.png` — no manual screenshot-export step.
 

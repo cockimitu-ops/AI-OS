@@ -549,6 +549,22 @@ class TestVaultWrite(unittest.TestCase):
         self.assertTrue(path.endswith("08_Research/Groq_Rate_Limits.md"), path)
         self.assertIn("Finding body.", content)
 
+    def test_purpose_line_skips_a_leading_markdown_header(self):
+        """Found live: a worker note started its body with "## Context", and
+        that heading landed in Purpose: verbatim - a header is not a sentence,
+        and the worker has no reason to know the field needs prose."""
+        _, content = self.vw.write_note(
+            "08_Research", "T", "## Context\nReal finding here.", dry_run=True)
+        purpose_line = [l for l in content.splitlines() if l.startswith("Purpose:")][0]
+        self.assertEqual(purpose_line, "Purpose: Real finding here.")
+
+    def test_purpose_line_skips_leading_list_markers_too(self):
+        _, content = self.vw.write_note(
+            "08_Research", "T", "- a bullet\n- another\nActual sentence.",
+            dry_run=True)
+        purpose_line = [l for l in content.splitlines() if l.startswith("Purpose:")][0]
+        self.assertEqual(purpose_line, "Purpose: Actual sentence.")
+
     def test_generates_the_required_vault_header(self):
         """Naming_Convention.md requires these four fields on every note, and a
         small model will not produce them reliably - so they are generated."""

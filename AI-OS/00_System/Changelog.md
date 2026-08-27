@@ -629,3 +629,10 @@ job rather than being a gap.
 ### Added
 - `10_Projects/TemplateSales/_infra/pull_pricing_teardown_launch_kit.sh` / `.ps1` - same launch-kit pattern as Moat Blueprint, staged for Week 3-4 per `_infra/LAUNCH-ORDER.md`. Deliberately not published yet - both scripts carry that warning inline, and no Notion page was created for it (unlike Moat Blueprint), matching the vault's own one-product-at-a-time sequencing.
 - `10_Projects/TemplateSales/Micro-SaaS-Moat-Blueprint/reddit_post1_ready_today.md` - just today's action (r/SaaS Post 1 + reply templates), not all three scheduled posts. Bundling day-3 and day-7 content into "today's" file would invite posting all three at once, exactly what `_infra/LAUNCH-ORDER.md` warns against.
+
+## [0.42.0-alpha] - 2026-08-27
+### Fixed
+- `vault_write.py`: `Purpose:` extraction took the body's literal first line, no matter what it was. A worker-written note started its body with `## Context`, and that heading landed in `Purpose:` verbatim — `08_Research/Reddit_SaaS_Launch_Constraints_And_Warmup_Requirements.md` shipped with `Purpose: ## Context`. `_first_sentence_for_purpose()` now skips heading and list-marker lines to find the first real prose line. Fixed the one already-written note directly; two regression tests added.
+
+### Blocked, correctly
+- Micro-SaaS Moat Blueprint's Reddit launch: Felix has no comment history in r/SaaS. Confirmed via research this is a real constraint, not overcaution — r/SaaS actively auto-removes zero-participation posters, and caps self-promotion (comments included) to once per 60 days as of April 2026. `reddit_post1_ready_today.md` renamed to `reddit_post1_warmup_then_post.md` and rewritten with a warm-up plan; status updated in TemplateSales/README.md and Dashboard.md. Logged as a standing research note (`08_Research/`) since it applies to all three products' Reddit launches, not just this one.
