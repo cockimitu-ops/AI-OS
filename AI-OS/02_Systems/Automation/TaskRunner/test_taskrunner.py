@@ -266,20 +266,53 @@ class TestCrashGuard(TaskRunnerTestCase):
 
 
 class TestOutputFormatting(TaskRunnerTestCase):
-    def test_assistant_message_and_command_output_both_survive(self):
+    """Bug: the formatter concatenated every assistant message, every code
+    block AND every raw command output, so Telegram showed the worker's scratch
+    work instead of its answer - a `find` invocation followed by a truncated
+    wall of paths, with the actual reply buried at the bottom. Changed
+    2026-08-27 to return prose only."""
+
+    def test_prose_wins_and_the_transcript_is_suppressed(self):
         out = self.runner.format_interpreter_output([
-            {"role": "assistant", "type": "message", "content": "Here you go"},
+            {"role": "assistant", "type": "code", "format": "shell",
+             "content": "find /home/nost/AI-OS -maxdepth 2"},
+            {"role": "computer", "type": "console",
+             "content": "/a.md\n/b.md\n/c.md"},
+            {"role": "assistant", "type": "message",
+             "content": "Here you go"},
+        ])
+        self.assertEqual(out, "Here you go")
+        self.assertNotIn("find /home/nost", out)
+        self.assertNotIn("Output:", out)
+
+    def test_multiple_prose_messages_are_all_kept_in_order(self):
+        out = self.runner.format_interpreter_output([
+            {"role": "assistant", "type": "message", "content": "First."},
+            {"role": "assistant", "type": "code", "format": "shell",
+             "content": "ls"},
+            {"role": "computer", "type": "console", "content": "x.txt"},
+            {"role": "assistant", "type": "message", "content": "Second."},
+        ])
+        self.assertEqual(out, "First.\n\nSecond.")
+
+    def test_no_prose_falls_back_to_transcript_so_failures_stay_debuggable(self):
+        """If the model ran commands and never explained itself, the commands
+        and their output are the only diagnostic left - dropping them would
+        turn a debuggable failure into a silent one."""
+        out = self.runner.format_interpreter_output([
             {"role": "assistant", "type": "code", "format": "shell",
              "content": "ls -la"},
             {"role": "computer", "type": "console", "content": "file.txt\n"},
         ])
-        self.assertIn("Here you go", out)
         self.assertIn("ls -la", out)
         self.assertIn("file.txt", out)
 
     def test_empty_message_list_never_yields_an_empty_log(self):
         self.assertEqual(self.runner.format_interpreter_output([]),
                          "Task completed.")
+
+    def test_plain_string_passes_through(self):
+        self.assertEqual(self.runner.format_interpreter_output("done"), "done")
 
 
 class TestBackupExclusions(unittest.TestCase):

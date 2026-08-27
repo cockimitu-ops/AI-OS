@@ -114,12 +114,26 @@ interpreter.llm.model = PRIMARY_MODEL
 interpreter.system_message = _load_system_prompt()
 
 def format_interpreter_output(messages):
+    """Return what the worker actually *said*, not a transcript of how it got
+    there.
+
+    This used to concatenate every assistant message, every code block, AND
+    every raw command output into the log - so Telegram showed the model's
+    scratch work (a `find` invocation, then a truncated wall of paths) instead
+    of an answer. That is a formatter problem, not a prompting problem: the raw
+    output got appended no matter how well the model wrote its summary.
+
+    So: prefer the assistant's prose. Fall back to the full transcript only
+    when there is no prose at all, because in that case the commands and their
+    output are the only diagnostic information left and dropping them would
+    turn a debuggable failure into a silent one."""
     if isinstance(messages, str):
         return messages
     if not isinstance(messages, list):
         return str(messages)
 
-    formatted = []
+    prose = []
+    transcript = []
     for msg in messages:
         if not isinstance(msg, dict):
             continue
@@ -129,14 +143,21 @@ def format_interpreter_output(messages):
         msg_format = msg.get("format", "")
 
         if role == "assistant" and msg_type == "message" and content:
-            formatted.append(content)
+            prose.append(str(content).strip())
+            transcript.append(str(content).strip())
         elif role == "assistant" and msg_type == "code" and content:
             lang = msg_format if msg_format and msg_format != "execution" else ""
-            formatted.append(f"```{lang}\n{content}\n```")
+            transcript.append(f"```{lang}\n{content}\n```")
         elif role == "computer" and content:
-            formatted.append(f"Output:\n```\n{content.strip()}\n```")
-            
-    return "\n\n".join(formatted) if formatted else "Task completed."
+            transcript.append(f"Output:\n```\n{str(content).strip()}\n```")
+
+    if prose:
+        return "\n\n".join(prose)
+    if transcript:
+        # No prose: the model ran commands and never explained itself. Ship the
+        # transcript so the failure is at least inspectable.
+        return "\n\n".join(transcript)
+    return "Task completed."
 
 def _attempt(model, instruction):
     """Run one chat turn on `model`. Raises on failure (including the
