@@ -138,6 +138,13 @@ Full SWOT run for all five would repeat the same shape across three products (Fi
 
 ---
 
+## PDF version
+A formatted PDF matching the actual promised gig deliverable (cover, rendered comparison table, not raw Markdown) is built from `_infra/reports/omni_shield.py` via `_infra/report_builder.py` — same generator pattern as TemplateSales' `pack_builder.py`. Regenerate with:
+```bash
+cd _infra && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python report_builder.py reports/omni_shield.py
+```
+
 ## What this does and doesn't prove
 
 This validates that [[Fulfillment_Workflow]]'s Steps 1–4 and 6 produce a real, citable, non-generic report when run to completion — the CUJO AI catch and the Bitdefender renewal-complaint finding are exactly the kind of specific, sourced detail that separates this from a templated output. What it does **not** validate: the actual Perplexity-round-trip time cost, since this pass used direct search instead. That number stays unverified until it's checked against a real paid order, exactly as [[Fulfillment_Workflow]] already flags.
