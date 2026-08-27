@@ -19,7 +19,7 @@ Reihenfolge einhalten — Schritt 2 braucht den Link aus Schritt 1.
 - [ ] Copy aus `gumroad-listing-copy.md` (Titel, Tagline, Beschreibung, FAQ, Tags)
 - [ ] Cover: `cover.svg` im Browser öffnen → Screenshot → als PNG hochladen
 - [ ] Dateien anhängen: `prompt-pack.pdf`, `example-run-through.md`, `LICENSE.md`
-- [ ] Notion-Duplicate-Link in die Produktbeschreibung
+- [ ] Duplicate-Link NICHT in die öffentliche Beschreibung — als eigene Datei (`notion-template-link.md`) mit anhängen, sonst kann jeder Besucher der Gumroad-Seite kostenlos duplizieren
 - [ ] Payout-Settings: SEPA für Deutschland verifizieren
 
 ### 3. Selbsttest (5 min)

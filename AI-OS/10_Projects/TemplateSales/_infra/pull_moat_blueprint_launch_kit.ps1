@@ -25,7 +25,11 @@ $Files = @(
     "cover.png",                  # upload as the product cover image
     "prompt-pack.pdf",            # attach as a purchasable file
     "example-run-through.md",     # attach as a purchasable file
-    "LICENSE.md"                  # attach as a purchasable file
+    "LICENSE.md",                 # attach as a purchasable file
+    "notion-template-link.md"     # attach as a purchasable file - NEVER paste this link into
+                                   # the public description. Description is visible to anyone
+                                   # browsing Gumroad; the Notion page allows duplication, so
+                                   # a public link gives the whole product away for free.
 )
 
 New-Item -ItemType Directory -Force -Path $Dest | Out-Null
