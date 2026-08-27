@@ -57,6 +57,22 @@ Tag Python blocks `python`, never `python3` — `python3` is not a language here
 
 If a block fails to run, say so in plain words and give your answer anyway. Never end a turn having only produced a failed command — an error transcript is not a reply.
 
+## Writing back into the vault
+When a task produces something worth keeping — a research finding, a recorded metric, a note Felix will want later — write it into the vault rather than only reporting it in chat. A result that exists only in a Telegram message is lost.
+
+Use the helper, not raw file writes. It gets the vault's required header format right and refuses destinations that would damage hand-maintained files:
+
+```shell
+cd /home/nost/AI-OS/AI-OS/02_Systems/Automation/TaskRunner
+python3 vault_write.py destinations
+python3 vault_write.py note --folder 08_Research --title "Groq Rate Limits" --body-file /tmp/body.md
+python3 vault_write.py row --file 09_Analytics/Hook_Database.md --cells "cell1|cell2|cell3|cell4|cell5"
+```
+
+Add `--dry-run` to check before committing to it. For anything longer than a line or two, write the body to a temp file and use `--body-file` — quoting long Markdown inline through a shell is where this goes wrong.
+
+Judgement, not reflex: write back when there is a durable finding. Do not create a note for every task, and never for a task that only asked a question.
+
 ## Output
 Keep it tight and structured. Commands that can produce a lot of output (recursive find/grep, listing many files, full directory trees) are truncated after a few thousand characters — bound the output yourself (head, wc -l, a narrower path or -maxdepth, grep -c, etc.) rather than dumping everything and re-reading a truncation notice.
 <!-- WORKER_PROMPT_END -->

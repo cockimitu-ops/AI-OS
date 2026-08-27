@@ -19,6 +19,7 @@ Related Documents: [[02_Systems/Automation/README|Automation]], [[Future_Integra
 | `scripts/send_telegram_notification.py` | One-off outbound Telegram message, reusing the same bot token — for things other than task results. Now actually wired into `cloud_backup.py`'s failure path. Stdlib-only on purpose: systemd runs `cloud_backup.py` under `/usr/bin/python3`, which has no `python-dotenv`, so a notifier importing it would have failed exactly when it was needed. |
 | `agents.py` | Agent selection. Resolves aliases (`@research` → `Research_Analyst`), loads each agent's Executable Prompt block from [[04_Agents/README\|04_Agents]]. Shared by all three entry points so they can't disagree about what an alias means. |
 | `memory.py` | Bounded per-conversation memory. Stores the *conversation* (your message + the worker's prose answer), never Open Interpreter's raw transcript — replaying old command output into a small free model degrades it silently. |
+| `vault_write.py` | Structured write-back. Creates notes and appends Analytics rows, with an allowlist of destinations, correct vault headers, and no code path that overwrites. |
 | `requirements.txt` | Pinned dependencies for the venv at `/home/nost/interpreter-env`. Added 2026-08-26 — there was no dependency manifest at all before. |
 | `test_taskrunner.py` | Regression tests for every reliability fix below. stdlib `unittest`, no dependencies, no venv: `python3 -m unittest test_taskrunner -v`. Runs in well under a second. |
 
@@ -82,6 +83,22 @@ Three behaviours worth knowing:
 - **A bare follow-up inherits the thread's agent.** `@research do X` then `now do Y` stays Research_Analyst.
 - **Failed tasks never enter memory.** Replaying "all models failed" as context spends budget a real turn needs.
 - **The CLI is opt-in (`--thread`), Telegram is automatic.** A shell invocation is usually one-shot; silently accumulating history across unrelated commands would surprise.
+
+## Write-back (2026-08-27)
+`09_Analytics` held four databases with zero rows since Sprint 012 and `Promotion_Candidates` was empty just as long — the Learning Loop in `02_Systems/Analytics/` was fully specified and never executed, because the worker could only read the vault.
+
+```bash
+python3 vault_write.py destinations
+python3 vault_write.py note --folder 08_Research --title "X" --body-file /tmp/b.md
+python3 vault_write.py row --file 09_Analytics/Hook_Database.md --cells "a|b|c|d|e"
+```
+
+**This grants no new capability** — the worker runs `auto_run=True` with a shell and could already write anywhere. What it lacked was a path that gets the vault's conventions right and a boundary keeping generated output away from files the vault depends on:
+
+- **Allowlist.** Only `08_Research`, `09_Analytics`, `06_Assets` and existing `10_Projects/*` accept notes. `00_System/`, `01_Architecture/` and traversal attempts are refused — all tested.
+- **Never overwrites.** Every path either creates or appends; a repeat run suffixes `_2` rather than destroying the first note. A test asserts no `open(path, "w")` exists in the module.
+- **Headers are generated, not prompted for.** `Naming_Convention.md` requires four fields a small model won't produce reliably.
+- **Execution markers are stripped.** Open Interpreter instruments shell with `echo "##active_line5##"`; via a heredoc those land *inside* the file. The first real write produced a note whose `Purpose:` was literally that echo. The model never sees the injected lines, so no prompt prevents it — it's sanitised in code.
 
 ## Reliability fixes (2026-08-26)
 

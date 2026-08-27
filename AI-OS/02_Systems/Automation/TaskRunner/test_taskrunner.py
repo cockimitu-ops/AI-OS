@@ -518,6 +518,113 @@ class TestMemory(TaskRunnerTestCase):
         self.assertFalse(seen["history"])
 
 
+class TestVaultWrite(unittest.TestCase):
+    """09_Analytics has held four databases with zero rows since Sprint 012 and
+    Promotion_Candidates has been empty just as long - the Learning Loop was
+    specified and never executed, because nothing could produce into the vault.
+
+    The worker already had a shell and could write anywhere; these tests cover
+    the boundary that keeps generated output away from hand-maintained files."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "vault_write", os.path.join(HERE, "vault_write.py"))
+        cls.vw = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.vw)
+
+    def test_refuses_hand_maintained_folders(self):
+        for folder in ("00_System", "01_Architecture", "02_Systems", "04_Agents"):
+            with self.assertRaises(ValueError, msg=folder):
+                self.vw.write_note(folder, "X", "body", dry_run=True)
+
+    def test_refuses_path_traversal_out_of_the_vault(self):
+        for folder in ("../../etc", "08_Research/../00_System", "/etc"):
+            with self.assertRaises(ValueError, msg=folder):
+                self.vw.write_note(folder, "X", "body", dry_run=True)
+
+    def test_allows_the_output_folders(self):
+        path, content = self.vw.write_note(
+            "08_Research", "Groq Rate Limits", "Finding body.", dry_run=True)
+        self.assertTrue(path.endswith("08_Research/Groq_Rate_Limits.md"), path)
+        self.assertIn("Finding body.", content)
+
+    def test_generates_the_required_vault_header(self):
+        """Naming_Convention.md requires these four fields on every note, and a
+        small model will not produce them reliably - so they are generated."""
+        _, content = self.vw.write_note("08_Research", "T", "b", dry_run=True)
+        for field in ("Purpose:", "Last Updated:", "Status:", "Related Documents:"):
+            self.assertIn(field, content)
+        self.assertTrue(content.startswith("# T"))
+
+    def test_filenames_are_pascal_case_per_convention(self):
+        for title, expected in [
+            ("groq rate limits", "Groq_Rate_Limits.md"),
+            ("A/B test: results!", "A_B_Test_Results.md"),
+        ]:
+            path, _ = self.vw.write_note("08_Research", title, "b", dry_run=True)
+            self.assertTrue(path.endswith(expected), path)
+
+    def test_unusable_title_is_rejected_rather_than_writing_a_junk_filename(self):
+        with self.assertRaises(ValueError):
+            self.vw.write_note("08_Research", "!!!", "b", dry_run=True)
+
+    def test_row_destination_is_allowlisted(self):
+        with self.assertRaises(ValueError):
+            self.vw.append_row("00_System/Dashboard.md", ["a"], dry_run=True)
+
+    def test_row_cell_count_must_match_the_table(self):
+        """A mismatched row corrupts the table silently in every renderer, so
+        this must fail loudly rather than append."""
+        with self.assertRaises(ValueError) as ctx:
+            self.vw.append_row("09_Analytics/Hook_Database.md",
+                               ["only", "two"], dry_run=True)
+        self.assertIn("expects", str(ctx.exception))
+
+    def test_correct_row_is_accepted(self):
+        _, row = self.vw.append_row(
+            "09_Analytics/Hook_Database.md",
+            ["Story", "Hook", "8.2s", "Worked", "Analysis"], dry_run=True)
+        self.assertEqual(row.count("|"), 6)
+
+    def test_strips_open_interpreter_execution_markers(self):
+        """Found by the first real end-to-end write, not by inspection: the
+        worker wrote its body via a shell heredoc, and Open Interpreter's
+        `echo "##active_line2##"` instrumentation landed inside the file - the
+        note's Purpose: line was literally that echo. The model never sees the
+        injected lines, so no prompt can reliably prevent this."""
+        dirty = ('echo "##active_line2##"\n'
+                 'Real finding.\n'
+                 '##active_line3##\n'
+                 'Second line.##end_of_execution##')
+        _, content = self.vw.write_note("08_Research", "T", dirty, dry_run=True)
+        self.assertNotIn("active_line", content)
+        self.assertNotIn("end_of_execution", content)
+        self.assertIn("Real finding.", content)
+        self.assertIn("Purpose: Real finding.", content)
+
+    def test_body_that_is_only_markers_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.vw.write_note("08_Research", "T", '##active_line1##',
+                               dry_run=True)
+
+    def test_row_cells_are_cleaned_and_kept_on_one_line(self):
+        """A newline inside a cell breaks the table as surely as a wrong count."""
+        _, row = self.vw.append_row(
+            "09_Analytics/Hook_Database.md",
+            ["a##active_line2##", "b\nc", "d", "e", "f"], dry_run=True)
+        self.assertNotIn("active_line", row)
+        self.assertNotIn("\n", row)
+
+    def test_no_function_here_can_overwrite_an_existing_file(self):
+        """The safety property that matters most: there is no code path in this
+        module that replaces existing content."""
+        import inspect
+        src = inspect.getsource(self.vw)
+        body = src.split('"""', 2)[-1]  # skip the module docstring
+        self.assertNotIn('open(path, "w"', body)
+
+
 class TestBackupExclusions(unittest.TestCase):
     """Bug: without excluding its own backups/, every archive embedded all
     earlier archives - the sizes were visibly doubling (531K, 1.0M, 2.1M, 4.2M)
