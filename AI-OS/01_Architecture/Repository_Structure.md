@@ -52,7 +52,9 @@ AI-OS/
 │   │   ├── ADR-0002_Git_Workflow_Conventions.md
 │   │   ├── ADR-0003_Execution_Engine_Placement.md
 │   │   ├── ADR-0004_Template_Framework_Placement.md
-│   │   └── ADR-0005_Project_Knowledge_Separation.md
+│   │   ├── ADR-0005_Project_Knowledge_Separation.md
+│   │   ├── ADR-0006_Project_Folder_Naming.md
+│   │   └── ADR-0007_Code_Capabilities.md
 │   ├── Execution/
 │   │   ├── README.md
 │   │   ├── Execution_Philosophy.md
@@ -116,6 +118,7 @@ AI-OS/
 │   │   └── Continuous_Improvement_Cycle.md
 │   ├── Automation/
 │   │   ├── README.md
+│   │   ├── vault_status.py            aggregates every Status: header into Dashboard.md
 │   │   └── TaskRunner/
 │   │       ├── README.md
 │   │       ├── System_Prompt.md          the worker's system prompt, versioned as Markdown
@@ -258,7 +261,7 @@ AI-OS/
 |---|---|
 | `00_System/` | Navigation, status, roadmap, changelog, glossary, command layer (`Commands/`) |
 | `01_Architecture/` | Vision, principles, structural documentation, ADRs, and cross-cutting engine subsystems (`ADR/`, `Execution/`, `Templates/`) — see [[ADR-0003_Execution_Engine_Placement|ADR-0003]], [[ADR-0004_Template_Framework_Placement|ADR-0004]] |
-| `02_Systems/` | Reusable knowledge/methodology only, as of Sprint 018 — Content (`Knowledge/` incl. `Knowledge/Horror/`), Analytics, Automation (all populated); Research, AI, Architecture (scaffolded). No project execution lives here — see [[ADR-0005_Project_Knowledge_Separation|ADR-0005]] |
+| `02_Systems/` | Reusable knowledge/methodology only, as of Sprint 018 — Content (`Knowledge/` incl. `Knowledge/Horror/`), Analytics, Automation (all populated); Research, AI, Architecture (dormant since Sprint 001). No project execution lives here — see [[ADR-0005_Project_Knowledge_Separation|ADR-0005]] |
 | `03_Capabilities/` | Reusable named capabilities — 17 defined, shared across every project that needs them |
 | `04_Agents/` | AI agent definitions — 4 scoped roles as of Sprint 024, manual/chat-triggered only |
 | `05_Workflows/` | Workflow *framework* only — production workflow instances now live with their project in `10_Projects/` |

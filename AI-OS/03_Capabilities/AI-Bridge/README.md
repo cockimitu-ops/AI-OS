@@ -1,5 +1,7 @@
 # AI Bridge — Claude × Gemini
 
+Kind: Service — runnable Node code, not a Markdown spec. See [[ADR-0007_Code_Capabilities]].
+
 > ⚠️ **PARKIERT seit 2026-08-26 — nicht produktiv nutzen.** Eine frühere Session
 > (`~/HANDOFF-1.md`, 2026-08-24) hat genau das hier — Claude Code über
 > Pro-Abo-Auth statt über einen echten API-Key laufen zu lassen, um Metered

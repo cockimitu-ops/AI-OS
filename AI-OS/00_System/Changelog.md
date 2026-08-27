@@ -564,3 +564,26 @@ Second half of Sprint 029: the decisions the audit surfaced, plus the two build 
 
 ### Notes
 Two things worth carrying forward. First, the mutation check on the test suite mattered: a test that passes against the broken code is worse than no test, and that is only knowable by breaking the code on purpose. Second, `moat.py`'s reconstruction was verified by diffing rendered output rather than by reading it over — the config *looking* right and the config *reproducing the product* are different claims, and only the second one is worth stating.
+
+## [0.37.0-alpha] - 2026-08-27
+Vault usability pass, plus two Telegram worker fixes.
+
+### Added
+- `02_Systems/Automation/vault_status.py` — scans every `Status:` header and regenerates a summary block in [[Dashboard]] between markers. Every file already declared a status; nothing collected it, so "what is actually live here?" could only be answered by reading the whole vault. 165 files scanned. Surfaces two previously invisible groups: 5 **Dormant** (scaffolded Sprint 001, never used) and 12 **Active but empty**. `--check` mode exits 1 if the block is stale.
+- `ADR-0007_Code_Capabilities` — AI-Bridge is a running Node service sitting among seventeen Markdown specs, and nothing distinguished them; that omission is why `03_Capabilities/README.md` failed to list it for four sprints. Adds `Kind: Spec` / `Kind: Service`.
+
+### Changed
+- The five never-used folders (`02_Systems/Research`, `02_Systems/AI`, `02_Systems/Architecture`, `08_Research`, `06_Assets`) now read `Status: Dormant` instead of `Scaffolded`. "Scaffolded" implied work in progress; twenty-eight sprints of no content means dormant, and saying so makes the Dashboard able to count it.
+- `format_interpreter_output()` returns the worker's prose instead of its full shell transcript — Telegram was showing scratch work (a `find`, then a truncated wall of paths) instead of an answer. Falls back to the transcript only when there is no prose, so silent failures stay debuggable.
+- `System_Prompt.md` — worker now told it is talking to a person in a chat; that the folder map it already has is authoritative (it was running `find` to rediscover data it had been handed); that judgement questions want a recommendation, not an inventory; and that only `python`/`shell` exist as code languages, never `python3`, which fails and wastes the turn.
+- `telegram_bridge.py` — HTML parse mode, so `**bold**` and code fences render instead of appearing literally.
+
+### Deliberately NOT changed
+- **AI-Bridge was not moved** out of `03_Capabilities/`. Four path-based wikilinks and five `Changelog.md` references point at its current path, and the Changelog is append-only — moving would make those permanently wrong rather than merely stale. It is parked, so the move buys nothing operationally. Same reasoning ADR-0006 used against renaming project folders.
+- **The seventeen `Kind: Spec` capabilities were not retrofitted.** Spec is the default and those files are unambiguous.
+- **The folder numbering was not changed.** The worker's own suggestion (merge `03`–`07` into `00_System`, rename `10_Projects` → `02_Projects`) was rejected: it fights ADR-0001's system/output distinction, and renaming a top-level folder referenced vault-wide is exactly the link risk ADR-0006 declined twelve hours earlier.
+
+### Verified
+- Wikilink integrity: 230 Markdown files, zero dead links.
+- Stale prose paths from the Sprint 018 reorg and Sprint 027 archival (`02_Systems/Content/Horror_Story_System.md`, `05_Workflows/Reddit_Story_Production.md`, and eight others) were checked individually: **every remaining occurrence is inside `Changelog.md`, `Suggestions.md`, or an ADR** — append-only records that are correct as history and must not be rewritten. Nothing to fix.
+- TaskRunner regression suite 20 → 23 tests, all passing. The suite caught the formatter change, which is what it is for; the test was rewritten to assert the new contract rather than deleted.

@@ -2,7 +2,7 @@
 
 Purpose: The system responsible for research and information-gathering workflows.
 Last Updated: 2026-08-03
-Status: Scaffolded — no content yet
+Status: Dormant — scaffolded Sprint 001, no content since
 Related Documents: [[02_Systems/README|02_Systems]], [[08_Research/README|08_Research]]
 
 ---

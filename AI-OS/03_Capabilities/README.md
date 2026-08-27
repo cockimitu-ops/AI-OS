@@ -38,7 +38,8 @@ Pipeline order (see [[Reddit_Story_Production]]):
 - [[Generation_Mode_Selection]]
 - [[Watermark_Tier_Management]]
 
-### Infrastructure — [[03_Capabilities/AI-Bridge/README|AI-Bridge]] (parked)
+### `Kind: Service` — [[03_Capabilities/AI-Bridge/README|AI-Bridge]] (parked)
+Everything else in this folder is `Kind: Spec` — a Markdown description of a unit of work. This one is runnable code. The distinction and why it stays in this folder: [[ADR-0007_Code_Capabilities]].
 Not a content capability and not a Markdown spec: a real code capability (Node) letting Claude and Gemini call each other, plus an HTTP surface for n8n. **Parked since 2026-08-26** pending the same unresolved Claude-Pro-auth ToS question that gates TaskRunner's escalation tier — see its own README. Listed here because it lives in this folder and was missing from this index entirely until 2026-08-26.
 
 ## Status
