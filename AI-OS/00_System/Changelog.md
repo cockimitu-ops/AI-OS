@@ -587,3 +587,13 @@ Vault usability pass, plus two Telegram worker fixes.
 - Wikilink integrity: 230 Markdown files, zero dead links.
 - Stale prose paths from the Sprint 018 reorg and Sprint 027 archival (`02_Systems/Content/Horror_Story_System.md`, `05_Workflows/Reddit_Story_Production.md`, and eight others) were checked individually: **every remaining occurrence is inside `Changelog.md`, `Suggestions.md`, or an ADR** — append-only records that are correct as history and must not be rewritten. Nothing to fix.
 - TaskRunner regression suite 20 → 23 tests, all passing. The suite caught the formatter change, which is what it is for; the test was rewritten to assert the new contract rather than deleted.
+
+## [0.38.0-alpha] - 2026-08-27
+### Fixed
+- `02_Systems/Automation/TaskRunner/README.md`: a stray backslash inside a wikilink (`[[04_Agents/README\|04_Agents]]`) — a real dead link introduced in the Sprint 029 agent-selection commit and caught only now by re-running the link audit. First dead link found in this vault's history that wasn't an intentional placeholder.
+
+### Added
+- `02_Systems/Automation/TaskRunner/External_Access_Plan.md` — planning only, nothing built. Lays out what it would take to extend TaskRunner to Gmail, YouTube, and a phone, and why that's a genuinely different risk class from the existing vault-write allowlist: every mistake `vault_write.py` can make is git-recoverable, and a sent email is not. Stages Gmail/YouTube read-only first, draft-not-send before any autonomous send, and a structural (not prompted) confirmation gate for anything irreversible. Explicitly does not scope "phone access" further — six different things could be meant by it, and the document lists them as a menu rather than guessing.
+
+### Synced to Notion
+First sync since 2026-08-24/25. 11 pages updated: Dashboard, Roadmap, `04_Agents` + its 4 role pages (now reflecting they're executable), the AI OS root and `00_System` version strings, plus ADR-0006 and ADR-0007 created as new pages under `01_Architecture`. Scoped deliberately — not a full 237-file mirror. TemplateSales' product marketing assets (PDFs, SVGs, long-form listing copy) were left out: each product has its own separate, manually-run Notion-template-per-product workflow already, and mirroring those into the architecture-tree side of Notion would conflate two different things this vault keeps separate on purpose.

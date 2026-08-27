@@ -17,10 +17,11 @@ Related Documents: [[02_Systems/Automation/README|Automation]], [[Future_Integra
 | `telegram_bridge.py` | Same idea, over Telegram — only replies to the one allowed user ID, edits its own status message once the worker's log appears. |
 | `scripts/cloud_backup.py` | Tars the whole repo (`/home/nost/AI-OS`), uploads to Google Drive via `rclone`, prunes local archives older than 7 days. |
 | `scripts/send_telegram_notification.py` | One-off outbound Telegram message, reusing the same bot token — for things other than task results. Now actually wired into `cloud_backup.py`'s failure path. Stdlib-only on purpose: systemd runs `cloud_backup.py` under `/usr/bin/python3`, which has no `python-dotenv`, so a notifier importing it would have failed exactly when it was needed. |
-| `agents.py` | Agent selection. Resolves aliases (`@research` → `Research_Analyst`), loads each agent's Executable Prompt block from [[04_Agents/README\|04_Agents]]. Shared by all three entry points so they can't disagree about what an alias means. |
+| `agents.py` | Agent selection. Resolves aliases (`@research` → `Research_Analyst`), loads each agent's Executable Prompt block from [[04_Agents/README|04_Agents]]. Shared by all three entry points so they can't disagree about what an alias means. |
 | `memory.py` | Bounded per-conversation memory. Stores the *conversation* (your message + the worker's prose answer), never Open Interpreter's raw transcript — replaying old command output into a small free model degrades it silently. |
 | `vault_write.py` | Structured write-back. Creates notes and appends Analytics rows, with an allowlist of destinations, correct vault headers, and no code path that overwrites. |
 | `requirements.txt` | Pinned dependencies for the venv at `/home/nost/interpreter-env`. Added 2026-08-26 — there was no dependency manifest at all before. |
+| `External_Access_Plan.md` | Planning only, nothing built — what it would take to extend TaskRunner to Gmail, YouTube, and a phone, and why that's a different risk class from the vault-write allowlist. |
 | `test_taskrunner.py` | Regression tests for every reliability fix below. stdlib `unittest`, no dependencies, no venv: `python3 -m unittest test_taskrunner -v`. Runs in well under a second. |
 
 `tasks/` (inbox/completed/logs) and `backups/` are runtime output, not source — gitignored except for structure.

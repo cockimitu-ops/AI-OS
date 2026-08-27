@@ -69,6 +69,7 @@ Read the whole repository — vault, TaskRunner, AI-Bridge, MCP server, server-s
 ## Genuinely blocked — need a decision, not more building
 - ~~**AI Video Production pillar status**~~ — **deferred by decision, 2026-08-26.** Not resolved, deliberately not resolved: the three TemplateSales products are built and ~20 minutes each from being live, and that is where the attention goes until they are. Same for choosing a new story topic. Both stay untouched rather than half-pursued; neither is blocking anything else.
 - **Is the "AI OS pattern" still product #4?** TemplateSales built three other products instead. Either it comes back as the next product or it is dropped — right now it is neither.
+- **External access scope.** [[02_Systems/Automation/TaskRunner/External_Access_Plan|External_Access_Plan.md]] lays out staging for Gmail/YouTube/phone access, deliberately unbuilt. The phone question specifically cannot be scoped further until Felix names which of six wildly different things "phone access" actually means.
 
 *(The Claude-via-Pro ToS question moved to Off the Table on 2026-08-26 — decided, not still blocking.)*
 
