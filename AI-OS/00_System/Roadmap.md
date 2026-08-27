@@ -78,10 +78,10 @@ Read the whole repository — vault, TaskRunner, AI-Bridge, MCP server, server-s
 - **Universe Support** (2026-08-26) — see Sprint 019 above. Scoped for a pillar that no longer exists. If a serialized-fiction topic is ever chosen, this comes back as a well-scoped sprint against that topic, not as a resumed backlog item.
 - **Claude via the Pro subscription** (2026-08-26) — decided: both TaskRunner's escalation tier and [[03_Capabilities/AI-Bridge/README|AI-Bridge]] stay parked. The free Groq/Gemini chain is verified working and costs nothing; the ToS question is not worth resolving for capacity that isn't currently needed. Both are built and a flag away, so this reverses cheaply if the free tiers stop being enough. Reopening it means either accepting the risk explicitly or buying a metered `ANTHROPIC_API_KEY` — not rediscovering the question.
 
-## Actual Next Steps (revised 2026-08-26)
-See [[Income_Portfolio]] for the full reasoning. Step 2 below has changed materially since that file was written — the product exists now.
-1. Fiverr gig live — thumbnail image is the only remaining step
-2. **Publish Micro-SaaS Moat Blueprint** — Notion page + Gumroad listing + PNG cover export. ~20 minutes. It is built; nothing is blocking it but this. (Was "ship ONE template (the AI OS pattern)"; that product was never built, three others were.)
+## Actual Next Steps (revised 2026-08-27)
+See [[Income_Portfolio]] for the full reasoning.
+1. ~~Fiverr gig live~~ — **live as of 2026-08-27**, thumbnail resolved. Waiting on the first order or review.
+2. **Publish Micro-SaaS Moat Blueprint** — Notion template page created 2026-08-27 (standalone, outside the private AI OS vault mirror on purpose — see [[External_Access_Plan]]'s sibling decision on keeping public and private Notion content apart). Still needed: "Allow duplicate as template" (Notion UI toggle, not scriptable) and the Gumroad listing.
 3. Make 3 short-form demos of it — still the step that decides whether it sells, and the capability already exists but has never been pointed at this
 4. Then Pricing Teardown per `_infra/LAUNCH-ORDER.md`'s spacing, and a ContentAgency prospect list
 

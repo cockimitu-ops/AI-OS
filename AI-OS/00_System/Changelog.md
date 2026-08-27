@@ -597,3 +597,16 @@ Vault usability pass, plus two Telegram worker fixes.
 
 ### Synced to Notion
 First sync since 2026-08-24/25. 11 pages updated: Dashboard, Roadmap, `04_Agents` + its 4 role pages (now reflecting they're executable), the AI OS root and `00_System` version strings, plus ADR-0006 and ADR-0007 created as new pages under `01_Architecture`. Scoped deliberately — not a full 237-file mirror. TemplateSales' product marketing assets (PDFs, SVGs, long-form listing copy) were left out: each product has its own separate, manually-run Notion-template-per-product workflow already, and mirroring those into the architecture-tree side of Notion would conflate two different things this vault keeps separate on purpose.
+
+## [0.39.0-alpha] - 2026-08-27
+Money-focused work, per direct request: publish groundwork and the unfinished reference sample.
+
+### Added
+- `10_Projects/QuickTurnaroundGigs/Reference_Sample_Report_Omni_Shield.md` — the Sprint 023 Omni Shield test validated Steps 1-3 and 6 but stopped at 3 of 8 competitors deliberately, rather than complete a fake deliverable. Finished as a full Standard-tier sample: 5 real, currently-sourced competitors (Firewalla, Bitdefender BOX, Gryphon Guardian, IronWiFi, Cisco Meraki Go), a comparison table, SWOT, and five recommendations. One genuinely useful finding: CUJO AI still surfaces in searches and comparison articles as a live competitor; it discontinued its hardware in 2021. Caught and flagged rather than silently included - exactly the stale-data trap the workflow's own "found via" citation requirement exists to catch.
+- Standalone Notion page for the Micro-SaaS Moat Blueprint template, created outside the private AI OS mirror on purpose - a public duplicate-able template shouldn't carry breadcrumbs back to operational notes. Two manual steps remain: "Allow duplicate as template" (a Notion UI toggle, not reachable via the API) and the Gumroad listing.
+
+### Changed
+- Fiverr gig confirmed live as of today. Status updated in QuickTurnaroundGigs/README.md and Roadmap's Actual Next Steps.
+
+### Process note
+First task where the TaskRunner worker did real, useful autonomous work in the same session as manual work, rather than everything routing through direct edits: dispatched `--agent research` to record the Fiverr-live milestone via `vault_write.py`. Standing practice going forward - durable facts and decisions get logged by the worker, not written by hand, wherever the worker's actual capabilities (allowlisted note creation, no overwrite) cover the case.

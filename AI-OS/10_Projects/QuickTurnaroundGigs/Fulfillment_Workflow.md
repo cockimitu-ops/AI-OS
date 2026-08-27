@@ -89,5 +89,7 @@ How should this startup talk about competition in an investor pitch deck? Provid
 ## QA Before Delivery
 Same discipline as before: spot-check 2–3 specific claims against their cited source directly, confirm length/format match the tier, read once for tone.
 
-## Not Yet Done
-Test run with an imaginary company (Omni Shield, WiFi security for doctors' offices/homeowners/SMBs) validated Steps 1–3 and 6 end-to-end — stopped deliberately at 3 of 8 competitors once the loop itself was proven, rather than completing a fake deliverable. Real finding: round-trip overhead between Perplexity and Claude makes the time budget above optimistic until checked against an actual paid order. No real order has run through this process yet.
+## Reference Sample — Finished (2026-08-27)
+The Sprint 023 Omni Shield test validated Steps 1–3 and 6 but stopped at 3 of 8 competitors deliberately, rather than complete a fake deliverable. It's now finished as a full Standard-tier sample — see [[10_Projects/QuickTurnaroundGigs/Reference_Sample_Report_Omni_Shield|Reference_Sample_Report_Omni_Shield.md]]: 5 competitors, full comparison table, SWOT, and recommendations, every claim sourced to a real, current page. One genuinely useful finding surfaced doing it: a plausible-looking competitor (CUJO AI) turned out to have discontinued its hardware in 2021 and still shows up in searches as current — exactly the stale-data trap Module 1's "found via" citation requirement exists to catch.
+
+**Still not done:** the sample used direct web search instead of the Perplexity round-trip the real workflow specifies, so the round-trip time-cost question below remains unverified until checked against an actual paid order. No real order has run through this process yet.
