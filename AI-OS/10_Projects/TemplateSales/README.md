@@ -43,6 +43,9 @@ Authoritative state lives in `_infra/AI-CONTEXT.md` — that file is maintained;
 
 Each product ships the same artifact set: `notion-template-structure.md`, a prompt-pack PDF, `example-run-through.md`, listing copy, a free lead magnet, Reddit launch posts, and `cover.svg`.
 
+## Launch kit — pull it to publish
+Everything for Micro-SaaS Moat Blueprint's Gumroad listing, one command: `_infra/pull_moat_blueprint_launch_kit.sh` (Linux/Mac/WSL/Git Bash) or `_infra/pull_moat_blueprint_launch_kit.ps1` (Windows PowerShell), both over Tailscale. Includes a rendered `cover.png` — no more manual screenshot-export step.
+
 ## Status
 **Blocked on one manual step, not on building.** Every product is finished. Felix has to publish the Notion pages and create the Gumroad listings — roughly 20 minutes per product. Nothing else waits on anything. Covers are SVG and need a manual PNG export (no renderer available in the environment that built them).
 
