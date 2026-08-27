@@ -2,7 +2,7 @@
 
 Purpose: The system responsible for AI model, prompt, and agent infrastructure.
 Last Updated: 2026-08-03
-Status: Scaffolded — no content yet
+Status: Dormant — scaffolded Sprint 001, no content since
 Related Documents: [[02_Systems/README|02_Systems]], [[04_Agents/README|04_Agents]]
 
 ---

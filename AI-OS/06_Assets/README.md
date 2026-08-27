@@ -2,7 +2,7 @@
 
 Purpose: Non-Markdown files referenced by the vault.
 Last Updated: 2026-08-03
-Status: Scaffolded — empty
+Status: Dormant — scaffolded Sprint 001, no content since
 Related Documents: [[Repository_Structure]], [[01_Architecture/Templates/README|01_Architecture/Templates]]
 
 ---

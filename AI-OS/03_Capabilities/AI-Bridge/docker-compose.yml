@@ -1,0 +1,57 @@
+# AI Bridge + n8n
+#
+# Start:  docker compose up -d --build
+# Logs:   docker compose logs -f ai-bridge
+# n8n:    http://localhost:5678
+#
+# Vorher .env anlegen (siehe .env.example).
+
+services:
+  ai-bridge:
+    build: .
+    container_name: ai-bridge
+    environment:
+      # Aus "claude setup-token" auf dem Windows-Host. KEIN API-Key.
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?bitte in .env setzen}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?bitte in .env setzen}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-flash-latest}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-sonnet}
+      BRIDGE_TOKEN: ${BRIDGE_TOKEN:?bitte in .env setzen}
+      # Drosselt parallele Claude-Aufrufe. Auf 1 lassen, ausser du weisst warum nicht.
+      MAX_CONCURRENT_CLAUDE: ${MAX_CONCURRENT_CLAUDE:-1}
+      TZ: Europe/Berlin
+    volumes:
+      # Sessions landen direkt im Obsidian-Vault. Pfad in .env setzen.
+      - ${SPACE_DIR:-./space}:/app/space
+    ports:
+      # 127.0.0.1 davor ist wichtig: nur lokal, nicht im WLAN erreichbar.
+      - "127.0.0.1:8787:8080"
+    networks: [aibridge]
+    restart: unless-stopped
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    environment:
+      N8N_SECURE_COOKIE: "false"
+      GENERIC_TIMEZONE: Europe/Berlin
+      TZ: Europe/Berlin
+      # Claude-Calls dauern - Default-Timeout ist zu knapp
+      EXECUTIONS_TIMEOUT: "3600"
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: "336"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ${SPACE_DIR:-./space}:/data/space
+    ports:
+      - "127.0.0.1:5678:5678"
+    networks: [aibridge]
+    depends_on: [ai-bridge]
+    restart: unless-stopped
+
+networks:
+  aibridge:
+    driver: bridge
+
+volumes:
+  n8n_data:

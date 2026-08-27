@@ -1,8 +1,8 @@
 # 03_Capabilities
 
 Purpose: Reusable, named units of work exposed by the systems in `02_Systems/`.
-Last Updated: 2026-08-13
-Status: Active — serving one Content pillar (Reddit_Story_Workflow) as of the Horror archival, Sprint 027
+Last Updated: 2026-08-26
+Status: Active — 18 content capabilities plus one parked infrastructure capability (AI-Bridge)
 Related Documents: [[Glossary]], [[02_Systems/README|02_Systems]], [[99_Archive/HorrorProject/README|HorrorProject (Archived)]]
 
 ---
@@ -38,5 +38,9 @@ Pipeline order (see [[Reddit_Story_Production]]):
 - [[Generation_Mode_Selection]]
 - [[Watermark_Tier_Management]]
 
+### `Kind: Service` — [[03_Capabilities/AI-Bridge/README|AI-Bridge]] (parked)
+Everything else in this folder is `Kind: Spec` — a Markdown description of a unit of work. This one is runnable code. The distinction and why it stays in this folder: [[ADR-0007_Code_Capabilities]].
+Not a content capability and not a Markdown spec: a real code capability (Node) letting Claude and Gemini call each other, plus an HTTP surface for n8n. **Parked since 2026-08-26** pending the same unresolved Claude-Pro-auth ToS question that gates TaskRunner's escalation tier — see its own README. Listed here because it lives in this folder and was missing from this index entirely until 2026-08-26.
+
 ## Status
-18 capabilities, all preserved through the Horror archival — none were deleted, since none were horror-specific in mechanism. 3 (Story_Ideation, Story_Validation, Originality_Check) currently have no active consumer, kept because they're genuinely reusable for whatever original-content system gets built next. Their Success Criteria still carry Reddit-specific numeric thresholds, unreconciled — see `Suggestions.md`. No capabilities exist yet for Research, Analytics, Automation, or Architecture systems.
+18 content capabilities, all preserved through the Horror archival — none were deleted, since none were horror-specific in mechanism. 3 (Story_Ideation, Story_Validation, Originality_Check) currently have no active consumer, kept because they're genuinely reusable for whatever original-content system gets built next. Their Success Criteria still carry Reddit-specific numeric thresholds, unreconciled — see `Suggestions.md`. No capabilities exist yet for Research, Analytics, Automation, or Architecture systems.

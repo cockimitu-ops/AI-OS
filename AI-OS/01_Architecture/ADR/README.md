@@ -53,3 +53,5 @@ What this decision makes easier, harder, or requires elsewhere in the vault.
 | [[ADR-0003_Execution_Engine_Placement]] | Placement of Cross-Cutting Engine Subsystems | Accepted |
 | [[ADR-0004_Template_Framework_Placement]] | Generalizing Cross-Cutting Subsystem Placement to Include Format/Documentation Standards | Accepted |
 | [[ADR-0005_Project_Knowledge_Separation]] | Project/Knowledge Separation for Multi-Project, Token-Conscious Organization | Accepted |
+| [[ADR-0006_Project_Folder_Naming]] | Project Folder Naming — two scoped exceptions to Pascal_Case | Accepted |
+| [[ADR-0007_Code_Capabilities]] | Code Capabilities in 03_Capabilities — the Kind: Spec/Service distinction | Accepted |

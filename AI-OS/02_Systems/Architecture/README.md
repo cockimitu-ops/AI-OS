@@ -2,7 +2,7 @@
 
 Purpose: The system responsible for designing and structuring external systems, as opposed to this vault's own architecture.
 Last Updated: 2026-08-03
-Status: Scaffolded — no content yet
+Status: Dormant — scaffolded Sprint 001, no content since
 Related Documents: [[02_Systems/README|02_Systems]], [[01_Architecture/README|01_Architecture]]
 
 ---

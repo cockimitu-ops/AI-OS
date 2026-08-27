@@ -2,7 +2,7 @@
 
 Purpose: Research notes and findings produced by the vault's Research system.
 Last Updated: 2026-08-03
-Status: Scaffolded — empty
+Status: Dormant — scaffolded Sprint 001, no content since
 Related Documents: [[02_Systems/Research/README|02_Systems/Research]]
 
 ---

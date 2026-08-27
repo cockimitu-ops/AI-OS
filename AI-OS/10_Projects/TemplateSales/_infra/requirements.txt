@@ -1,0 +1,5 @@
+# pack_builder.py's only dependency. Not installed anywhere on the server as of
+# 2026-08-26 — building a prompt-pack PDF needs this first, in a venv:
+#   python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+#   .venv/bin/python pack_builder.py packs/moat.py
+reportlab>=4.0

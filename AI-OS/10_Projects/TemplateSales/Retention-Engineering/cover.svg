@@ -1,0 +1,55 @@
+<svg viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', monospace">
+  <rect width="1200" height="630" fill="#17111A"/>
+  <rect x="0.5" y="0.5" width="1199" height="629" fill="none" stroke="#5E4A5C" stroke-opacity="0.4"/>
+
+  <!-- Two retention curves: engineered vs unplanned -->
+  <g>
+    <line x1="140" y1="470" x2="520" y2="470" stroke="#5E4A5C" stroke-opacity="0.5"/>
+    <line x1="140" y1="470" x2="140" y2="200" stroke="#5E4A5C" stroke-opacity="0.5"/>
+
+    <!-- Unplanned: cliff then decay -->
+    <path d="M140,215 L165,300 L200,360 L250,405 L310,432 L380,450 L450,462 L520,468"
+          fill="none" stroke="#8A7A88" stroke-width="2" stroke-dasharray="4 4"/>
+    <!-- Engineered: stepped, holds -->
+    <path d="M140,215 L170,232 L200,240 L230,262 L262,268 L292,290 L324,296 L356,318 L388,324 L420,344 L455,352 L490,372 L520,380"
+          fill="none" stroke="#E85D75" stroke-width="2.5"/>
+
+    <!-- Beat markers on the engineered curve -->
+    <g fill="#E85D75">
+      <circle cx="200" cy="240" r="3.5"/><circle cx="262" cy="268" r="3.5"/>
+      <circle cx="324" cy="296" r="3.5"/><circle cx="388" cy="324" r="3.5"/>
+      <circle cx="455" cy="352" r="3.5"/>
+    </g>
+
+    <g fill="#8A7A88" font-size="12" letter-spacing="1px">
+      <text x="140" y="495">0s</text><text x="325" y="495" text-anchor="middle">60s</text>
+      <text x="520" y="495" text-anchor="end">120s</text>
+      <text x="118" y="219" text-anchor="end">100%</text>
+      <text x="118" y="474" text-anchor="end">0</text>
+    </g>
+  </g>
+
+  <g font-size="13" font-family="Helvetica, Arial, sans-serif">
+    <rect x="140" y="535" width="22" height="2.5" fill="#E85D75"/>
+    <text x="172" y="540" fill="#E9E7E0">Beat every 10–15s</text>
+    <rect x="330" y="536" width="22" height="2" fill="#8A7A88"/>
+    <text x="362" y="540" fill="#8A7A88">Unplanned</text>
+  </g>
+
+  <text x="620" y="180" fill="#8A7A88" font-size="14" letter-spacing="3px">SHORT-FORM VIDEO SYSTEM</text>
+  <text x="618" y="264" fill="#E9E7E0" font-size="58" font-weight="700">Retention</text>
+  <text x="618" y="330" fill="#E85D75" font-size="58" font-weight="700">Engineering</text>
+
+  <g fill="#C4B8C2" font-size="21" font-family="Helvetica, Arial, sans-serif">
+    <text x="620" y="384">The system behind short-form</text>
+    <text x="620" y="412">video people actually finish.</text>
+  </g>
+
+  <line x1="620" y1="454" x2="1130" y2="454" stroke="#5E4A5C" stroke-opacity="0.4"/>
+  <g fill="#8A7A88" font-size="13" letter-spacing="1.5px">
+    <text x="620" y="488">6 MODULES</text>
+    <text x="770" y="488">·</text>
+    <text x="788" y="488">FULL WORKED SCRIPT</text>
+    <text x="620" y="516" fill="#E85D75" font-size="20" font-weight="700">$39</text>
+  </g>
+</svg>

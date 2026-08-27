@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""Agent selection for TaskRunner.
+
+`04_Agents/` has held four scoped role definitions since Sprint 024, and until
+now nothing could invoke them - they were documentation for a human typing "as
+Research Analyst, do X" into a chat window. This module makes them selectable
+by the worker, which is the whole difference between a definition and a
+configuration.
+
+One module rather than three copies, because dispatch_task.py, telegram_bridge.py
+and aios_runner.py all need the same name resolution. If they disagreed about
+what "@research" means, the CLI and Telegram would silently run different
+agents.
+
+The executable half of each agent file lives between AGENT_PROMPT markers, the
+same convention System_Prompt.md uses for the worker's base prompt - so the
+prose above it stays human-facing and editable without touching what the model
+receives.
+"""
+import os
+import re
+
+VAULT = "/home/nost/AI-OS/AI-OS"
+AGENTS_DIR = os.path.join(VAULT, "04_Agents")
+
+START = "<!-- AGENT_PROMPT_START -->"
+END = "<!-- AGENT_PROMPT_END -->"
+
+# Canonical file stem -> aliases anyone might plausibly type at 7am on a phone.
+# Kept deliberately generous: a rejected alias costs a whole round trip on
+# Telegram, and there is no ambiguity to protect against with only four agents.
+ALIASES = {
+    "Vault_Architect": ["vault", "architect", "arch", "va"],
+    "Content_Producer": ["content", "producer", "story", "cp"],
+    "Research_Analyst": ["research", "analyst", "ra", "gig", "gigs"],
+    "Business_Development": ["business", "bizdev", "biz", "bd", "sales"],
+}
+
+# Written into a task file's first line so the worker knows which agent to load.
+# An HTML comment because task files are Markdown: invisible when rendered,
+# trivially parsed, and harmless if a human opens one.
+DIRECTIVE_RE = re.compile(r"^\s*<!--\s*agent:\s*([A-Za-z0-9_\-]+)\s*-->\s*\n?", re.I)
+
+
+def available():
+    """Canonical agent names that actually exist on disk, not just in ALIASES."""
+    if not os.path.isdir(AGENTS_DIR):
+        return []
+    return sorted(
+        os.path.splitext(f)[0]
+        for f in os.listdir(AGENTS_DIR)
+        if f.endswith(".md") and f != "README.md"
+    )
+
+
+def resolve(name):
+    """Alias or partial name -> canonical agent name, or None.
+
+    Case-insensitive, and tolerant of the hyphen/underscore/space confusion
+    that is otherwise guaranteed when the same name is typed on a phone, in a
+    shell, and in a Markdown file."""
+    if not name:
+        return None
+    key = name.strip().lstrip("@").lower().replace("-", "_").replace(" ", "_")
+    if not key:
+        return None
+
+    existing = available()
+    lookup = {a.lower(): a for a in existing}
+    if key in lookup:
+        return lookup[key]
+
+    for canonical, aliases in ALIASES.items():
+        if canonical in existing and key in aliases:
+            return canonical
+
+    # Last resort: unambiguous prefix. "vault_arch" should work; "a" should not.
+    matches = [a for a in existing if a.lower().startswith(key)]
+    return matches[0] if len(matches) == 1 else None
+
+
+def load_prompt(canonical):
+    """The agent's executable prompt block. Returns None if the file has no
+    markers - which is not an error: an agent can be documentation-only, and
+    silently degrading to the base prompt beats refusing to run the task."""
+    path = os.path.join(AGENTS_DIR, f"{canonical}.md")
+    try:
+        content = open(path, encoding="utf-8").read()
+    except OSError:
+        return None
+    try:
+        start = content.index(START) + len(START)
+        end = content.index(END)
+    except ValueError:
+        return None
+    block = content[start:end].strip()
+    return block or None
+
+
+def parse_directive(raw_task):
+    """Split a task file into (canonical_agent_or_None, instruction).
+
+    Unknown agent names are deliberately NOT an error - the directive is
+    stripped and the task runs on the base prompt. A typo'd alias should cost
+    a slightly worse answer, not a lost task."""
+    m = DIRECTIVE_RE.match(raw_task or "")
+    if not m:
+        return None, (raw_task or "").strip()
+    return resolve(m.group(1)), raw_task[m.end():].strip()
+
+
+def directive(canonical):
+    return f"<!-- agent: {canonical} -->\n"
+
+
+def describe():
+    """Human-readable roster, for --help and Telegram's /agents."""
+    out = []
+    for name in available():
+        aliases = ALIASES.get(name, [])
+        has = "" if load_prompt(name) else "  (no prompt block - runs on base prompt)"
+        alias_str = ", ".join(f"@{a}" for a in aliases[:3])
+        out.append(f"{name}{has}\n    {alias_str}")
+    return "\n".join(out)
+
+
+if __name__ == "__main__":
+    print("Agents available to TaskRunner:\n")
+    print(describe())

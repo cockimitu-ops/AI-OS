@@ -1,7 +1,7 @@
 # Dashboard
 
 Purpose: The operating-system home screen — what's happening right now, and how to act on it, without navigating the rest of the vault.
-Last Updated: 2026-08-03
+Last Updated: 2026-08-26
 Status: Active
 Stability: Dynamic
 Related Documents: [[Home]], [[Roadmap]], [[Changelog]], [[00_System/Commands/Command_Index|Command Index]]
@@ -16,10 +16,10 @@ Full list: [[00_System/Commands/Command_Index|Command Index]]. Most common:
 - "Create captions" → [[Multi_Platform_Caption_Generation]]
 
 ## Current Work
-[[The_Doorbell_Camera]] — Ready to Publish. Two Publishing Checklist items still open: an actual audio TTS read-through, and series sequencing (no second story exists yet to sequence against).
+Infrastructure, not content. Three systemd services run continuously on the server ([[02_Systems/Automation/TaskRunner/README|TaskRunner]]); three [[10_Projects/TemplateSales/README|TemplateSales]] products are built and waiting on Felix to publish Notion pages + Gumroad listings (~20 min each). No story is in production — a new topic still hasn't been chosen since the Horror archival.
 
 ## Recent Stories
-The Doorbell Camera — archived 2026-08-13, never published. See [[99_Archive/HorrorProject/README|HorrorProject]].
+The Doorbell Camera — archived 2026-08-13, never published. See [[99_Archive/HorrorProject/README|HorrorProject]]. (This section and Current Work contradicted each other until 2026-08-26: Current Work still called it "Ready to Publish".)
 
 ## Analytics Waiting
 [[Hook_Database]], [[Ending_Database]], and [[Retention_Database]] all have zero entries.
@@ -34,15 +34,15 @@ None tracked yet. See [[Experiment_Tracking]].
 - [[10_Projects/SocialMediaContent/README|SocialMediaContent]] — Horror archived; AI Video active (Glass Crush Loop); new story topic not yet chosen
 - [[10_Projects/ContentAgency/README|ContentAgency]] — not yet launched
 - [[10_Projects/QuickTurnaroundGigs/README|QuickTurnaroundGigs]] — structure only, not yet executed
-- [[10_Projects/TemplateSales/README|TemplateSales]] — not yet packaged
-- [[10_Projects/FundingApplications/README|FundingApplications]] — futureSAX call is the top priority action
+- [[10_Projects/TemplateSales/README|TemplateSales]] — three products built (Moat Blueprint $29, Pricing Teardown $29, Retention Engineering $39); blocked only on publishing Notion pages + Gumroad listings
+- [[10_Projects/FundingApplications/README|FundingApplications]] — **closed by choice 2026-08-13**, not pursued
 - [[10_Projects/MoneyMaking/README|MoneyMaking]] — research complete, now the historical record
 
 ## Commands
 [[00_System/Commands/Command_Index|Full Command Index]] · [[00_System/Commands/Quick_Start|Quick Start]]
 
 ## Current Version
-`0.33.0-alpha`
+`0.37.0-alpha`
 
 ## Repository Health
 Structural audit: [[00_System/Repository_Audit|Repository Audit]] (Sprint 013). Strategic review: [[00_System/Design_Review|Design Review]] (Sprint 014) — confirms the actual business is original horror content, not Reddit adaptation; 17 ranked recommendations, 5 critical.
@@ -52,18 +52,65 @@ Structural audit: [[00_System/Repository_Audit|Repository Audit]] (Sprint 013). 
 |---|---|
 | Content (Knowledge) | 20 notes — general Knowledge Core plus Horror-specific, shared across every project |
 | Analytics | Methodology complete; output structures built, zero real entries |
-| Automation | MCP server documented (Sprint 025) — written, not yet run/verified |
+| Automation | **Live.** TaskRunner = 3 systemd services (worker, Telegram bridge, daily backup). MCP server build verified 2026-08-26 (compiles clean); Notion side still untested |
 | Research / AI / Architecture | Not started |
 
 See Projects above for what those knowledge notes and capabilities are actually being used for.
 
 ## Governance
-[[ADR-0001_Naming_Disambiguation]], [[ADR-0002_Git_Workflow_Conventions]], [[ADR-0003_Execution_Engine_Placement]], [[ADR-0004_Template_Framework_Placement]], [[ADR-0005_Project_Knowledge_Separation]] — all Accepted.
+[[ADR-0001_Naming_Disambiguation]], [[ADR-0002_Git_Workflow_Conventions]], [[ADR-0003_Execution_Engine_Placement]], [[ADR-0004_Template_Framework_Placement]], [[ADR-0005_Project_Knowledge_Separation]], [[ADR-0006_Project_Folder_Naming]], [[ADR-0007_Code_Capabilities]] — all Accepted.
 
 ## Open Items
-- Agents: decided (manual, chat-triggered) and built — 4 scoped roles as of Sprint 024.
-- First real production run of [[Reddit_Story_Production]].
-- Universe Support — deferred pending confirmation; see `Suggestions.md`.
+- Agents: 4 scoped roles, **now executable** as of 2026-08-27 — `--agent research` or `@research` on Telegram. Previously definitions nothing could invoke. Note this is about `04_Agents/` personas only; TaskRunner is infrastructure and sits outside that decision — see [[02_Systems/Automation/README|Automation]].
+- **Publish the three TemplateSales products.** The only step between built product and possible first revenue.
+- ~~Claude-via-Pro ToS question~~ — decided 2026-08-26: both stay parked. See [[Roadmap]]'s *Off the Table*.
+- ~~Universe Support~~ — dropped 2026-08-26; it was scoped for the archived Horror pillar.
+- Choose a new story topic, and settle AI Video Production's status — **both deliberately deferred** until the TemplateSales products are published. Not blocking anything.
+- First real production run of [[Reddit_Story_Production]] — waits on the topic above.
 
 ## Notes
 This dashboard is maintained manually.
+
+## Vault Status (generated)
+
+<!-- VAULT_STATUS_START -->
+
+*Generated by `02_Systems/Automation/vault_status.py` — do not edit by hand.*
+
+**167 files declare a Status.**
+
+| Bucket | Files |
+|---|---|
+| Active | 138 |
+| Active (empty) | 12 |
+| Dormant | 5 |
+| Complete | 2 |
+| Accepted (ADR) | 7 |
+| Closed/Archived | 1 |
+| Other | 2 |
+
+### Dormant — scaffolded but never used
+Kept deliberately, not forgotten. Each is a real decision to revisit or archive.
+
+- `02_Systems/AI/README.md` — Dormant — scaffolded Sprint 001, no content since
+- `02_Systems/Architecture/README.md` — Dormant — scaffolded Sprint 001, no content since
+- `02_Systems/Research/README.md` — Dormant — scaffolded Sprint 001, no content since
+- `06_Assets/README.md` — Dormant — scaffolded Sprint 001, no content since
+- `08_Research/README.md` — Dormant — scaffolded Sprint 001, no content since
+
+### Active but empty — structure exists, no content yet
+
+- `09_Analytics/Ending_Database.md` — Active — no entries yet
+- `09_Analytics/Hook_Database.md` — Active — no entries yet
+- `09_Analytics/Promotion_Candidates.md` — Active — no entries yet
+- `09_Analytics/Retention_Database.md` — Active — no entries yet
+- `10_Projects/ContentAgency/README.md` — Active — not yet launched
+- `10_Projects/LocalArbitrage/README.md` — Active — not yet started, no capital deployed
+- `10_Projects/LocalArbitrage/Valuation_Method.md` — Active — not yet tested against real purchases
+- `10_Projects/MoneyMaking/Perplexity_Research_Prompt.md` — Active — v2, not yet run
+- `10_Projects/QuickTurnaroundGigs/Fulfillment_Workflow.md` — Active — process defined, not yet run on a real order
+- `10_Projects/QuickTurnaroundGigs/README.md` — Active — structure only, not yet executed
+- `10_Projects/QuickTurnaroundGigs/Real_Time_Problem_Arbitrage.md` — Active — structure only, not yet executed
+- `10_Projects/QuickTurnaroundGigs/Research_And_Briefing_Gigs.md` — Active — gig copy finalized, not yet posted to Fiverr
+
+<!-- VAULT_STATUS_END -->

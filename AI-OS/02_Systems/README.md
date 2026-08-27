@@ -14,7 +14,7 @@ A "system" here is a broad operating domain — Content, Research, Analytics, Au
 - [[02_Systems/Content/README|Content/]] — **populated**: general and horror-specific storytelling knowledge. Project execution (system docs, produced stories, tracking) lives in [[10_Projects/SocialMediaContent/README|10_Projects/SocialMediaContent]] instead.
 - [[02_Systems/Analytics/README|Analytics/]] — **populated**: review methodology, cadences, outlier analysis
 - [[02_Systems/Research/README|Research/]] — scaffolded, not yet populated
-- [[02_Systems/Automation/README|Automation/]] — **populated** (Sprint 025): documents the AI OS MCP server
+- [[02_Systems/Automation/README|Automation/]] — **populated**: the live Task Runner (worker + Telegram bridge + backups, added 2026-08-26) and the AI OS MCP server (Sprint 025)
 - [[02_Systems/AI/README|AI/]] — scaffolded, not yet populated
 - [[02_Systems/Architecture/README|Architecture/]] — scaffolded, not yet populated — systems for designing external systems, not this vault's own architecture (see [[01_Architecture/README|01_Architecture]] for that)
 

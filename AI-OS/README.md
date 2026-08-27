@@ -1,9 +1,9 @@
 # AI OS
 
 ## Status
-Version: 0.1.0-alpha
-Current Sprint: Sprint 001 — Repository Foundation
-Last Updated: 2026-08-03
+Version: 0.37.0-alpha
+Current Sprint: Sprint 029 — Full Audit and Fix Pass
+Last Updated: 2026-08-26
 
 ## Vision
 AI OS is a system for organizing, operating, and scaling AI-assisted work — content production, research, automation, and analysis — as a single coherent repository rather than a collection of disconnected notes and tools. It is built to be read by both humans and machines: a person navigating in Obsidian and an AI agent or MCP server reading the same Markdown files should arrive at the same understanding.
@@ -56,10 +56,12 @@ Each folder contains its own `README.md` describing its responsibility in detail
 Architecture is owned by the Chief Systems Architect. Implementation is owned by the Lead Repository Engineer. Changes to structure or conventions are proposed as suggestions, not applied unilaterally — see [[Development_Workflow]] and `Suggestions.md`. Formal architectural decisions are recorded as ADRs under `01_Architecture/ADR/`.
 
 ## Current Version
-`0.1.0-alpha`
+`0.37.0-alpha`
 
 ## Current Sprint
-**Sprint 001 — Repository Foundation.** Establishes the folder structure, the core system documents, and the architecture documentation set. No capabilities, agents, or workflows are implemented yet.
+**Sprint 029 — Full Audit and Fix Pass.** See [[Dashboard]] for live status and [[Changelog]] for the full history.
+
+This file described Sprint 001 until 2026-08-26 — twenty-eight sprints stale. The same failure hit `Home.md` in Sprint 013 and was fixed there but never here, because the sprint-completion checklist in [[Development_Workflow]] names `Dashboard.md`, `Changelog.md`, and `Roadmap.md` and has never named this file. It does now.
 
 ## Related Documents
 - [[Vision]]

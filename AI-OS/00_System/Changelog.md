@@ -495,3 +495,95 @@ Flagged that a Gemini text response presented as a video critique was actually a
 - Changelog/Suggestions/Roadmap history - append-only, accurate as of when written
 ### Notes
 Full audit run before and after - dead links, orphans, missing indexes all clean. One real stale reference (10_Projects/README.md) caught by the audit and fixed, not missed.
+
+## [0.34.0-alpha] - 2026-08-26
+Retroactive entry. Everything below was built and committed between 2026-08-25 and 2026-08-26 and was never logged here — the Changelog stopped at 0.33.0 (2026-08-13) while the repository kept moving. Reconstructed from git history and the live server, not from memory.
+
+### Added
+- `02_Systems/Automation/TaskRunner/` — the first real automation in the vault. Headless Open Interpreter worker (`aios_runner.py`), CLI dispatcher, Telegram bridge, daily rclone backup. Three systemd services (`aios-worker`, `aios-telegram`, `aios-backup.timer`) running continuously on the server. Moved in from loose scripts at the repo root.
+- `System_Prompt.md` — the worker's prompt, versioned as Markdown rather than hardcoded in Python. Gives it the vault's folder map so it stops rediscovering the layout per task.
+- `03_Capabilities/AI-Bridge/` — Claude×Gemini bridge (Node), plus an HTTP surface and an n8n service for it.
+- `10_Projects/TemplateSales/` — three complete products (Micro-SaaS Moat Blueprint $29, Pricing Teardown $29, Retention Engineering $39), a $45 bundle listing, a shared prompt-pack PDF generator, and a staged launch order.
+- `AI-OSmcp/` and `server-stack/` brought into the repository as siblings of the vault.
+
+### Changed
+- Free-model rotation expanded to five attempts across two providers after both the primary and fallback models failed live in the same test run.
+
+### Parked
+- Claude escalation tier in TaskRunner: built, verified working, then disabled the same day (`CLAUDE_ESCALATION_ENABLED = False`). Routing an unattended, Telegram-triggerable service through Pro-subscription auth is an unresolved ToS question. AI-Bridge is parked for the identical reason.
+
+## [0.35.0-alpha] - 2026-08-26
+### Fixed — live code
+- `aios_runner.py`: an unhandled exception anywhere in the per-task body escaped the polling loop. With systemd's `Restart=always` and the task still sitting in `tasks/inbox/`, that was an unbounded crash-loop on a single bad file. Per-task work now runs under a guard that quarantines the task and writes an error log.
+- `aios_runner.py`: result logs were written with a plain `open("w")`, but `dispatch_task.py` and `telegram_bridge.py` poll for that file's *existence* — both could read an empty or half-written log and report it as the answer. Logs are now written to a temp name and renamed atomically.
+- `dispatch_task.py`, `telegram_bridge.py`: task files were written non-atomically into a directory the worker globs every 2 seconds, so a half-written file could be picked up and a truncated instruction executed. Both now write `.part` and rename.
+- `aios_runner.py`: an empty task file was deleted with no log written, leaving any waiting caller to block for its full 180-second timeout on an instant, known failure.
+- `cloud_backup.py`: local archives were pruned on a 7-day schedule regardless of whether the upload succeeded. A silently broken remote plus scheduled pruning means no backup in either place after a week. Pruning now requires a successful upload.
+- `cloud_backup.py`: failures were silent — journal-only, on a job that runs unattended at 03:00. `send_telegram_notification.py` existed for exactly this and had never been wired to anything. It is now.
+- `send_telegram_notification.py`: depended on `python-dotenv`, which is not installed for the interpreter systemd runs `cloud_backup.py` with. The notifier would have failed precisely when called. Rewritten stdlib-only.
+- `cloud_backup.py`: added `server-stack/jellyfin/cache` to the excludes — regenerable, and unbounded once real media is attached.
+- `AI-OSmcp/docker-compose.yml`: `tty: true` on a stdio MCP server. A pseudo-TTY corrupts newline-delimited JSON-RPC. Removed, and the documented Claude Desktop command corrected to pass `-T`.
+- `AI-Bridge/server.mjs`: listened on `0.0.0.0` while its own auth is optional (no `BRIDGE_TOKEN` = open). Started outside Docker, that exposed unauthenticated Claude access to the whole LAN. Defaults to `127.0.0.1` now; the container sets `HOST=0.0.0.0` explicitly, where compose already binds it to loopback.
+- `AI-Bridge`: `.env.example` was referenced by the README and `.env.docker.example` by the compose file. Neither existed. One real `.env.example` added, both references fixed.
+
+### Verified
+- MCP server: `npm install` clean, `npm run build` compiles with zero errors (Node 22). Closes the "written blind, never compiled" caveat carried since Sprint 025.
+- TaskRunner: worker restarted on the patched code and a real `dispatch_task.py` round trip returned correctly.
+- `rclone gdrive:` remote confirmed reachable; `aios-backup.service`'s stale `failed` state (from a run that predated the rclone config) cleared.
+
+### Fixed — status drift
+- Root `README.md` said "Version 0.1.0-alpha, Sprint 001" — twenty-eight sprints stale. Root cause: it was never in `Development_Workflow.md`'s sprint-completion checklist. It is now, which is the second time that checklist has been the actual fix.
+- `Home.md` at 0.20.0-alpha, `Dashboard.md` at 0.33.0-alpha.
+- `Dashboard.md` contradicted itself: "Current Work: The_Doorbell_Camera — Ready to Publish" directly above "archived, never published."
+- `FundingApplications/README.md` header said "Closed — not pursued, by choice"; its own Status section said the futureSAX call was the highest-priority action across the whole effort.
+- `TemplateSales/README.md` said "nothing packaged yet" while three finished products sat in its subfolders, and still named a first product ("the AI OS pattern") that was never what got built.
+- `_infra/LAUNCH-ORDER.md` referenced `pricing/` and `retention/` folders that do not exist. All 14 file references now resolve.
+- `Knowledge_Core.md` — the always-loaded standing context — carried four stale facts: no automation, unverified MCP server, nothing packaged in TemplateSales, and funding as the top unclaimed action.
+- `02_Systems/Automation/README.md` claimed the whole folder stayed inside the no-automation boundary, in a file whose first section is a live unattended executor.
+- `03_Capabilities/README.md` never listed AI-Bridge, which lives in that folder.
+- `Repository_Structure.md` — the authoritative map — was missing TaskRunner, AI-Bridge, all three TemplateSales products, `AI-OSmcp/`, and `server-stack/`.
+
+### Notes
+Wikilink integrity was checked across all 216 Markdown files: zero dead links. The nine apparent hits are the same illustrative placeholders `Repository_Audit.md` identified in Sprint 013. Link hygiene is genuinely solid; *status* hygiene is where this vault repeatedly fails, and every drift item above was a file contradicting either itself or a sibling, not a broken reference.
+
+## [0.36.0-alpha] - 2026-08-26
+Second half of Sprint 029: the decisions the audit surfaced, plus the two build items that came out of them.
+
+### Added
+- `01_Architecture/ADR/ADR-0006_Project_Folder_Naming.md` — closes the Sprint 018 backlog item (open eleven sprints). Amends the rule rather than renaming ten project folders: `PascalCase` for projects under `10_Projects/`, `kebab-case` for product folders inside a project, leading underscore for tooling. Renaming was rejected on evidence — the vault's link integrity is currently perfect and renaming would put every wikilink into `10_Projects/` at risk to satisfy a rule nobody had been confused by.
+- `02_Systems/Automation/TaskRunner/test_taskrunner.py` — 20 regression tests, stdlib `unittest`, no dependencies, 0.06s. Covers every reliability fix from 0.35.0. Mutation-checked: each fix was reverted in a throwaway copy and all four reverts were caught by the intended test. The suite redirects `AIOS_WORKSPACE` to a temp directory and stubs the open-interpreter import, so it never touches the live queue and never calls a model.
+- `10_Projects/TemplateSales/_infra/packs/moat.py` — product 1 shipped a prompt-pack PDF with no config behind it, so unlike the other two it could not be regenerated. Reconstructed by decoding the shipped PDF's ASCII85+Flate content streams; the rebuilt PDF's rendered text is byte-identical to the shipped file across all 108 lines.
+- `_infra/requirements.txt` — `reportlab` is installed nowhere on this machine, so `pack_builder.py` could not run at all.
+
+### Decided
+- **Claude via the Pro subscription: both paths stay parked.** TaskRunner's escalation tier and the whole AI-Bridge capability. The free Groq/Gemini chain is verified working and costs nothing; the ToS question isn't worth resolving for capacity that isn't currently needed. Both are a flag away from returning. Moved from "genuinely blocked" to Off the Table — it was a question being carried, not a blocker.
+- **Universe Support: dropped**, after eleven sprints queued-and-approved. Its justification was written for the horror brand archived in Sprint 027.
+- **AI Video Production status and the new story topic: deferred by decision**, until the three built TemplateSales products are published. Both stay untouched rather than half-pursued.
+- **`.env` stays inside the backup archive.** A restore needs it. Recorded as a conscious tradeoff rather than left as an unexamined default.
+- **Jellyfin's media path stays a placeholder** — no media attached yet.
+
+### Notes
+Two things worth carrying forward. First, the mutation check on the test suite mattered: a test that passes against the broken code is worse than no test, and that is only knowable by breaking the code on purpose. Second, `moat.py`'s reconstruction was verified by diffing rendered output rather than by reading it over — the config *looking* right and the config *reproducing the product* are different claims, and only the second one is worth stating.
+
+## [0.37.0-alpha] - 2026-08-27
+Vault usability pass, plus two Telegram worker fixes.
+
+### Added
+- `02_Systems/Automation/vault_status.py` — scans every `Status:` header and regenerates a summary block in [[Dashboard]] between markers. Every file already declared a status; nothing collected it, so "what is actually live here?" could only be answered by reading the whole vault. 165 files scanned. Surfaces two previously invisible groups: 5 **Dormant** (scaffolded Sprint 001, never used) and 12 **Active but empty**. `--check` mode exits 1 if the block is stale.
+- `ADR-0007_Code_Capabilities` — AI-Bridge is a running Node service sitting among seventeen Markdown specs, and nothing distinguished them; that omission is why `03_Capabilities/README.md` failed to list it for four sprints. Adds `Kind: Spec` / `Kind: Service`.
+
+### Changed
+- The five never-used folders (`02_Systems/Research`, `02_Systems/AI`, `02_Systems/Architecture`, `08_Research`, `06_Assets`) now read `Status: Dormant` instead of `Scaffolded`. "Scaffolded" implied work in progress; twenty-eight sprints of no content means dormant, and saying so makes the Dashboard able to count it.
+- `format_interpreter_output()` returns the worker's prose instead of its full shell transcript — Telegram was showing scratch work (a `find`, then a truncated wall of paths) instead of an answer. Falls back to the transcript only when there is no prose, so silent failures stay debuggable.
+- `System_Prompt.md` — worker now told it is talking to a person in a chat; that the folder map it already has is authoritative (it was running `find` to rediscover data it had been handed); that judgement questions want a recommendation, not an inventory; and that only `python`/`shell` exist as code languages, never `python3`, which fails and wastes the turn.
+- `telegram_bridge.py` — HTML parse mode, so `**bold**` and code fences render instead of appearing literally.
+
+### Deliberately NOT changed
+- **AI-Bridge was not moved** out of `03_Capabilities/`. Four path-based wikilinks and five `Changelog.md` references point at its current path, and the Changelog is append-only — moving would make those permanently wrong rather than merely stale. It is parked, so the move buys nothing operationally. Same reasoning ADR-0006 used against renaming project folders.
+- **The seventeen `Kind: Spec` capabilities were not retrofitted.** Spec is the default and those files are unambiguous.
+- **The folder numbering was not changed.** The worker's own suggestion (merge `03`–`07` into `00_System`, rename `10_Projects` → `02_Projects`) was rejected: it fights ADR-0001's system/output distinction, and renaming a top-level folder referenced vault-wide is exactly the link risk ADR-0006 declined twelve hours earlier.
+
+### Verified
+- Wikilink integrity: 230 Markdown files, zero dead links.
+- Stale prose paths from the Sprint 018 reorg and Sprint 027 archival (`02_Systems/Content/Horror_Story_System.md`, `05_Workflows/Reddit_Story_Production.md`, and eight others) were checked individually: **every remaining occurrence is inside `Changelog.md`, `Suggestions.md`, or an ADR** — append-only records that are correct as history and must not be rewritten. Nothing to fix.
+- TaskRunner regression suite 20 → 23 tests, all passing. The suite caught the formatter change, which is what it is for; the test was rewritten to assert the new contract rather than deleted.

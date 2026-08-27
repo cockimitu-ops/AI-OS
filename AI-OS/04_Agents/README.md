@@ -10,8 +10,19 @@ Related Documents: [[Glossary]], [[03_Capabilities/README|03_Capabilities]], [[F
 ## Responsibility
 An agent definition states what a role is allowed to do: which capabilities/workflows it can call, what context it operates with by default, and where it must hand back to Felix rather than act alone. Agents are consumers of `03_Capabilities/`, not a place to redefine logic.
 
-## Important: Execution Model Unchanged
-This does not introduce automation. Every agent here is invoked manually, in chat — "as Research Analyst, do X" — per the standing decision in `Roadmap.md`. What changes is scope clarity, not who's running it: there is always exactly one executor.
+## Execution Model (updated 2026-08-27)
+These were chat-only definitions from Sprint 024 until 2026-08-27 — four scoped roles that nothing could actually invoke. They are now selectable by [[02_Systems/Automation/TaskRunner/README|TaskRunner]]:
+
+```bash
+python3 dispatch_task.py --agent research "profile Acme Corp"
+```
+On Telegram, lead with an alias: `@research profile Acme Corp`. Send `agents` for the roster.
+
+Each file now carries an **Executable Prompt** block between `<!-- AGENT_PROMPT_START -->` / `<!-- AGENT_PROMPT_END -->` markers — the same convention [[02_Systems/Automation/TaskRunner/System_Prompt|System_Prompt.md]] uses. The worker **appends** that block to its base prompt rather than replacing it, so selecting an agent narrows focus without stripping the destructive-action guardrail.
+
+The prose above each block stays the human-facing scope definition and must not be allowed to disagree with the machine-facing one below it.
+
+**This does not reverse the standing decision.** That decision (`Roadmap.md`) is about `04_Agents/` personas not needing *their own separate infrastructure* — and they still don't. They ride on TaskRunner, which already existed, and there is still exactly one executor.
 
 ## Contents
 - [[Vault_Architect]] — maintains the AI OS itself

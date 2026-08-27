@@ -22,4 +22,6 @@ Funding isn't a business model — it's the move that removes time pressure from
 | Youth Start-Up Challenge (EU) | Not started | Lower priority — same as above |
 
 ## Status
-Highest-priority next action across the whole MoneyMaking effort: the futureSAX call.
+**Closed — not pursued, by choice (2026-08-13).** The tracker above is kept as the historical record of what was found, not as a to-do list; the "Next Step" column describes what *would* have been next, not what is.
+
+Until 2026-08-26 this section still read "Highest-priority next action across the whole MoneyMaking effort: the futureSAX call" — directly contradicting this file's own header, [[Roadmap]]'s "Off the Table" entry, and [[Income_Portfolio]]. Reopening this is a real decision, not a rediscovery; see [[Roadmap]] for the reasoning behind closing it.
