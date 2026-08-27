@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 # to the repo root, so its own folder is not on sys.path by default.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import agents
+import memory
 
 # Disable telemetry and interactive terminal hooks before importing interpreter
 os.environ["INTERPRETER_ANONYMOUS_TELEMETRY"] = "false"
@@ -184,12 +185,15 @@ def format_interpreter_output(messages):
         return "\n\n".join(transcript)
     return "Task completed."
 
-def _attempt(model, instruction, system_prompt=None):
+def _attempt(model, instruction, system_prompt=None, history=None):
     """Run one chat turn on `model`. Raises on failure (including the
     swallowed-RateLimitError case where open-interpreter returns an empty
     message list instead of raising - see respond.py's display_markdown_message
     branch)."""
-    interpreter.messages = []
+    # Seed with prior conversation turns, or [] for a cold task. Assigning a
+    # fresh list every attempt matters: a failed model leaves its partial
+    # messages behind, and the next model in MODEL_CHAIN must not inherit them.
+    interpreter.messages = list(history) if history else []
     interpreter.llm.model = model
     if system_prompt is not None:
         interpreter.system_message = system_prompt
@@ -246,8 +250,15 @@ def _run_task(task_path, filename):
     with open(task_path, "r", encoding="utf-8") as f:
         raw = f.read()
 
+    thread_id, raw = memory.parse_directive(raw)
     agent_name, instruction = agents.parse_directive(raw)
+
+    # A bare follow-up stays in whatever role the conversation was already in.
+    if not agent_name and thread_id:
+        agent_name = agents.resolve(memory.last_agent(thread_id) or "")
+
     system_prompt = _system_prompt_for(agent_name)
+    history = memory.as_messages(thread_id) if thread_id else None
 
     if not instruction:
         # Still write a log: a caller waiting on this file would otherwise
@@ -256,15 +267,20 @@ def _run_task(task_path, filename):
         os.rename(task_path, os.path.join(COMPLETED, filename))
         return
 
-    label = f" (agent: {agent_name})" if agent_name else ""
-    print(f"[*] Processing task: {filename}{label}")
+    bits = []
+    if agent_name:
+        bits.append(f"agent: {agent_name}")
+    if history:
+        bits.append(f"memory: {len(history) // 2} turn(s)")
+    label = f" ({', '.join(bits)})" if bits else ""
+    print(f"[*] Processing task: {filename}{label}", flush=True)
     output = None
     errors = []
     for model, delay in MODEL_CHAIN:
         if delay:
             time.sleep(delay)
         try:
-            output = _attempt(model, instruction, system_prompt)
+            output = _attempt(model, instruction, system_prompt, history)
             break
         except Exception as e:
             print(f"[!] {model} failed ({e})")
@@ -285,6 +301,11 @@ def _run_task(task_path, filename):
             else "\n(Escalation: disabled pending ToS review - see CLAUDE_ESCALATION_ENABLED comment)"
         )
         output = f"ERROR during execution. All models failed:\n{error_lines}{note}"
+
+    # Only successful turns enter memory. Replaying "all models failed" as
+    # context teaches the model nothing and spends budget a real turn needs.
+    if thread_id and not output.startswith("ERROR"):
+        memory.save_turn(thread_id, instruction, output, agent_name)
 
     _write_log(filename, output)
     os.rename(task_path, os.path.join(COMPLETED, filename))

@@ -22,6 +22,7 @@ LOGS = os.path.join(AIOS_DIR, "tasks", "logs")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import agents
+import memory
 
 
 def _split_agent_prefix(text):
@@ -78,7 +79,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not instruction:
         return
 
-    if instruction.lower().lstrip("/") in ("agents", "agent"):
+    # Per-chat thread: the conversation you are already in is the unit of
+    # memory, which is what makes a bare "now do the same for X" work.
+    thread_id = f"tg_{update.effective_chat.id}"
+    command = instruction.lower().lstrip("/").strip()
+
+    if command in ("reset", "new", "forget", "clear"):
+        existed = memory.reset(thread_id)
+        await update.message.reply_text(
+            _md_lite_to_telegram_html(
+                "🧹 Memory gelöscht — nächste Nachricht startet frisch."
+                if existed else "Nichts zu löschen, dieser Chat hat noch kein Memory."
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if command in ("memory", "context", "history"):
+        await update.message.reply_text(
+            _md_lite_to_telegram_html("🧠 **Memory**\n\n" + memory.summary(thread_id)),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if command in ("agents", "agent"):
         await update.message.reply_text(
             _md_lite_to_telegram_html(
                 "**Agents** — put the alias first, e.g. `@research profile Acme Corp`\n\n"
@@ -103,7 +127,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # In Inbox schreiben - atomar, siehe dispatch_task.py: der Worker pollt
     # tasks/inbox/*.md und darf keine halb geschriebene Datei sehen.
-    body = (agents.directive(agent) if agent else "") + instruction
+    body = (memory.directive(thread_id)
+            + (agents.directive(agent) if agent else "")
+            + instruction)
     tmp_path = f"{task_path}.part"
     with open(tmp_path, "w", encoding="utf-8") as f:
         f.write(body)

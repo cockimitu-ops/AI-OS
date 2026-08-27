@@ -17,6 +17,8 @@ Related Documents: [[02_Systems/Automation/README|Automation]], [[Future_Integra
 | `telegram_bridge.py` | Same idea, over Telegram — only replies to the one allowed user ID, edits its own status message once the worker's log appears. |
 | `scripts/cloud_backup.py` | Tars the whole repo (`/home/nost/AI-OS`), uploads to Google Drive via `rclone`, prunes local archives older than 7 days. |
 | `scripts/send_telegram_notification.py` | One-off outbound Telegram message, reusing the same bot token — for things other than task results. Now actually wired into `cloud_backup.py`'s failure path. Stdlib-only on purpose: systemd runs `cloud_backup.py` under `/usr/bin/python3`, which has no `python-dotenv`, so a notifier importing it would have failed exactly when it was needed. |
+| `agents.py` | Agent selection. Resolves aliases (`@research` → `Research_Analyst`), loads each agent's Executable Prompt block from [[04_Agents/README\|04_Agents]]. Shared by all three entry points so they can't disagree about what an alias means. |
+| `memory.py` | Bounded per-conversation memory. Stores the *conversation* (your message + the worker's prose answer), never Open Interpreter's raw transcript — replaying old command output into a small free model degrades it silently. |
 | `requirements.txt` | Pinned dependencies for the venv at `/home/nost/interpreter-env`. Added 2026-08-26 — there was no dependency manifest at all before. |
 | `test_taskrunner.py` | Regression tests for every reliability fix below. stdlib `unittest`, no dependencies, no venv: `python3 -m unittest test_taskrunner -v`. Runs in well under a second. |
 
@@ -63,6 +65,23 @@ Verified live: worker restarted, then a real `dispatch_task.py` call asked it to
 ## Why backups/ excludes itself
 
 `cloud_backup.py` tars the entire repo including this folder. Without an explicit exclude, every new archive would embed all previous archives inside itself, growing without bound. `EXCLUDE_RELATIVE_PATHS` in the script excludes its own `backups/` and `tasks/logs/` for exactly that reason — don't remove those excludes without addressing that.
+
+## Agents and memory (2026-08-27)
+
+```bash
+dispatch_task.py --agent research --thread demo "profile Acme Corp"
+dispatch_task.py --thread demo "now do the same for their closest competitor"
+dispatch_task.py --thread demo --reset
+```
+
+On Telegram it's automatic — each chat is its own thread, so a bare follow-up just works. `agents` lists the roster, `memory` shows what's remembered, `reset` clears it.
+
+**Memory is bounded on two axes**, because either alone is insufficient: `MAX_TURNS = 6` and `MAX_CHARS = 6000`, plus `MAX_TURN_CHARS = 2000` so one huge turn can't consume the whole budget. Oldest drops first. The models in `MODEL_CHAIN` have modest context windows and degrade *silently* rather than erroring, so these are deliberately conservative.
+
+Three behaviours worth knowing:
+- **A bare follow-up inherits the thread's agent.** `@research do X` then `now do Y` stays Research_Analyst.
+- **Failed tasks never enter memory.** Replaying "all models failed" as context spends budget a real turn needs.
+- **The CLI is opt-in (`--thread`), Telegram is automatic.** A shell invocation is usually one-shot; silently accumulating history across unrelated commands would surprise.
 
 ## Reliability fixes (2026-08-26)
 

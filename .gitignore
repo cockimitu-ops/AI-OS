@@ -21,5 +21,6 @@ __pycache__/
 AI-OS/02_Systems/Automation/TaskRunner/tasks/inbox/*
 AI-OS/02_Systems/Automation/TaskRunner/tasks/completed/*
 AI-OS/02_Systems/Automation/TaskRunner/tasks/logs/*
+AI-OS/02_Systems/Automation/TaskRunner/tasks/threads/*
 !AI-OS/02_Systems/Automation/TaskRunner/tasks/**/.gitkeep
 AI-OS/02_Systems/Automation/TaskRunner/backups/*.tar.gz

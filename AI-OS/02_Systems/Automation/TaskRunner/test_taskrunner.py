@@ -163,7 +163,7 @@ class TestEmptyTask(TaskRunnerTestCase):
 
 class TestModelChain(TaskRunnerTestCase):
     def test_first_working_model_wins_and_is_logged(self):
-        self.runner._attempt = lambda model, instr, sp=None: f"done by {model}"
+        self.runner._attempt = lambda model, instr, sp=None, history=None: f"done by {model}"
         self.queue("t.md", "do a thing")
         self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
         self.assertEqual(self.log_of("t.md"),
@@ -173,7 +173,7 @@ class TestModelChain(TaskRunnerTestCase):
     def test_falls_through_to_a_later_model(self):
         calls = []
 
-        def flaky(model, instr, sp=None):
+        def flaky(model, instr, sp=None, history=None):
             calls.append(model)
             if len(calls) < 3:
                 raise RuntimeError("rate limited")
@@ -187,7 +187,7 @@ class TestModelChain(TaskRunnerTestCase):
         self.assertEqual(len(calls), 3)
 
     def test_total_failure_writes_a_diagnostic_not_an_empty_log(self):
-        def dead(model, instr, sp=None):
+        def dead(model, instr, sp=None, history=None):
             raise RuntimeError("quota exhausted")
 
         self.runner._attempt = dead
@@ -205,7 +205,7 @@ class TestModelChain(TaskRunnerTestCase):
         """CLAUDE_ESCALATION_ENABLED is off pending a ToS decision. If it is off,
         the log must say so - otherwise the failure looks like the escalation
         tier ran and also failed."""
-        self.runner._attempt = lambda m, i, sp=None: (_ for _ in ()).throw(RuntimeError("x"))
+        self.runner._attempt = lambda m, i, sp=None, history=None: (_ for _ in ()).throw(RuntimeError("x"))
         self.runner.time.sleep = lambda s: None
         self.queue("t.md", "do a thing")
         self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
@@ -250,7 +250,7 @@ class TestCrashGuard(TaskRunnerTestCase):
         self.assertIn("input/output error", log)
 
     def test_a_good_task_still_runs_in_the_same_pass(self):
-        self.runner._attempt = lambda model, instr, sp=None: "fine"
+        self.runner._attempt = lambda model, instr, sp=None, history=None: "fine"
         self.queue("good.md", "do a thing")
         self._run_one_pass()
         self.assertEqual(self.log_of("good.md"), "fine")
@@ -258,7 +258,7 @@ class TestCrashGuard(TaskRunnerTestCase):
 
     def test_tasks_are_processed_in_filename_order(self):
         order = []
-        self.runner._attempt = lambda model, instr, sp=None: order.append(instr) or "ok"
+        self.runner._attempt = lambda model, instr, sp=None, history=None: order.append(instr) or "ok"
         self.queue("task_b.md", "second")
         self.queue("task_a.md", "first")
         self._run_one_pass()
@@ -386,7 +386,7 @@ class TestAgentSelection(TaskRunnerTestCase):
         prompt handed to the model is the scoped one."""
         seen = {}
 
-        def spy(model, instruction, system_prompt=None):
+        def spy(model, instruction, system_prompt=None, history=None):
             seen["instruction"] = instruction
             seen["prompt"] = system_prompt
             return "ok"
@@ -397,6 +397,125 @@ class TestAgentSelection(TaskRunnerTestCase):
         self.assertEqual(seen["instruction"], "Check drift.")
         self.assertIn("Vault Architect", seen["prompt"])
         self.assertNotIn("<!-- agent:", seen["instruction"])
+
+
+class TestMemory(TaskRunnerTestCase):
+    """Every task ran cold before 2026-08-27 - interpreter.messages = [] per
+    attempt - so "now do the same for the other project" was impossible."""
+
+    def setUp(self):
+        super().setUp()
+        import importlib
+        import memory
+        importlib.reload(memory)  # rebind THREADS to this test's AIOS_WORKSPACE
+        self.memory = memory
+
+    def test_turn_round_trips_into_interpreter_message_shape(self):
+        self.memory.save_turn("t1", "hello", "hi there")
+        msgs = self.memory.as_messages("t1")
+        self.assertEqual(msgs, [
+            {"role": "user", "type": "message", "content": "hello"},
+            {"role": "assistant", "type": "message", "content": "hi there"},
+        ])
+
+    def test_unknown_thread_is_empty_not_an_error(self):
+        self.assertEqual(self.memory.as_messages("never_seen"), [])
+
+    def test_corrupt_thread_file_does_not_lose_the_task(self):
+        os.makedirs(self.memory.THREADS, exist_ok=True)
+        with open(os.path.join(self.memory.THREADS, "bad.json"), "w") as f:
+            f.write("{ not json at all")
+        self.assertEqual(self.memory.as_messages("bad"), [])
+
+    def test_turn_count_is_bounded(self):
+        for i in range(20):
+            self.memory.save_turn("t2", f"q{i}", f"a{i}")
+        turns = self.memory.load("t2")["turns"]
+        self.assertLessEqual(len(turns), self.memory.MAX_TURNS)
+        # oldest dropped, newest kept
+        self.assertEqual(turns[-1]["user"], "q19")
+
+    def test_char_budget_is_bounded_independently_of_turn_count(self):
+        """A few enormous turns must be trimmed even when well under MAX_TURNS."""
+        for i in range(4):
+            self.memory.save_turn("t3", "x" * 1500, "y" * 1500)
+        total = sum(len(t["user"]) + len(t["assistant"])
+                    for t in self.memory.load("t3")["turns"])
+        self.assertLessEqual(total, self.memory.MAX_CHARS)
+
+    def test_single_turn_cannot_eat_the_whole_budget(self):
+        self.memory.save_turn("t4", "u" * 99999, "a" * 99999)
+        t = self.memory.load("t4")["turns"][0]
+        self.assertLessEqual(len(t["user"]), self.memory.MAX_TURN_CHARS)
+        self.assertLessEqual(len(t["assistant"]), self.memory.MAX_TURN_CHARS)
+
+    def test_reset_clears_and_reports_whether_anything_existed(self):
+        self.memory.save_turn("t5", "q", "a")
+        self.assertTrue(self.memory.reset("t5"))
+        self.assertEqual(self.memory.as_messages("t5"), [])
+        self.assertFalse(self.memory.reset("t5"))
+
+    def test_thread_id_is_sanitised_into_a_safe_filename(self):
+        self.memory.save_turn("../../etc/passwd", "q", "a")
+        written = os.listdir(self.memory.THREADS)
+        self.assertTrue(all(".." not in f and "/" not in f for f in written), written)
+
+    def test_agent_is_remembered_so_follow_ups_stay_in_role(self):
+        self.memory.save_turn("t6", "q", "a", agent="Research_Analyst")
+        self.assertEqual(self.memory.last_agent("t6"), "Research_Analyst")
+
+    def test_worker_seeds_history_and_records_the_new_turn(self):
+        """End to end: prior turns reach the model, and the exchange is saved."""
+        self.memory.save_turn("conv", "first question", "first answer")
+        seen = {}
+
+        def spy(model, instruction, system_prompt=None, history=None):
+            seen["history"] = history
+            return "second answer"
+
+        self.runner._attempt = spy
+        self.queue("t.md", self.memory.directive("conv") + "second question")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+
+        self.assertEqual(len(seen["history"]), 2)
+        self.assertEqual(seen["history"][0]["content"], "first question")
+        turns = self.memory.load("conv")["turns"]
+        self.assertEqual(turns[-1]["user"], "second question")
+        self.assertEqual(turns[-1]["assistant"], "second answer")
+
+    def test_failed_tasks_are_not_written_into_memory(self):
+        """Replaying "all models failed" as context spends budget a real turn
+        needs and teaches the model nothing."""
+        self.runner._attempt = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("dead"))
+        self.runner.time.sleep = lambda s: None
+        self.queue("t.md", self.memory.directive("conv2") + "doomed")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        self.assertEqual(self.memory.load("conv2")["turns"], [])
+
+    def test_bare_follow_up_inherits_the_thread_agent(self):
+        self.memory.save_turn("conv3", "q", "a", agent="Vault_Architect")
+        seen = {}
+
+        def spy(model, instruction, system_prompt=None, history=None):
+            seen["prompt"] = system_prompt
+            return "ok"
+
+        self.runner._attempt = spy
+        self.queue("t.md", self.memory.directive("conv3") + "no agent prefix here")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        self.assertIn("Vault Architect", seen["prompt"])
+
+    def test_a_task_with_no_thread_still_runs_cold(self):
+        seen = {}
+
+        def spy(model, instruction, system_prompt=None, history=None):
+            seen["history"] = history
+            return "ok"
+
+        self.runner._attempt = spy
+        self.queue("t.md", "stateless task")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        self.assertFalse(seen["history"])
 
 
 class TestBackupExclusions(unittest.TestCase):

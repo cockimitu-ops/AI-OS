@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import agents
+import memory
 
 load_dotenv("/home/nost/AI-OS/.env")
 
@@ -17,13 +18,33 @@ LOGS = os.path.join(AIOS_DIR, "tasks", "logs")
 
 def main():
     if len(sys.argv) < 2 or "--help" in sys.argv or "-h" in sys.argv:
-        print("Verwendung: python3 dispatch_task.py \"<Deine Anweisung>\" [--no-wait] [--agent NAME]")
+        print("Verwendung: python3 dispatch_task.py \"<Deine Anweisung>\" [--no-wait] [--agent NAME] [--thread ID] [--reset]")
+        print("  --thread ID   Konversation fortsetzen (Default: keine Memory)")
+        print("  --reset       Thread-Memory loeschen und beenden")
         print("\nVerfuegbare Agents (--agent, Alias oder voller Name):\n")
         print(agents.describe())
         sys.exit(0 if ("--help" in sys.argv or "-h" in sys.argv) else 1)
 
     argv = sys.argv[1:]
     no_wait = "--no-wait" in argv
+
+    # Opt-in on the CLI, unlike Telegram: a shell invocation is usually one-shot,
+    # and silently accumulating history across unrelated commands would surprise.
+    thread = None
+    if "--thread" in argv:
+        i = argv.index("--thread")
+        if i + 1 >= len(argv):
+            print("Fehler: --thread braucht eine ID.")
+            sys.exit(1)
+        thread = argv[i + 1]
+        argv = argv[:i] + argv[i + 2:]
+
+    if "--reset" in argv:
+        if not thread:
+            print("Fehler: --reset braucht --thread ID.")
+            sys.exit(1)
+        print("Memory geloescht." if memory.reset(thread) else "Kein Memory vorhanden.")
+        sys.exit(0)
 
     agent = None
     if "--agent" in argv:
@@ -61,13 +82,16 @@ def main():
     # Atomar einreihen: der Worker globt tasks/inbox/*.md im Sekundentakt und
     # koennte sonst eine halb geschriebene Datei aufschnappen und eine
     # abgeschnittene Anweisung ausfuehren. .part wird vom Glob nicht erfasst.
-    body = (agents.directive(agent) if agent else "") + prompt
+    body = ((memory.directive(thread) if thread else "")
+            + (agents.directive(agent) if agent else "")
+            + prompt)
     tmp_path = f"{task_path}.part"
     with open(tmp_path, "w", encoding="utf-8") as f:
         f.write(body)
     os.replace(tmp_path, task_path)
 
-    suffix = f" (Agent: {agent})" if agent else ""
+    bits = ([f"Agent: {agent}"] if agent else []) + ([f"Thread: {thread}"] if thread else [])
+    suffix = f" ({', '.join(bits)})" if bits else ""
     print(f"[*] Task eingereiht: {task_filename}{suffix}")
 
     if no_wait:
