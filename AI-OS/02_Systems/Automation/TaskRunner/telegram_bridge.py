@@ -4,6 +4,9 @@ import asyncio
 from datetime import datetime
 from dotenv import load_dotenv
 from telegram import Update
+from telegram.constants import ParseMode
+import html
+import re
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
 # 1. Konfiguration laden
@@ -16,10 +19,39 @@ AIOS_DIR = os.environ.get("AIOS_WORKSPACE", "/home/nost/AI-OS/AI-OS/02_Systems/A
 INBOX = os.path.join(AIOS_DIR, "tasks", "inbox")
 LOGS = os.path.join(AIOS_DIR, "tasks", "logs")
 
+def _md_lite_to_telegram_html(text: str) -> str:
+    """Converts fenced/inline code and **bold** into Telegram's HTML parse
+    mode, so it actually renders. HTML mode only needs &, <, > escaped
+    (versus MarkdownV2's ~18 special characters), so it never throws Telegram's
+    "can't parse entities" 400 error against arbitrary/unpredictable model
+    output the way Markdown mode does."""
+    text = html.escape(text, quote=False)
+    blocks = []
+
+    def _stash_block(m):
+        blocks.append(f"<pre><code>{m.group(2)}</code></pre>")
+        return f"\x00BLOCK{len(blocks)-1}\x00"
+
+    text = re.sub(r"```(\w*)\n?(.*?)```", _stash_block, text, flags=re.S)
+
+    def _stash_inline(m):
+        blocks.append(f"<code>{m.group(1)}</code>")
+        return f"\x00BLOCK{len(blocks)-1}\x00"
+
+    text = re.sub(r"`([^`\n]+)`", _stash_inline, text)
+    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+
+    for i, block in enumerate(blocks):
+        text = text.replace(f"\x00BLOCK{i}\x00", block)
+    return text
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id != ALLOWED_USER:
-        await update.message.reply_text("⛔ Zugriff verweigert: Unautorisierter Nutzer.")
+        await update.message.reply_text(
+            _md_lite_to_telegram_html("⛔ Zugriff verweigert: Unautorisierter Nutzer."),
+            parse_mode=ParseMode.HTML,
+        )
         return
 
     instruction = update.message.text.strip()
@@ -38,7 +70,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f.write(instruction)
     os.replace(tmp_path, task_path)
 
-    status_msg = await update.message.reply_text(f"⏳ Task eingereiht (`{task_file}`). Worker führt aus...")
+    status_msg = await update.message.reply_text(
+        _md_lite_to_telegram_html(f"⏳ Task eingereiht (`{task_file}`). Worker führt aus..."),
+        parse_mode=ParseMode.HTML,
+    )
 
     # Auf Worker-Ergebnis warten (max. 180s)
     timeout = 180
@@ -58,11 +93,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"tasks/logs/{os.path.basename(log_path)}]"
                 )
 
-            await status_msg.edit_text(f"✅ **Ergebnis:**\n\n{result_text}")
+            await status_msg.edit_text(
+                _md_lite_to_telegram_html(f"✅ **Ergebnis:**\n\n{result_text}"),
+                parse_mode=ParseMode.HTML,
+            )
             return
         await asyncio.sleep(2)
 
-    await status_msg.edit_text("⚠️ **Timeout:** Der Worker hat innerhalb von 3 Minuten nicht geantwortet.")
+    await status_msg.edit_text(
+        _md_lite_to_telegram_html("⚠️ **Timeout:** Der Worker hat innerhalb von 3 Minuten nicht geantwortet."),
+        parse_mode=ParseMode.HTML,
+    )
 
 def main():
     if not BOT_TOKEN or not ALLOWED_USER:
