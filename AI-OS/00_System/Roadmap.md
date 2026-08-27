@@ -81,7 +81,7 @@ Read the whole repository — vault, TaskRunner, AI-Bridge, MCP server, server-s
 ## Actual Next Steps (revised 2026-08-27)
 See [[Income_Portfolio]] for the full reasoning.
 1. ~~Fiverr gig live~~ — **live as of 2026-08-27**, thumbnail resolved. Waiting on the first order or review.
-2. **Publish Micro-SaaS Moat Blueprint** — Notion template page created 2026-08-27 (standalone, outside the private AI OS vault mirror on purpose — see [[External_Access_Plan]]'s sibling decision on keeping public and private Notion content apart). Still needed: "Allow duplicate as template" (Notion UI toggle, not scriptable) and the Gumroad listing.
+2. ~~**Publish Micro-SaaS Moat Blueprint**~~ — **live as of 2026-08-27.** Notion duplicate-enabled, Gumroad listing published, purchase-gated correctly. Waiting on the first sale.
 3. Make 3 short-form demos of it — still the step that decides whether it sells, and the capability already exists but has never been pointed at this
 4. Then Pricing Teardown per `_infra/LAUNCH-ORDER.md`'s spacing, and a ContentAgency prospect list
 

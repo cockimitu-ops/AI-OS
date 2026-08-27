@@ -9,7 +9,7 @@ Keep under 120 lines.
 ## STATUS
 | Product | Price | Built | Synced to Vault | Live | Revenue |
 |---|---|---|---|---|---|
-| Micro-SaaS Moat Blueprint | $29 | yes | 2026-08-25 | pending Felix | 0 |
+| Micro-SaaS Moat Blueprint | $29 | yes | 2026-08-25 | **yes — live 2026-08-27** | 0 |
 | The Pricing Teardown | $29 | yes | 2026-08-25 | no | 0 |
 | Retention Engineering | $39 | yes | 2026-08-25 | no | 0 |
 | Validation Stack (bundle 1+2) | $45 | listing only | no | no | 0 |

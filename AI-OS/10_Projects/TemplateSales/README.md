@@ -31,12 +31,12 @@ The 2026-08-13 priority was: ship **one** product first, the AI OS pattern itsel
 
 What survives from the 2026-08-13 reasoning and still applies: **distribution decides this, not product quality.** Short-form video is the #1 discovery channel for Notion templates, and that capability already exists in [[10_Projects/SocialMediaContent/README|SocialMediaContent]] — currently unused for this. The launch plan instead routes through Reddit; see `_infra/LAUNCH-ORDER.md`.
 
-## What Is Actually Built (2026-08-25)
+## What Is Actually Built (updated 2026-08-27)
 Authoritative state lives in `_infra/AI-CONTEXT.md` — that file is maintained; this section mirrors it.
 
 | Product | Price | Built | Live | Revenue |
 |---|---|---|---|---|
-| Micro-SaaS Moat Blueprint | $29 | yes | no | 0 |
+| Micro-SaaS Moat Blueprint | $29 | yes | **yes (2026-08-27)** | 0 |
 | The Pricing Teardown | $29 | yes | no | 0 |
 | Retention Engineering | $39 | yes | no | 0 |
 | Validation Stack (bundle 1+2) | $45 | listing copy only | no | 0 |

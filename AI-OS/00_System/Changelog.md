@@ -610,3 +610,17 @@ Money-focused work, per direct request: publish groundwork and the unfinished re
 
 ### Process note
 First task where the TaskRunner worker did real, useful autonomous work in the same session as manual work, rather than everything routing through direct edits: dispatched `--agent research` to record the Fiverr-live milestone via `vault_write.py`. Standing practice going forward - durable facts and decisions get logged by the worker, not written by hand, wherever the worker's actual capabilities (allowlisted note creation, no overwrite) cover the case.
+
+## [0.40.0-alpha] - 2026-08-27
+### Milestone
+- **Micro-SaaS Moat Blueprint is live** - the first TemplateSales product actually published, first real point where revenue could start. Notion template duplicate-enabled, Gumroad listing published with all four purchasable files (including `notion-template-link.md`, gated correctly after the earlier fix). Status updated across `_infra/AI-CONTEXT.md` (the authoritative table), `TemplateSales/README.md`, `Dashboard.md`, `Roadmap.md`.
+- QuickTurnaroundGigs' Fiverr gig status corrected in `Research_And_Briefing_Gigs.md` - its own Status header still said "not yet posted to Fiverr" after the gig had already gone live, caught by the same drift pattern this vault keeps failing at and re-running the audit keeps catching.
+
+### Process
+Second milestone logged by the TaskRunner worker rather than by hand -
+`10_Projects/TemplateSales/Micro_SaaS_Moat_Blueprint_Live_2026_08_27.md`,
+dispatched `--agent business`, verified before trusting it. The existing-file
+status-table edits (AI-CONTEXT.md, README.md, Dashboard.md, Roadmap.md)
+stayed manual, same boundary as before: vault_write.py's allowlist covers new
+notes, not overwriting hand-maintained files, and that boundary is doing its
+job rather than being a gap.
