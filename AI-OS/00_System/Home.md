@@ -26,7 +26,7 @@ Start wherever matches what you're trying to do:
 - **Archived material** → [[99_Archive/README|99_Archive]]
 
 ## Current State
-Version `0.40.0-alpha`. As of Sprint 018, the vault is explicitly organized for multi-project work: reusable knowledge and capabilities stay central in `02_Systems/`/`03_Capabilities/`, while each active initiative — content production, a B2B content agency, quick-turnaround gigs, template sales, funding applications — gets its own project under `10_Projects/`, kept small enough to load or share independently. See [[Dashboard]] for exactly what's active right now.
+Version `0.41.0-alpha`. As of Sprint 018, the vault is explicitly organized for multi-project work: reusable knowledge and capabilities stay central in `02_Systems/`/`03_Capabilities/`, while each active initiative — content production, a B2B content agency, quick-turnaround gigs, template sales, funding applications — gets its own project under `10_Projects/`, kept small enough to load or share independently. See [[Dashboard]] for exactly what's active right now.
 
 ## Repository Map
 See [[Repository_Structure]] for the full folder-by-folder breakdown.

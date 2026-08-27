@@ -624,3 +624,8 @@ status-table edits (AI-CONTEXT.md, README.md, Dashboard.md, Roadmap.md)
 stayed manual, same boundary as before: vault_write.py's allowlist covers new
 notes, not overwriting hand-maintained files, and that boundary is doing its
 job rather than being a gap.
+
+## [0.41.0-alpha] - 2026-08-27
+### Added
+- `10_Projects/TemplateSales/_infra/pull_pricing_teardown_launch_kit.sh` / `.ps1` - same launch-kit pattern as Moat Blueprint, staged for Week 3-4 per `_infra/LAUNCH-ORDER.md`. Deliberately not published yet - both scripts carry that warning inline, and no Notion page was created for it (unlike Moat Blueprint), matching the vault's own one-product-at-a-time sequencing.
+- `10_Projects/TemplateSales/Micro-SaaS-Moat-Blueprint/reddit_post1_ready_today.md` - just today's action (r/SaaS Post 1 + reply templates), not all three scheduled posts. Bundling day-3 and day-7 content into "today's" file would invite posting all three at once, exactly what `_infra/LAUNCH-ORDER.md` warns against.
