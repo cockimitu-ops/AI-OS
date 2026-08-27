@@ -3,6 +3,8 @@
 Purpose: Fast, tactical client work using the Perplexity + Claude "Search & Synthesis Engine" pattern — Perplexity finds the opportunity, Claude produces the deliverable, paid same-day to 48 hours. Distinct from [[10_Projects/ContentAgency/README|ContentAgency]]'s slower-building package/retainer model.
 Last Updated: 2026-08-06
 Status: Active — Fiverr gig live 2026-08-27, structure proven end-to-end via reference sample
+
+Pull the finished reference sample (Markdown + PDF) to any machine: `_infra/pull_reference_sample.sh` (Linux/Mac/WSL/Git Bash) or `_infra/pull_reference_sample.ps1` (Windows PowerShell), both over Tailscale.
 Related Documents: [[10_Projects/README|10_Projects]], [[10_Projects/MoneyMaking/README|MoneyMaking]]
 
 ---
