@@ -163,7 +163,7 @@ class TestEmptyTask(TaskRunnerTestCase):
 
 class TestModelChain(TaskRunnerTestCase):
     def test_first_working_model_wins_and_is_logged(self):
-        self.runner._attempt = lambda model, instr: f"done by {model}"
+        self.runner._attempt = lambda model, instr, sp=None: f"done by {model}"
         self.queue("t.md", "do a thing")
         self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
         self.assertEqual(self.log_of("t.md"),
@@ -173,7 +173,7 @@ class TestModelChain(TaskRunnerTestCase):
     def test_falls_through_to_a_later_model(self):
         calls = []
 
-        def flaky(model, instr):
+        def flaky(model, instr, sp=None):
             calls.append(model)
             if len(calls) < 3:
                 raise RuntimeError("rate limited")
@@ -187,7 +187,7 @@ class TestModelChain(TaskRunnerTestCase):
         self.assertEqual(len(calls), 3)
 
     def test_total_failure_writes_a_diagnostic_not_an_empty_log(self):
-        def dead(model, instr):
+        def dead(model, instr, sp=None):
             raise RuntimeError("quota exhausted")
 
         self.runner._attempt = dead
@@ -205,7 +205,7 @@ class TestModelChain(TaskRunnerTestCase):
         """CLAUDE_ESCALATION_ENABLED is off pending a ToS decision. If it is off,
         the log must say so - otherwise the failure looks like the escalation
         tier ran and also failed."""
-        self.runner._attempt = lambda m, i: (_ for _ in ()).throw(RuntimeError("x"))
+        self.runner._attempt = lambda m, i, sp=None: (_ for _ in ()).throw(RuntimeError("x"))
         self.runner.time.sleep = lambda s: None
         self.queue("t.md", "do a thing")
         self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
@@ -250,7 +250,7 @@ class TestCrashGuard(TaskRunnerTestCase):
         self.assertIn("input/output error", log)
 
     def test_a_good_task_still_runs_in_the_same_pass(self):
-        self.runner._attempt = lambda model, instr: "fine"
+        self.runner._attempt = lambda model, instr, sp=None: "fine"
         self.queue("good.md", "do a thing")
         self._run_one_pass()
         self.assertEqual(self.log_of("good.md"), "fine")
@@ -258,7 +258,7 @@ class TestCrashGuard(TaskRunnerTestCase):
 
     def test_tasks_are_processed_in_filename_order(self):
         order = []
-        self.runner._attempt = lambda model, instr: order.append(instr) or "ok"
+        self.runner._attempt = lambda model, instr, sp=None: order.append(instr) or "ok"
         self.queue("task_b.md", "second")
         self.queue("task_a.md", "first")
         self._run_one_pass()
@@ -313,6 +313,90 @@ class TestOutputFormatting(TaskRunnerTestCase):
 
     def test_plain_string_passes_through(self):
         self.assertEqual(self.runner.format_interpreter_output("done"), "done")
+
+
+class TestAgentSelection(TaskRunnerTestCase):
+    """04_Agents/ held four scoped role definitions from Sprint 024 that nothing
+    could invoke - they were documentation for a human typing "as Research
+    Analyst, do X" into chat. These cover the selection path that made them
+    executable."""
+
+    def setUp(self):
+        super().setUp()
+        import agents
+        self.agents = agents
+
+    def test_aliases_and_full_names_resolve(self):
+        for given, expected in [
+            ("@research", "Research_Analyst"),
+            ("RA", "Research_Analyst"),
+            ("Research-Analyst", "Research_Analyst"),
+            ("  @VAULT ", "Vault_Architect"),
+            ("biz", "Business_Development"),
+            ("Content_Producer", "Content_Producer"),
+        ]:
+            self.assertEqual(self.agents.resolve(given), expected, given)
+
+    def test_ambiguous_or_unknown_never_guesses(self):
+        for given in ("nonsense", "a", "", None, "@"):
+            self.assertIsNone(self.agents.resolve(given), repr(given))
+
+    def test_every_agent_on_disk_has_a_usable_prompt_block(self):
+        """A file without markers silently degrades to the base prompt, which is
+        correct behaviour but silent - so assert the four real agents are wired,
+        or a broken marker would go unnoticed until someone reads a bad answer."""
+        found = self.agents.available()
+        self.assertEqual(len(found), 4, found)
+        for name in found:
+            block = self.agents.load_prompt(name)
+            self.assertTrue(block and len(block) > 200,
+                            f"{name} has no usable prompt block")
+
+    def test_directive_round_trip(self):
+        raw = self.agents.directive("Research_Analyst") + "Profile Acme."
+        self.assertEqual(self.agents.parse_directive(raw),
+                         ("Research_Analyst", "Profile Acme."))
+
+    def test_unknown_agent_in_directive_strips_but_keeps_the_task(self):
+        """A typo'd alias must cost a slightly worse answer, never a lost task."""
+        agent, instruction = self.agents.parse_directive(
+            "<!-- agent: Nope -->\nDo the thing.")
+        self.assertIsNone(agent)
+        self.assertEqual(instruction, "Do the thing.")
+
+    def test_task_without_directive_is_untouched(self):
+        self.assertEqual(self.agents.parse_directive("Just a task."),
+                         (None, "Just a task."))
+
+    def test_agent_prompt_is_appended_not_substituted(self):
+        """Selecting an agent must narrow focus without stripping the base
+        prompt's guardrails - the destructive-action rule has to survive."""
+        base = self.runner._system_prompt_for(None)
+        scoped = self.runner._system_prompt_for("Research_Analyst")
+        self.assertIn(base, scoped)
+        self.assertGreater(len(scoped), len(base))
+        self.assertIn("Guardrail", scoped)
+
+    def test_unknown_agent_falls_back_to_base_prompt(self):
+        self.assertEqual(self.runner._system_prompt_for("Nope"),
+                         self.runner._system_prompt_for(None))
+
+    def test_worker_runs_the_task_with_the_agent_prompt(self):
+        """End to end through _run_task: the directive is parsed off, and the
+        prompt handed to the model is the scoped one."""
+        seen = {}
+
+        def spy(model, instruction, system_prompt=None):
+            seen["instruction"] = instruction
+            seen["prompt"] = system_prompt
+            return "ok"
+
+        self.runner._attempt = spy
+        self.queue("t.md", self.agents.directive("Vault_Architect") + "Check drift.")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        self.assertEqual(seen["instruction"], "Check drift.")
+        self.assertIn("Vault Architect", seen["prompt"])
+        self.assertNotIn("<!-- agent:", seen["instruction"])
 
 
 class TestBackupExclusions(unittest.TestCase):

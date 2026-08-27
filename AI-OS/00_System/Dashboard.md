@@ -61,7 +61,7 @@ See Projects above for what those knowledge notes and capabilities are actually 
 [[ADR-0001_Naming_Disambiguation]], [[ADR-0002_Git_Workflow_Conventions]], [[ADR-0003_Execution_Engine_Placement]], [[ADR-0004_Template_Framework_Placement]], [[ADR-0005_Project_Knowledge_Separation]], [[ADR-0006_Project_Folder_Naming]], [[ADR-0007_Code_Capabilities]] — all Accepted.
 
 ## Open Items
-- Agents: decided (manual, chat-triggered) and built — 4 scoped roles as of Sprint 024. Note this is about `04_Agents/` personas only; TaskRunner is infrastructure and sits outside that decision — see [[02_Systems/Automation/README|Automation]].
+- Agents: 4 scoped roles, **now executable** as of 2026-08-27 — `--agent research` or `@research` on Telegram. Previously definitions nothing could invoke. Note this is about `04_Agents/` personas only; TaskRunner is infrastructure and sits outside that decision — see [[02_Systems/Automation/README|Automation]].
 - **Publish the three TemplateSales products.** The only step between built product and possible first revenue.
 - ~~Claude-via-Pro ToS question~~ — decided 2026-08-26: both stay parked. See [[Roadmap]]'s *Off the Table*.
 - ~~Universe Support~~ — dropped 2026-08-26; it was scoped for the archived Horror pillar.

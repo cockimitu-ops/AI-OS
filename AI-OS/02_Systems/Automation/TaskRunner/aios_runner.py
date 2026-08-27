@@ -5,6 +5,11 @@ import time
 import sys
 from dotenv import load_dotenv
 
+# This file is launched by absolute path from systemd with WorkingDirectory set
+# to the repo root, so its own folder is not on sys.path by default.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import agents
+
 # Disable telemetry and interactive terminal hooks before importing interpreter
 os.environ["INTERPRETER_ANONYMOUS_TELEMETRY"] = "false"
 os.environ["ANONYMOUS_TELEMETRY"] = "false"
@@ -111,7 +116,27 @@ interpreter.verbose = False
 # AttributeError and crash-loops the service.
 interpreter.disable_telemetry = True
 interpreter.llm.model = PRIMARY_MODEL
-interpreter.system_message = _load_system_prompt()
+BASE_SYSTEM_PROMPT = _load_system_prompt()
+interpreter.system_message = BASE_SYSTEM_PROMPT
+
+
+def _system_prompt_for(agent_name):
+    """Base prompt, plus the selected agent's block appended.
+
+    Appended rather than substituted: the base prompt carries what is true
+    regardless of role - the vault map, the destructive-action guardrail, the
+    code-language constraint - and selecting an agent should narrow the
+    worker's focus, never strip its safety rules."""
+    if not agent_name:
+        return BASE_SYSTEM_PROMPT
+    block = agents.load_prompt(agent_name)
+    if not block:
+        return BASE_SYSTEM_PROMPT
+    return (
+        f"{BASE_SYSTEM_PROMPT}\n\n"
+        f"## Your role for this task: {agent_name.replace('_', ' ')}\n"
+        f"{block}"
+    )
 
 def format_interpreter_output(messages):
     """Return what the worker actually *said*, not a transcript of how it got
@@ -159,13 +184,15 @@ def format_interpreter_output(messages):
         return "\n\n".join(transcript)
     return "Task completed."
 
-def _attempt(model, instruction):
+def _attempt(model, instruction, system_prompt=None):
     """Run one chat turn on `model`. Raises on failure (including the
     swallowed-RateLimitError case where open-interpreter returns an empty
     message list instead of raising - see respond.py's display_markdown_message
     branch)."""
     interpreter.messages = []
     interpreter.llm.model = model
+    if system_prompt is not None:
+        interpreter.system_message = system_prompt
     raw_output = interpreter.chat(instruction, display=False, stream=False)
     if not raw_output:
         raise RuntimeError(f"{model} produced no output (likely rate-limited)")
@@ -217,7 +244,10 @@ def _write_log(filename, output):
 
 def _run_task(task_path, filename):
     with open(task_path, "r", encoding="utf-8") as f:
-        instruction = f.read().strip()
+        raw = f.read()
+
+    agent_name, instruction = agents.parse_directive(raw)
+    system_prompt = _system_prompt_for(agent_name)
 
     if not instruction:
         # Still write a log: a caller waiting on this file would otherwise
@@ -226,14 +256,15 @@ def _run_task(task_path, filename):
         os.rename(task_path, os.path.join(COMPLETED, filename))
         return
 
-    print(f"[*] Processing task: {filename}")
+    label = f" (agent: {agent_name})" if agent_name else ""
+    print(f"[*] Processing task: {filename}{label}")
     output = None
     errors = []
     for model, delay in MODEL_CHAIN:
         if delay:
             time.sleep(delay)
         try:
-            output = _attempt(model, instruction)
+            output = _attempt(model, instruction, system_prompt)
             break
         except Exception as e:
             print(f"[!] {model} failed ({e})")

@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import asyncio
 from datetime import datetime
@@ -18,6 +19,25 @@ ALLOWED_USER = int(os.environ.get("TELEGRAM_ALLOWED_USER_ID", 0))
 AIOS_DIR = os.environ.get("AIOS_WORKSPACE", "/home/nost/AI-OS/AI-OS/02_Systems/Automation/TaskRunner")
 INBOX = os.path.join(AIOS_DIR, "tasks", "inbox")
 LOGS = os.path.join(AIOS_DIR, "tasks", "logs")
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import agents
+
+
+def _split_agent_prefix(text):
+    """A leading @alias selects an agent: "@research profile Acme".
+
+    Unknown @words are left alone rather than treated as a failed agent
+    selection - "@felix should I..." is a sentence, not a typo, and eating the
+    first word of a real task would be worse than ignoring the prefix."""
+    stripped = text.lstrip()
+    if not stripped.startswith("@"):
+        return None, text
+    head, _, rest = stripped.partition(" ")
+    resolved = agents.resolve(head)
+    if not resolved:
+        return None, text
+    return resolved, rest.strip()
 
 def _md_lite_to_telegram_html(text: str) -> str:
     """Converts fenced/inline code and **bold** into Telegram's HTML parse
@@ -58,6 +78,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not instruction:
         return
 
+    if instruction.lower().lstrip("/") in ("agents", "agent"):
+        await update.message.reply_text(
+            _md_lite_to_telegram_html(
+                "**Agents** — put the alias first, e.g. `@research profile Acme Corp`\n\n"
+                + agents.describe()
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    agent, instruction = _split_agent_prefix(instruction)
+    if not instruction:
+        await update.message.reply_text(
+            _md_lite_to_telegram_html("Agent erkannt, aber keine Aufgabe dahinter."),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     task_file = f"task_tg_{timestamp}.md"
     task_path = os.path.join(INBOX, task_file)
@@ -65,13 +103,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # In Inbox schreiben - atomar, siehe dispatch_task.py: der Worker pollt
     # tasks/inbox/*.md und darf keine halb geschriebene Datei sehen.
+    body = (agents.directive(agent) if agent else "") + instruction
     tmp_path = f"{task_path}.part"
     with open(tmp_path, "w", encoding="utf-8") as f:
-        f.write(instruction)
+        f.write(body)
     os.replace(tmp_path, task_path)
 
     status_msg = await update.message.reply_text(
-        _md_lite_to_telegram_html(f"⏳ Task eingereiht (`{task_file}`). Worker führt aus..."),
+        _md_lite_to_telegram_html(
+            f"⏳ Task eingereiht (`{task_file}`)"
+            + (f" als **{agent.replace('_', ' ')}**" if agent else "")
+            + ". Worker führt aus..."
+        ),
         parse_mode=ParseMode.HTML,
     )
 
