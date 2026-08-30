@@ -536,6 +536,136 @@ class TestAgentSelection(TaskRunnerTestCase):
         self.assertNotIn("<!-- agent:", seen["instruction"])
 
 
+class TestAgentHandoff(TaskRunnerTestCase):
+    """The handoff convention (added 2026-08-30): an agent ends its output
+    with `<!-- handoff: Agent: reason -->` to hand its result to another
+    agent as a new task, the same directive pattern as `<!-- agent: X -->`.
+    Pure parsing only here - agents.py's parse_handoff/parse_handoff_depth
+    given plain strings, no queue involved."""
+
+    def setUp(self):
+        super().setUp()
+        import agents
+        self.agents = agents
+
+    def test_parses_a_well_formed_handoff_line(self):
+        output = "Findings here.\n\n<!-- handoff: Business_Development: pricing may need to change -->"
+        agent, reason, cleaned = self.agents.parse_handoff(output)
+        self.assertEqual(agent, "Business_Development")
+        self.assertEqual(reason, "pricing may need to change")
+        self.assertNotIn("handoff", cleaned)
+        self.assertIn("Findings here.", cleaned)
+
+    def test_resolves_an_alias_not_just_the_canonical_name(self):
+        agent, _, _ = self.agents.parse_handoff("<!-- handoff: bizdev: quick check -->")
+        self.assertEqual(agent, "Business_Development")
+
+    def test_unknown_target_is_treated_as_no_handoff_but_still_cleaned(self):
+        """A typo'd target costs a skipped handoff, not a broken task - same
+        principle as parse_directive for the incoming `agent:` marker."""
+        output = "Some text.\n<!-- handoff: NotARealAgent: whatever -->"
+        agent, reason, cleaned = self.agents.parse_handoff(output)
+        self.assertIsNone(agent)
+        self.assertIsNone(reason)
+        self.assertNotIn("handoff", cleaned)
+
+    def test_no_directive_present_leaves_output_untouched(self):
+        agent, reason, cleaned = self.agents.parse_handoff("plain output, nothing special")
+        self.assertIsNone(agent)
+        self.assertIsNone(reason)
+        self.assertEqual(cleaned, "plain output, nothing special")
+
+    def test_handles_empty_output(self):
+        agent, reason, cleaned = self.agents.parse_handoff("")
+        self.assertIsNone(agent)
+        self.assertEqual(cleaned, "")
+
+    def test_depth_marker_round_trips(self):
+        marker = self.agents.handoff_depth_marker(2)
+        depth, rest = self.agents.parse_handoff_depth(f"{marker}the actual instruction")
+        self.assertEqual(depth, 2)
+        self.assertEqual(rest, "the actual instruction")
+
+    def test_missing_depth_marker_defaults_to_zero(self):
+        depth, rest = self.agents.parse_handoff_depth("no marker here")
+        self.assertEqual(depth, 0)
+        self.assertEqual(rest, "no marker here")
+
+
+class TestHandoffIntegration(TaskRunnerTestCase):
+    """Exercises the real _run_task path end to end: a handoff directive in
+    an agent's output should enqueue a new task file for the target agent,
+    disappear from what Felix actually reads, and never let two agents loop
+    forever even if both keep handing off to each other."""
+
+    def _handoff_files(self):
+        return [f for f in os.listdir(self.runner.INBOX) if f.startswith("task_handoff_")]
+
+    def test_handoff_directive_enqueues_a_new_task_for_the_target_agent(self):
+        self.runner._attempt = lambda model, instr, sp=None, history=None, **kwargs: (
+            "Competitor X just cut prices 20%.\n\n"
+            "<!-- handoff: Business_Development: pricing may need to change -->"
+        )
+        self.queue("t.md", "<!-- agent: Research_Analyst -->\nresearch this")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+
+        handoff_files = self._handoff_files()
+        self.assertEqual(len(handoff_files), 1)
+        content = open(os.path.join(self.runner.INBOX, handoff_files[0]), encoding="utf-8").read()
+        self.assertIn("<!-- agent: Business_Development -->", content)
+        self.assertIn("<!-- handoff_depth: 1 -->", content)
+        self.assertIn("Competitor X just cut prices 20%", content)
+        self.assertIn("Research Analyst", content)  # "Handoff from Research Analyst: ..."
+
+    def test_directive_is_stripped_from_what_felix_actually_reads(self):
+        self.runner._attempt = lambda model, instr, sp=None, history=None, **kwargs: (
+            "Findings.\n<!-- handoff: Business_Development: check pricing -->"
+        )
+        self.queue("t.md", "<!-- agent: Research_Analyst -->\nresearch this")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        log = self.log_of("t.md")
+        self.assertNotIn("<!-- handoff:", log)
+        self.assertIn("Handed off to Business Development", log)
+
+    def test_self_handoff_is_a_no_op_not_an_infinite_loop_seed(self):
+        self.runner._attempt = lambda model, instr, sp=None, history=None, **kwargs: (
+            "Text.\n<!-- handoff: Research_Analyst: talking to myself -->"
+        )
+        self.queue("t.md", "<!-- agent: Research_Analyst -->\nresearch this")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        self.assertEqual(self._handoff_files(), [])
+
+    def test_handoff_chain_stops_at_the_depth_cap(self):
+        self.runner._attempt = lambda model, instr, sp=None, history=None, **kwargs: (
+            "Text.\n<!-- handoff: Business_Development: keep going -->"
+        )
+        depth = self.runner.agents.MAX_HANDOFF_DEPTH
+        marker = self.runner.agents.handoff_depth_marker(depth)
+        self.queue("t.md", f"<!-- agent: Research_Analyst -->\n{marker}research this")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        self.assertEqual(self._handoff_files(), [])
+        self.assertIn("depth limit", self.log_of("t.md"))
+
+    def test_a_normal_task_with_no_handoff_directive_enqueues_nothing(self):
+        self.runner._attempt = lambda model, instr, sp=None, history=None, **kwargs: "just an answer"
+        self.queue("t.md", "do a thing")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        self.assertEqual(self._handoff_files(), [])
+
+    def test_failed_task_never_triggers_a_handoff(self):
+        """An ERROR output happens to contain no handoff syntax in practice,
+        but this guards the actual rule - handoff parsing is skipped
+        entirely for a failed attempt, not just coincidentally directive-free."""
+        def dead(model, instr, sp=None, history=None, **kwargs):
+            raise RuntimeError("boom")
+
+        self.runner._attempt = dead
+        self.runner.time.sleep = lambda s: None
+        self.queue("t.md", "<!-- agent: Research_Analyst -->\ndo a thing")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        self.assertEqual(self._handoff_files(), [])
+
+
 class TestMemory(TaskRunnerTestCase):
     """Every task ran cold before 2026-08-27 - interpreter.messages = [] per
     attempt - so "now do the same for the other project" was impossible."""

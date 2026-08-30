@@ -317,12 +317,34 @@ def _write_log(filename, output):
     os.replace(tmp_path, log_path)
 
 
+def _enqueue_handoff_task(target_agent, depth, reason, prior_output, source_agent):
+    """Writes a new task file into INBOX the same atomic way dispatch_task.py
+    and telegram_bridge.py do (.part, then os.replace) - this runs from
+    inside the worker's own loop, which globs INBOX again on its very next
+    pass, so a half-written file here would be exactly as real a bug as the
+    ones those two already guard against."""
+    filename = f"task_handoff_{time.strftime('%Y%m%d_%H%M%S')}.md"
+    task_path = os.path.join(INBOX, filename)
+    tmp_path = f"{task_path}.part"
+    body = (
+        f"{agents.directive(target_agent)}"
+        f"{agents.handoff_depth_marker(depth)}"
+        f"Handoff from {(source_agent or 'the worker').replace('_', ' ')}: {reason}\n\n"
+        f"---\n{prior_output}\n"
+    )
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        f.write(body)
+    os.replace(tmp_path, task_path)
+    return filename
+
+
 def _run_task(task_path, filename):
     with open(task_path, "r", encoding="utf-8") as f:
         raw = f.read()
 
     thread_id, raw = memory.parse_directive(raw)
-    agent_name, instruction = agents.parse_directive(raw)
+    agent_name, raw = agents.parse_directive(raw)
+    handoff_depth, instruction = agents.parse_handoff_depth(raw)
 
     # A bare follow-up stays in whatever role the conversation was already in.
     if not agent_name and thread_id:
@@ -341,6 +363,8 @@ def _run_task(task_path, filename):
     bits = []
     if agent_name:
         bits.append(f"agent: {agent_name}")
+    if handoff_depth:
+        bits.append(f"handoff depth: {handoff_depth}")
     if history:
         bits.append(f"memory: {len(history) // 2} turn(s)")
     label = f" ({', '.join(bits)})" if bits else ""
@@ -376,6 +400,24 @@ def _run_task(task_path, filename):
             else "\n(Escalation: disabled pending ToS review - see CLAUDE_ESCALATION_ENABLED comment)"
         )
         output = f"ERROR during execution. All models failed:\n{error_lines}{note}"
+
+    # A successful agent can hand its own output to another agent by ending
+    # with `<!-- handoff: Agent: reason -->` - see agents.py. Checked before
+    # memory/log so neither ever shows the raw directive, and so the enqueued
+    # follow-up task gets the same cleaned text a human would read.
+    if not output.startswith("ERROR"):
+        handoff_agent, handoff_reason, output = agents.parse_handoff(output)
+        if handoff_agent == agent_name:
+            # Handing off to yourself isn't a pipeline, it's a no-op that
+            # would otherwise still burn a queue slot.
+            handoff_agent = None
+        if handoff_agent and handoff_depth >= agents.MAX_HANDOFF_DEPTH:
+            print(f"[!] Handoff to {handoff_agent} suppressed - depth {handoff_depth} at the cap ({agents.MAX_HANDOFF_DEPTH})")
+            output += f"\n\n(Handoff to {handoff_agent.replace('_', ' ')} suppressed - this chain hit its depth limit.)"
+        elif handoff_agent:
+            next_file = _enqueue_handoff_task(handoff_agent, handoff_depth + 1, handoff_reason, output, agent_name)
+            print(f"[>] Handed off to {handoff_agent} ({next_file})")
+            output += f"\n\n(Handed off to {handoff_agent.replace('_', ' ')}: {handoff_reason})"
 
     # Only successful turns enter memory. Replaying "all models failed" as
     # context teaches the model nothing and spends budget a real turn needs.

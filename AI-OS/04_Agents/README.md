@@ -24,6 +24,12 @@ The prose above each block stays the human-facing scope definition and must not 
 
 **This does not reverse the standing decision.** That decision (`Roadmap.md`) is about `04_Agents/` personas not needing *their own separate infrastructure* — and they still don't. They ride on TaskRunner, which already existed, and there is still exactly one executor.
 
+## Handoffs (added 2026-08-30)
+
+Every agent ran in isolation per task until now — Research_Analyst could finish a competitor report with real pricing implications, and the only place that went was a log Felix might or might not read. An agent can now end its own output with one line, `<!-- handoff: Agent: reason -->`, and TaskRunner enqueues that output as a new task for the named agent automatically — the same directive convention as the incoming `<!-- agent: X -->` header, just emitted instead of consumed. Not a general orchestration framework: there's still exactly one executor, no agent calls another mid-task, and a chain is capped at 3 hops so two agents that keep handing off to each other can't loop forever even if both ignore their own escalation rules (a real risk with free models under load — see `System_Prompt.md`).
+
+Wired into the two flows that are actually real right now: Research_Analyst → Business_Development when a finding has pricing/market implications beyond the current order, and Content_Producer → Business_Development for exactly the "pricing/packaging is out of scope" line that already existed here as prose and did nothing on its own. Vault_Architect and Business_Development don't emit handoffs — nothing in either's real scope hands off to another agent today, and this wasn't wired speculatively for a flow that doesn't exist yet.
+
 ## Contents
 - [[Vault_Architect]] — maintains the AI OS itself
 - [[Content_Producer]] — runs story production for SocialMediaContent

@@ -132,6 +132,14 @@ Three behaviours worth knowing:
 - **Failed tasks never enter memory.** Replaying "all models failed" as context spends budget a real turn needs.
 - **The CLI is opt-in (`--thread`), Telegram is automatic.** A shell invocation is usually one-shot; silently accumulating history across unrelated commands would surprise.
 
+## Agent handoffs (added 2026-08-30)
+
+Agents could be selected but never talked to each other — every task ran in isolation, so a Research_Analyst finding with real pricing implications had nowhere to go but a log. `agents.py` now parses a trailing `<!-- handoff: Agent: reason -->` line out of a successful agent's own output (`parse_handoff`) and, if the named agent resolves, `_run_task` in `aios_runner.py` enqueues that output as a brand new task file for it — atomically, `.part` + `os.replace`, the same pattern `dispatch_task.py`/`telegram_bridge.py` already use, since this write happens from inside the worker's own loop, which globs `tasks/inbox/` again on its very next pass.
+
+The directive line itself is stripped from what actually reaches the log/Telegram/memory — Felix sees a plain "(Handed off to Business Development: reason)" footer instead of raw HTML-comment syntax. A self-handoff (an agent naming itself) is a silent no-op rather than a queued task, and every handoff-created file carries `<!-- handoff_depth: N -->`; past `agents.MAX_HANDOFF_DEPTH` (3), a handoff is suppressed and says so in the output rather than chaining further. That cap is structural, not a prompt instruction telling agents to stop — free models under load already don't reliably follow the ones they have (see `System_Prompt.md`'s guardrail section), so a two-agent ping-pong needs a real ceiling, not a polite request.
+
+Only wired into the two flows that are real today — Research_Analyst → Business_Development and Content_Producer → Business_Development, both now spelled out in the relevant agent's Executable Prompt block, not just the human-facing prose above it (Content_Producer's "hand to Business_Development" line existed since Sprint 024ish and had never once done anything). See [[04_Agents/README|04_Agents]] for the framing; this section is the implementation.
+
 ## Write-back (2026-08-27)
 `09_Analytics` held four databases with zero rows since Sprint 012 and `Promotion_Candidates` was empty just as long — the Learning Loop in `02_Systems/Analytics/` was fully specified and never executed, because the worker could only read the vault.
 
