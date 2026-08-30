@@ -17,6 +17,7 @@ Related Documents: [[02_Systems/Automation/README|Automation]], [[Future_Integra
 | `telegram_bridge.py` | Same idea, over Telegram — only replies to the one allowed user ID, edits its own status message once the worker's log appears. |
 | `scripts/cloud_backup.py` | Tars the whole repo (`/home/nost/AI-OS`), uploads to Google Drive via `rclone`, prunes local archives older than 7 days. |
 | `scripts/health_check.py` | The supervision layer (added 2026-08-30) — see below. |
+| `scripts/morning_brief.py` | Daily good-morning digest over Telegram (added 2026-08-30) — see below. |
 | `scripts/send_telegram_notification.py` | One-off outbound Telegram message, reusing the same bot token — for things other than task results. Wired into `cloud_backup.py`'s failure path and `health_check.py`'s alerts. Stdlib-only on purpose: systemd runs both under `/usr/bin/python3`, which has no `python-dotenv`, so a notifier importing it would have failed exactly when it was needed. |
 | `agents.py` | Agent selection. Resolves aliases (`@research` → `Research_Analyst`), loads each agent's Executable Prompt block from [[04_Agents/README|04_Agents]]. Shared by all three entry points so they can't disagree about what an alias means. |
 | `memory.py` | Bounded per-conversation memory. Stores the *conversation* (your message + the worker's prose answer), never Open Interpreter's raw transcript — replaying old command output into a small free model degrades it silently. |
@@ -35,6 +36,7 @@ Three systemd services, all under `/etc/systemd/system/`, `WorkingDirectory` and
 - `aios-telegram.service` — runs `telegram_bridge.py`, `Restart=always`, starts `After=aios-worker.service`
 - `aios-backup.service` (`Type=oneshot`) + `aios-backup.timer` — runs `scripts/cloud_backup.py` daily at 03:00
 - `aios-healthcheck.service` (`Type=oneshot`) + `aios-healthcheck.timer` — runs `scripts/health_check.py` every 15 minutes
+- `aios-morning.service` (`Type=oneshot`) + `aios-morning.timer` — runs `scripts/morning_brief.py` daily at 07:00 Europe/Berlin (the timer unit's `OnCalendar` carries the timezone directly, so it tracks DST — the server itself stays on UTC)
 
 All three load secrets via `EnvironmentFile=/home/nost/AI-OS/.env` — the `.env` file itself stays at the repo root (gitignored), not inside the vault, since it's a secret rather than vault content.
 
@@ -92,6 +94,16 @@ Alerts go out over the same `send_telegram_notification.py` used by backup failu
 The gather/evaluate split (`gather_*` does subprocess/socket/filesystem calls, `evaluate_*` and `decide_alerts` are pure functions on their output) exists so the actual pass/fail and alert-timing logic is unit tested (`TestHealthCheck` in `test_taskrunner.py`) without mocking subprocess or touching the network.
 
 **Deliberately not implemented:** an alert on the health-check service itself dying — the same blind spot `aios-backup.service` had before this existed. `Restart=` doesn't apply to a `Type=oneshot` unit, but the timer's `Persistent=true` means a missed run (server was off) catches up on the next boot. If this needs a stronger guarantee later, a `OnFailure=` unit on `aios-healthcheck.service` is the standard way, not built here since two silent-failure classes were already fixed today and a third can wait for Felix to actually want it.
+
+## Morning brief (added 2026-08-30)
+
+`morning_brief.py`, daily at 07:00 Europe/Berlin, sends a plain Telegram message through the same bot — no new channel, no page to open. Right now it has one section: server status, built by importing `health_check.py` directly and formatting whatever `run_checks()` returns ("everything's fine" or a list of what's down).
+
+**Email is deliberately not in it yet.** Felix asked for new emails in the digest too, and this session checked the Gmail tools actually connected here (`forward`, `reply`, `send_message`, `trash_message`, spam/label management) before assuming it could be built — every one of them is an *action* on a message you already have the ID for. `reply`/`forward` both reference a `get_thread` tool to obtain that ID, but no such tool (or any list/search tool) is actually available. There is currently no way to read or list Gmail from this session at all, read-only or otherwise.
+
+Separately: even once that's fixed, the *inbox-reading* half of this specific script can't go through that connector anyway — connector tools only exist inside a Claude/claude.ai session, and this script runs unattended under `systemd`/`/usr/bin/python3`, with nothing resembling a session around it. Getting real email into this digest means what [[02_Systems/Automation/TaskRunner/External_Access_Plan|External_Access_Plan.md]] already scoped as the actual build: direct Gmail API OAuth credentials in `.env`, refreshed the same stdlib-only way everything else here handles secrets — which needs a one-time interactive consent step only Felix can do (Google Cloud Console, OAuth client, first authorization). Not started; `format_email_section()` returns `None` and is the single place that changes once it exists — nothing else in the script needs to.
+
+The two scheduled agent mechanisms available in a Claude session (`scheduled-tasks`, tied to opening the desktop app on Felix's Windows machine; `CronCreate`, session-only and gone in 7 days) were both considered and rejected for this specifically because neither is the always-on Linux server — a systemd timer, matching every other piece of TaskRunner, was the only option that's actually unattended and actually reliable.
 
 ## Why backups/ excludes itself
 

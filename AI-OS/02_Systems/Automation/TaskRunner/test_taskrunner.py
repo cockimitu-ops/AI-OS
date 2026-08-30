@@ -23,6 +23,7 @@ import importlib.util
 import os
 import sys
 import tempfile
+import time
 import types
 import unittest
 
@@ -943,6 +944,52 @@ class TestHealthCheck(unittest.TestCase):
             {}, {"x": (True, "fine")}, now=200.0)
         self.assertEqual(messages, [])
         self.assertEqual(new_failing, {})
+
+
+class TestMorningBrief(unittest.TestCase):
+    """The daily digest (added 2026-08-30). format_status_section and
+    build_digest are pure - given a checks dict, no subprocess/systemctl -
+    so these test the actual composition logic, not whether the server is
+    healthy right now."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "morning_brief", os.path.join(HERE, "scripts", "morning_brief.py"))
+        cls.mb = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mb)
+
+    def test_status_section_reads_all_clear_when_nothing_is_failing(self):
+        checks = {"a": (True, "fine"), "b": (True, "also fine")}
+        text = self.mb.format_status_section(checks)
+        self.assertIn("everything's fine", text)
+
+    def test_status_section_lists_every_failing_check_with_its_detail(self):
+        checks = {"a": (True, "fine"), "b": (False, "broken somehow")}
+        text = self.mb.format_status_section(checks)
+        self.assertIn("1 thing(s)", text)
+        self.assertIn("b: broken somehow", text)
+        self.assertNotIn("a:", text)  # only failing checks are listed
+
+    def test_email_section_is_not_wired_up_yet(self):
+        """Documents the actual current limitation rather than assuming it:
+        the connected Gmail tools are action-only, so there is nothing to
+        read yet. This test should start failing - on purpose - the day
+        someone makes format_email_section return real content."""
+        self.assertIsNone(self.mb.format_email_section())
+
+    def test_digest_opens_with_a_dated_greeting(self):
+        now = time.struct_time((2026, 8, 30, 7, 0, 0, 6, 242, -1))  # a Sunday
+        digest = self.mb.build_digest({"a": (True, "fine")}, now=now)
+        self.assertTrue(digest.startswith("Good morning - Sunday, 30 August 2026"))
+
+    def test_digest_notes_email_is_still_pending_while_unwired(self):
+        digest = self.mb.build_digest({"a": (True, "fine")})
+        self.assertIn("still waiting on real Gmail read access", digest)
+
+    def test_digest_includes_the_status_line(self):
+        digest = self.mb.build_digest({"x": (False, "down")})
+        self.assertIn("x: down", digest)
 
 
 if __name__ == "__main__":
