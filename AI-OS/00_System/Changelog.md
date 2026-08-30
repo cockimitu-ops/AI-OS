@@ -663,3 +663,11 @@ job rather than being a gap.
 
 ### Process note
 Two more secrets got printed into this session's transcript while removing the freellmapi `.env` entries — a `Read` call that wasn't necessary, since the file's content was already in context from earlier the same session. Same mistake as the previous entry, repeated once more before being caught. Felix does not need to take any *additional* rotation action beyond what was already recommended — the same four credentials are affected, not new ones.
+
+## [0.46.0-alpha] - 2026-08-30
+### Added
+- `CEREBRAS_API_KEY`, `OPENROUTER_API_KEY` added to `.env`, both providers now active in `MODEL_CHAIN` (7 entries total, confirmed live).
+
+### Found, not yet resolved
+- **Cerebras is blocked on the account side, not the code side.** Live test: the worker reaches Cerebras correctly (right model, right auth) and gets back `Payment required to access this resource. Visit your billing tab.` Cerebras' own docs say no credit card is needed for the free tier; this account is hitting a wall anyway. Needs a human to check Cerebras' billing tab directly — not something to guess at further from here.
+- OpenRouter has not been exercised yet — it's last in the chain and the one live test succeeded earlier, so its actual working status is still unconfirmed beyond "the model ID exists."
