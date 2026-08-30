@@ -105,6 +105,8 @@ Separately: even once that's fixed, the *inbox-reading* half of this specific sc
 
 The two scheduled agent mechanisms available in a Claude session (`scheduled-tasks`, tied to opening the desktop app on Felix's Windows machine; `CronCreate`, session-only and gone in 7 days) were both considered and rejected for this specifically because neither is the always-on Linux server — a systemd timer, matching every other piece of TaskRunner, was the only option that's actually unattended and actually reliable.
 
+**Gmail read access — setup started 2026-08-30, not finished.** `scripts/gmail_oauth_setup.py` does the one-time OAuth device-flow authorization (`gmail.readonly` only) and writes `GMAIL_REFRESH_TOKEN` into `.env`. Deliberately run by Felix directly in his own terminal, never through Claude — `GMAIL_CLIENT_ID`/`GMAIL_CLIENT_SECRET` and the resulting token never pass through a chat transcript, which is exactly how two other credentials leaked into one earlier this project (a prior session's handoff notes, outside the vault). `mail_read.py` (the module `format_email_section()` will import) isn't built yet — waiting on the token existing so it can be tested against something real instead of guessed at.
+
 ## Why backups/ excludes itself
 
 `cloud_backup.py` tars the entire repo including this folder. Without an explicit exclude, every new archive would embed all previous archives inside itself, growing without bound. `EXCLUDE_RELATIVE_PATHS` in the script excludes its own `backups/` and `tasks/logs/` for exactly that reason — don't remove those excludes without addressing that.

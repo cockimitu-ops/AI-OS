@@ -992,5 +992,77 @@ class TestMorningBrief(unittest.TestCase):
         self.assertIn("x: down", digest)
 
 
+class TestGmailOAuthSetup(unittest.TestCase):
+    """gmail_oauth_setup.py (added 2026-08-30) edits .env directly - a real
+    secrets file, not a throwaway - so its read/write logic gets the same
+    scrutiny as anything else that touches it, even though the OAuth network
+    calls themselves aren't (matching how cloud_backup.py's own network calls
+    aren't unit tested either)."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "gmail_oauth_setup", os.path.join(HERE, "scripts", "gmail_oauth_setup.py"))
+        cls.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mod)
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmpdir = tmp.name
+        self.env_path = os.path.join(self.tmpdir, ".env")
+
+    def _write(self, content):
+        with open(self.env_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+    def _read(self):
+        with open(self.env_path, encoding="utf-8") as f:
+            return f.read()
+
+    def test_load_env_parses_key_value_pairs(self):
+        self._write("FOO=bar\nBAZ=qux\n")
+        env = self.mod.load_env(self.env_path)
+        self.assertEqual(env, {"FOO": "bar", "BAZ": "qux"})
+
+    def test_load_env_skips_comments_and_blank_lines(self):
+        self._write("# a comment\n\nFOO=bar\n")
+        env = self.mod.load_env(self.env_path)
+        self.assertEqual(env, {"FOO": "bar"})
+
+    def test_load_env_strips_surrounding_quotes(self):
+        self._write('FOO="bar"\n')
+        env = self.mod.load_env(self.env_path)
+        self.assertEqual(env["FOO"], "bar")
+
+    def test_load_env_missing_file_returns_empty_not_an_error(self):
+        env = self.mod.load_env(os.path.join(self.tmpdir, "nope.env"))
+        self.assertEqual(env, {})
+
+    def test_set_env_var_appends_a_new_key(self):
+        self._write("EXISTING=1\n")
+        self.mod.set_env_var("NEW_KEY", "newval", self.env_path)
+        content = self._read()
+        self.assertIn("EXISTING=1", content)
+        self.assertIn("NEW_KEY=newval", content)
+
+    def test_set_env_var_replaces_an_existing_key_in_place(self):
+        self._write("A=1\nGMAIL_REFRESH_TOKEN=old\nB=2\n")
+        self.mod.set_env_var("GMAIL_REFRESH_TOKEN", "new", self.env_path)
+        lines = self._read().splitlines()
+        self.assertEqual(lines, ["A=1", "GMAIL_REFRESH_TOKEN=new", "B=2"])
+
+    def test_set_env_var_on_a_missing_file_creates_it(self):
+        missing = os.path.join(self.tmpdir, "fresh.env")
+        self.mod.set_env_var("KEY", "val", missing)
+        with open(missing, encoding="utf-8") as f:
+            self.assertEqual(f.read(), "KEY=val\n")
+
+    def test_set_env_var_never_touches_other_lines(self):
+        self._write("A=1\nB=2\nC=3\n")
+        self.mod.set_env_var("B", "changed", self.env_path)
+        self.assertEqual(self._read().splitlines(), ["A=1", "B=changed", "C=3"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
