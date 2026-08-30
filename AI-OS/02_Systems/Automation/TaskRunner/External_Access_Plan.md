@@ -35,6 +35,8 @@ Recommendation: **stage by account, not just by capability.** Build and prove th
 ### Concrete build shape (later, not now)
 A new sibling to `vault_write.py` — `mail_read.py` / `mail_draft.py` — same discipline: an allowlist (which labels/senders it can act on), no destructive path, everything logged. OAuth token per account, stored in `.env` alongside the existing secrets, refreshed via the standard Google OAuth flow (a one-time interactive step, not something the worker does itself).
 
+**Correction, 2026-08-30 — this assumption was wrong for a personal single-account setup.** `mail_read.py` got built, but not on OAuth: registering a Google Cloud OAuth client requires a billing-enabled project, which is a real wall for exactly the low-stakes personal case this document was written for. It uses IMAP with a Gmail App Password instead (2-Step Verification + a password from `myaccount.google.com/apppasswords`, no Cloud project at all) — see [[02_Systems/Automation/TaskRunner/README|TaskRunner's README]] for what actually shipped. The risk analysis above (read vs. draft vs. send, the confirmation-gate requirement for anything past read-only) still holds regardless of which auth mechanism reaches the mailbox — only the "concrete build shape" paragraph was OAuth-specific enough to go stale.
+
 ---
 
 ## YouTube

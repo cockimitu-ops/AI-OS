@@ -30,29 +30,36 @@ def format_status_section(current_checks):
 
 
 def format_email_section():
-    """Not wired up yet. The Gmail tools connected to this session are
-    action-only (reply/forward/send/label) - there is no tool to list or
-    read messages, so there is nothing to summarize here. Needs real Gmail
-    read access sorted first - see External_Access_Plan.md."""
-    return None
+    """None (not an empty string) until GMAIL_ADDRESS/GMAIL_APP_PASSWORD
+    exist in .env - mail_read.fetch_unread_summaries() returns the same
+    signal, and build_digest() below treats it as "not configured yet"."""
+    import mail_read
+    emails = mail_read.fetch_unread_summaries()
+    if emails is None:
+        return None
+    if not emails:
+        return "Email: inbox zero - nothing unread."
+    lines = [f"Email: {len(emails)} unread:"]
+    for e in emails:
+        lines.append(f"  - {e['subject']} (from {e['from']})")
+    return "\n".join(lines)
 
 
-def build_digest(current_checks, now=None):
+def build_digest(current_checks, email_text=None, now=None):
     now = now or time.localtime()
     date_str = time.strftime("%A, %d %B %Y", now)
     status = format_status_section(current_checks)
-    email = format_email_section()
 
     parts = [f"Good morning - {date_str}", "", status]
-    if email:
-        parts += ["", email]
+    if email_text:
+        parts += ["", email_text]
     else:
-        parts += ["", "(Email isn't wired in yet - still waiting on real Gmail read access.)"]
+        parts += ["", "(Email isn't wired in yet - still waiting on a Gmail app password in .env.)"]
     return "\n".join(parts).strip()
 
 
 def main():
-    digest = build_digest(health_check.run_checks())
+    digest = build_digest(health_check.run_checks(), format_email_section())
     print(digest)
     result = subprocess.run([sys.executable, NOTIFIER, digest], timeout=30, check=False)
     sys.exit(result.returncode)

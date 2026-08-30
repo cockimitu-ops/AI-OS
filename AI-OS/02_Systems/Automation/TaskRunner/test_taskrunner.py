@@ -971,97 +971,100 @@ class TestMorningBrief(unittest.TestCase):
         self.assertIn("b: broken somehow", text)
         self.assertNotIn("a:", text)  # only failing checks are listed
 
-    def test_email_section_is_not_wired_up_yet(self):
-        """Documents the actual current limitation rather than assuming it:
-        the connected Gmail tools are action-only, so there is nothing to
-        read yet. This test should start failing - on purpose - the day
-        someone makes format_email_section return real content."""
-        self.assertIsNone(self.mb.format_email_section())
-
     def test_digest_opens_with_a_dated_greeting(self):
         now = time.struct_time((2026, 8, 30, 7, 0, 0, 6, 242, -1))  # a Sunday
         digest = self.mb.build_digest({"a": (True, "fine")}, now=now)
         self.assertTrue(digest.startswith("Good morning - Sunday, 30 August 2026"))
 
-    def test_digest_notes_email_is_still_pending_while_unwired(self):
+    def test_digest_notes_email_is_still_pending_when_no_email_text_given(self):
         digest = self.mb.build_digest({"a": (True, "fine")})
-        self.assertIn("still waiting on real Gmail read access", digest)
+        self.assertIn("still waiting on a Gmail app password", digest)
 
     def test_digest_includes_the_status_line(self):
         digest = self.mb.build_digest({"x": (False, "down")})
         self.assertIn("x: down", digest)
 
+    def test_digest_includes_email_text_when_provided(self):
+        digest = self.mb.build_digest({"a": (True, "fine")}, email_text="Email: 2 unread:\n  - Hi (from a@b.com)")
+        self.assertIn("2 unread", digest)
+        self.assertNotIn("still waiting", digest)
 
-class TestGmailOAuthSetup(unittest.TestCase):
-    """gmail_oauth_setup.py (added 2026-08-30) edits .env directly - a real
-    secrets file, not a throwaway - so its read/write logic gets the same
-    scrutiny as anything else that touches it, even though the OAuth network
-    calls themselves aren't (matching how cloud_backup.py's own network calls
-    aren't unit tested either)."""
+
+class TestMailRead(unittest.TestCase):
+    """mail_read.py (added 2026-08-30, replacing an OAuth approach that hit
+    a real wall - Google Cloud required a billing-enabled project just to
+    register the API). Only the pure header-decoding and the "not configured"
+    short-circuit are tested here - the IMAP connection itself isn't mocked,
+    matching how cloud_backup.py's own network calls aren't unit tested."""
 
     @classmethod
     def setUpClass(cls):
         spec = importlib.util.spec_from_file_location(
-            "gmail_oauth_setup", os.path.join(HERE, "scripts", "gmail_oauth_setup.py"))
+            "mail_read", os.path.join(HERE, "scripts", "mail_read.py"))
+        cls.mr = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mr)
+
+    def test_returns_none_when_address_is_missing(self):
+        result = self.mr.fetch_unread_summaries(env={"GMAIL_APP_PASSWORD": "x"})
+        self.assertIsNone(result)
+
+    def test_returns_none_when_app_password_is_missing(self):
+        result = self.mr.fetch_unread_summaries(env={"GMAIL_ADDRESS": "a@b.com"})
+        self.assertIsNone(result)
+
+    def test_returns_none_when_neither_is_configured(self):
+        self.assertIsNone(self.mr.fetch_unread_summaries(env={}))
+
+    def test_decode_header_value_passes_plain_ascii_through(self):
+        self.assertEqual(self.mr.decode_header_value("Hello there"), "Hello there")
+
+    def test_decode_header_value_decodes_mime_encoded_words(self):
+        # "Café" encoded as UTF-8 base64 - the form Gmail actually sends for
+        # non-ASCII subjects/senders.
+        encoded = "=?UTF-8?B?Q2Fmw6k=?="
+        self.assertEqual(self.mr.decode_header_value(encoded), "Café")
+
+    def test_decode_header_value_handles_empty_input(self):
+        self.assertEqual(self.mr.decode_header_value(""), "")
+        self.assertEqual(self.mr.decode_header_value(None), "")
+
+
+class TestEnvFileHelpers(unittest.TestCase):
+    """load_env() is duplicated (deliberately - see send_telegram_notification.py's
+    own note on staying dependency-free) across several scripts. Exercised
+    here via mail_read.py's copy; the parsing rules are identical everywhere
+    it appears."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "mail_read_env", os.path.join(HERE, "scripts", "mail_read.py"))
         cls.mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.mod)
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.tmpdir = tmp.name
-        self.env_path = os.path.join(self.tmpdir, ".env")
+        self.env_path = os.path.join(tmp.name, ".env")
 
     def _write(self, content):
         with open(self.env_path, "w", encoding="utf-8") as f:
             f.write(content)
 
-    def _read(self):
-        with open(self.env_path, encoding="utf-8") as f:
-            return f.read()
-
-    def test_load_env_parses_key_value_pairs(self):
+    def test_parses_key_value_pairs(self):
         self._write("FOO=bar\nBAZ=qux\n")
-        env = self.mod.load_env(self.env_path)
-        self.assertEqual(env, {"FOO": "bar", "BAZ": "qux"})
+        self.assertEqual(self.mod.load_env(self.env_path), {"FOO": "bar", "BAZ": "qux"})
 
-    def test_load_env_skips_comments_and_blank_lines(self):
+    def test_skips_comments_and_blank_lines(self):
         self._write("# a comment\n\nFOO=bar\n")
-        env = self.mod.load_env(self.env_path)
-        self.assertEqual(env, {"FOO": "bar"})
+        self.assertEqual(self.mod.load_env(self.env_path), {"FOO": "bar"})
 
-    def test_load_env_strips_surrounding_quotes(self):
+    def test_strips_surrounding_quotes(self):
         self._write('FOO="bar"\n')
-        env = self.mod.load_env(self.env_path)
-        self.assertEqual(env["FOO"], "bar")
+        self.assertEqual(self.mod.load_env(self.env_path)["FOO"], "bar")
 
-    def test_load_env_missing_file_returns_empty_not_an_error(self):
-        env = self.mod.load_env(os.path.join(self.tmpdir, "nope.env"))
-        self.assertEqual(env, {})
-
-    def test_set_env_var_appends_a_new_key(self):
-        self._write("EXISTING=1\n")
-        self.mod.set_env_var("NEW_KEY", "newval", self.env_path)
-        content = self._read()
-        self.assertIn("EXISTING=1", content)
-        self.assertIn("NEW_KEY=newval", content)
-
-    def test_set_env_var_replaces_an_existing_key_in_place(self):
-        self._write("A=1\nGMAIL_REFRESH_TOKEN=old\nB=2\n")
-        self.mod.set_env_var("GMAIL_REFRESH_TOKEN", "new", self.env_path)
-        lines = self._read().splitlines()
-        self.assertEqual(lines, ["A=1", "GMAIL_REFRESH_TOKEN=new", "B=2"])
-
-    def test_set_env_var_on_a_missing_file_creates_it(self):
-        missing = os.path.join(self.tmpdir, "fresh.env")
-        self.mod.set_env_var("KEY", "val", missing)
-        with open(missing, encoding="utf-8") as f:
-            self.assertEqual(f.read(), "KEY=val\n")
-
-    def test_set_env_var_never_touches_other_lines(self):
-        self._write("A=1\nB=2\nC=3\n")
-        self.mod.set_env_var("B", "changed", self.env_path)
-        self.assertEqual(self._read().splitlines(), ["A=1", "B=changed", "C=3"])
+    def test_missing_file_returns_empty_not_an_error(self):
+        self.assertEqual(self.mod.load_env(os.path.join(os.path.dirname(self.env_path), "nope.env")), {})
 
 
 if __name__ == "__main__":
