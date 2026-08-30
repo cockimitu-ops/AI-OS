@@ -25,3 +25,4 @@ AI-OS/02_Systems/Automation/TaskRunner/tasks/threads/*
 !AI-OS/02_Systems/Automation/TaskRunner/tasks/**/.gitkeep
 AI-OS/02_Systems/Automation/TaskRunner/backups/*.tar.gz
 AI-OS/02_Systems/Automation/TaskRunner/health/state.json
+AI-OS/02_Systems/Automation/TaskRunner/schedules/state.json

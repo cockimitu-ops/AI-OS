@@ -1,6 +1,7 @@
 import os
 import contextlib
 import glob
+import re
 import signal
 import subprocess
 import threading
@@ -357,6 +358,38 @@ def _attempt_claude(instruction):
         raise RuntimeError("claude -p produced no output")
     return output
 
+# A task carrying this directive gets its result pushed to Telegram when it
+# finishes. Interactive tasks don't need it - dispatch_task.py and
+# telegram_bridge.py both poll for the log and show it themselves. A
+# scheduled task has nobody waiting on it, so without this its answer would
+# land in tasks/logs/ and be read by no one, which is not automation so much
+# as a very slow way of writing files.
+NOTIFY_RE = re.compile(r"^\s*<!--\s*notify\s*-->\s*\n?", re.I)
+NOTIFIER = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "scripts",
+    "send_telegram_notification.py")
+
+
+def _parse_notify(raw):
+    """-> (should_notify, remaining_text)."""
+    m = NOTIFY_RE.match(raw or "")
+    if not m:
+        return False, raw or ""
+    return True, raw[m.end():]
+
+
+def _push_to_telegram(text):
+    """Best-effort. A failed notification must never fail the task - the work
+    is already done and logged by the time this runs. Uses /usr/bin/python3
+    rather than sys.executable: the notifier is deliberately stdlib-only and
+    the venv is not needed to run it."""
+    try:
+        subprocess.run(["/usr/bin/python3", NOTIFIER, text],
+                       timeout=30, check=False)
+    except Exception as e:
+        print(f"[!] Could not push result to Telegram: {e}")
+
+
 def _write_log(filename, output):
     """Write the result log atomically. dispatch_task.py and telegram_bridge.py
     poll for this file's *existence*, so a plain open("w") would let them read a
@@ -397,7 +430,8 @@ def _run_task(task_path, filename):
 
     thread_id, raw = memory.parse_directive(raw)
     agent_name, raw = agents.parse_directive(raw)
-    handoff_depth, instruction = agents.parse_handoff_depth(raw)
+    handoff_depth, raw = agents.parse_handoff_depth(raw)
+    notify, instruction = _parse_notify(raw)
 
     # A bare follow-up stays in whatever role the conversation was already in.
     if not agent_name and thread_id:
@@ -480,6 +514,9 @@ def _run_task(task_path, filename):
 
     _write_log(filename, output)
     os.rename(task_path, os.path.join(COMPLETED, filename))
+    if notify:
+        label = f" [{agent_name.replace('_', ' ')}]" if agent_name else ""
+        _push_to_telegram(f"Scheduled task{label}:\n\n{output}")
     print(f"[✓] Done: {filename}")
 
 

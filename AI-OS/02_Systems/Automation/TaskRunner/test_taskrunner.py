@@ -618,6 +618,76 @@ class TestAttemptTimeout(TaskRunnerTestCase):
         self.assert_quarantined("t.md")
 
 
+class TestNotifyDirective(TaskRunnerTestCase):
+    """A scheduled task has nobody polling for its log the way an
+    interactive one does, so `<!-- notify -->` pushes the result to Telegram.
+    Without it a 24/7 agent writes answers nobody ever reads."""
+
+    def setUp(self):
+        super().setUp()
+        self.pushed = []
+        self.runner._push_to_telegram = self.pushed.append
+
+    def test_notify_directive_pushes_the_result(self):
+        self.runner._attempt = lambda m, i, sp=None, history=None, **kw: "the answer"
+        self.queue("t.md", "<!-- notify -->\ndo a thing")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        self.assertEqual(len(self.pushed), 1)
+        self.assertIn("the answer", self.pushed[0])
+
+    def test_no_directive_means_no_push(self):
+        """Interactive tasks must stay silent here - dispatch_task.py and
+        telegram_bridge.py already show the user their own result, and a
+        second copy arriving as a notification would be noise."""
+        self.runner._attempt = lambda m, i, sp=None, history=None, **kw: "the answer"
+        self.queue("t.md", "do a thing")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        self.assertEqual(self.pushed, [])
+
+    def test_directive_is_stripped_from_the_instruction(self):
+        seen = {}
+
+        def spy(model, instruction, system_prompt=None, history=None, **kw):
+            seen["instruction"] = instruction
+            return "ok"
+
+        self.runner._attempt = spy
+        self.queue("t.md", "<!-- notify -->\nreal instruction")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        self.assertEqual(seen["instruction"], "real instruction")
+
+    def test_notify_composes_with_the_agent_directive(self):
+        """The scheduler emits both, in that order - if parsing them together
+        broke, every scheduled agent task would run on the base prompt."""
+        seen = {}
+
+        def spy(model, instruction, system_prompt=None, history=None, **kw):
+            seen["prompt"] = system_prompt
+            seen["instruction"] = instruction
+            return "ok"
+
+        self.runner._attempt = spy
+        self.queue("t.md", "<!-- agent: Vault_Architect -->\n<!-- notify -->\ncheck drift")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        self.assertEqual(seen["instruction"], "check drift")
+        self.assertIn("Vault Architect", seen["prompt"])
+        self.assertIn("Vault Architect", self.pushed[0])
+
+    def test_an_unreachable_telegram_never_raises_out_of_the_push(self):
+        """The task's work is already done and logged by the time this runs,
+        so a dead notifier must degrade to a printed warning. Exercises the
+        real _push_to_telegram rather than a stand-in, since the swallowing
+        is the whole behaviour under test."""
+        original = self.runner.subprocess.run
+        self.addCleanup(lambda: setattr(self.runner.subprocess, "run", original))
+
+        def boom(*a, **k):
+            raise OSError("telegram unreachable")
+
+        self.runner.subprocess.run = boom
+        self.runner._push_to_telegram("anything")  # must not raise
+
+
 class TestAgentHandoff(TaskRunnerTestCase):
     """The handoff convention (added 2026-08-30): an agent ends its output
     with `<!-- handoff: Agent: reason -->` to hand its result to another
@@ -1180,6 +1250,92 @@ class TestHealthCheck(unittest.TestCase):
             {}, {"x": (True, "fine")}, now=200.0)
         self.assertEqual(messages, [])
         self.assertEqual(new_failing, {})
+
+
+class TestSchedules(unittest.TestCase):
+    """Recurring agent tasks (added 2026-08-30). Cadence parsing and the
+    due/not-due decision are pure functions over an injected `now`, so these
+    test the actual scheduling logic rather than waiting for wall-clock time
+    to pass. 2026-08-30 is a Sunday; several cases below depend on that."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "run_schedules", os.path.join(HERE, "scripts", "run_schedules.py"))
+        cls.rs = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.rs)
+        cls.TZ = cls.rs.TZ
+
+    def _at(self, year, month, day, hour, minute=0):
+        from datetime import datetime
+        return datetime(year, month, day, hour, minute, tzinfo=self.TZ)
+
+    def test_parses_a_schedule_file_into_its_three_parts(self):
+        text = ("<!-- agent: Business_Development -->\n"
+                "<!-- schedule: daily 07:30 -->\n"
+                "Check what is still unpublished.")
+        cadence, agent, instruction = self.rs.parse_schedule_file(text)
+        self.assertEqual(cadence, "daily 07:30")
+        self.assertEqual(agent, "Business_Development")
+        self.assertEqual(instruction, "Check what is still unpublished.")
+
+    def test_directives_never_leak_into_the_instruction(self):
+        """The enqueue step re-emits the agent directive itself; a copy left
+        in the body would reach the worker as task text."""
+        text = ("<!-- agent: Research_Analyst -->\n"
+                "<!-- schedule: hourly -->\n"
+                "Do the thing.")
+        _, _, instruction = self.rs.parse_schedule_file(text)
+        self.assertNotIn("<!--", instruction)
+
+    def test_daily_resolves_to_todays_occurrence_once_it_has_passed(self):
+        self.assertEqual(
+            self.rs.next_due_after("daily 07:30", self._at(2026, 8, 30, 9)),
+            self._at(2026, 8, 30, 7, 30))
+
+    def test_daily_before_its_time_resolves_to_yesterdays_occurrence(self):
+        """Otherwise a 07:30 schedule checked at 06:00 would look due and
+        fire a second time on the same day."""
+        self.assertEqual(
+            self.rs.next_due_after("daily 07:30", self._at(2026, 8, 30, 6)),
+            self._at(2026, 8, 29, 7, 30))
+
+    def test_weekly_resolves_to_this_week_on_the_matching_day(self):
+        self.assertEqual(
+            self.rs.next_due_after("weekly sun 08:00", self._at(2026, 8, 30, 9)),
+            self._at(2026, 8, 30, 8))
+
+    def test_weekly_on_another_day_walks_back_to_that_day(self):
+        self.assertEqual(
+            self.rs.next_due_after("weekly mon 08:00", self._at(2026, 8, 30, 9)),
+            self._at(2026, 8, 24, 8))
+
+    def test_unparseable_cadences_are_rejected_rather_than_guessed(self):
+        for bad in ("nonsense", "daily 25:00", "daily", "weekly xyz 08:00", "", None):
+            self.assertIsNone(
+                self.rs.next_due_after(bad, self._at(2026, 8, 30, 9)), repr(bad))
+
+    def test_never_run_before_is_due(self):
+        self.assertTrue(self.rs.is_due("daily 07:30", None, self._at(2026, 8, 30, 9)))
+
+    def test_already_run_this_occurrence_is_not_due_again(self):
+        last = self._at(2026, 8, 30, 7, 35).isoformat()
+        self.assertFalse(self.rs.is_due("daily 07:30", last, self._at(2026, 8, 30, 9)))
+
+    def test_yesterdays_run_is_due_again_today(self):
+        last = self._at(2026, 8, 29, 7, 35).isoformat()
+        self.assertTrue(self.rs.is_due("daily 07:30", last, self._at(2026, 8, 30, 9)))
+
+    def test_a_run_missed_while_the_server_was_off_fires_once_on_the_next_tick(self):
+        """Catch-up, not silent skip and not a burst of backfill: the server
+        being off overnight should produce exactly one run, not none and not
+        one per missed occurrence."""
+        last = self._at(2026, 8, 27, 7, 35).isoformat()
+        self.assertTrue(self.rs.is_due("daily 07:30", last, self._at(2026, 8, 30, 9)))
+
+    def test_corrupt_state_re_runs_rather_than_never_running_again(self):
+        self.assertTrue(self.rs.is_due("daily 07:30", "not-a-timestamp",
+                                       self._at(2026, 8, 30, 9)))
 
 
 class TestMorningBrief(unittest.TestCase):

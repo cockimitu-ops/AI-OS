@@ -1,8 +1,8 @@
 # Task Runner
 
 Purpose: The live automation loop that lets Felix hand AI-OS a task from anywhere (shell or Telegram) and get it executed headlessly on the server. Moved here from the repo root on 2026-08-26 so the vault's own README reflects what's actually running, instead of the automation living as loose scripts beside it.
-Last Updated: 2026-08-26
-Status: Active — three systemd services running continuously on the server; hardened and re-verified 2026-08-26
+Last Updated: 2026-08-30
+Status: Active — two continuous services plus four timers on the server; agents run on schedule and can hand off to each other as of 2026-08-30
 Related Documents: [[02_Systems/Automation/README|Automation]], [[Future_Integration]]
 
 ---
@@ -17,6 +17,7 @@ Related Documents: [[02_Systems/Automation/README|Automation]], [[Future_Integra
 | `telegram_bridge.py` | Same idea, over Telegram — only replies to the one allowed user ID, edits its own status message once the worker's log appears. |
 | `scripts/cloud_backup.py` | Tars the whole repo (`/home/nost/AI-OS`), uploads to Google Drive via `rclone`, prunes local archives older than 7 days. |
 | `scripts/health_check.py` | The supervision layer (added 2026-08-30) — see below. |
+| `scripts/run_schedules.py` | Enqueues due recurring agent tasks from `schedules/` (added 2026-08-30) — see below. |
 | `scripts/morning_brief.py` | Daily good-morning digest over Telegram (added 2026-08-30) — see below. |
 | `scripts/send_telegram_notification.py` | One-off outbound Telegram message, reusing the same bot token — for things other than task results. Wired into `cloud_backup.py`'s failure path and `health_check.py`'s alerts. Stdlib-only on purpose: systemd runs both under `/usr/bin/python3`, which has no `python-dotenv`, so a notifier importing it would have failed exactly when it was needed. |
 | `agents.py` | Agent selection. Resolves aliases (`@research` → `Research_Analyst`), loads each agent's Executable Prompt block from [[04_Agents/README|04_Agents]]. Shared by all three entry points so they can't disagree about what an alias means. |
@@ -30,15 +31,16 @@ Related Documents: [[02_Systems/Automation/README|Automation]], [[Future_Integra
 
 ## How it's wired to the server
 
-Three systemd services, all under `/etc/systemd/system/`, `WorkingDirectory` and `ExecStart` pointing into this folder:
+Six systemd units, all under `/etc/systemd/system/`, `WorkingDirectory` and `ExecStart` pointing into this folder — two continuous services and four timers:
 
 - `aios-worker.service` — runs `aios_runner.py`, `Restart=always`
 - `aios-telegram.service` — runs `telegram_bridge.py`, `Restart=always`, starts `After=aios-worker.service`
 - `aios-backup.service` (`Type=oneshot`) + `aios-backup.timer` — runs `scripts/cloud_backup.py` daily at 03:00
 - `aios-healthcheck.service` (`Type=oneshot`) + `aios-healthcheck.timer` — runs `scripts/health_check.py` every 15 minutes
+- `aios-scheduler.service` (`Type=oneshot`) + `aios-scheduler.timer` — runs `scripts/run_schedules.py` every 10 minutes
 - `aios-morning.service` (`Type=oneshot`) + `aios-morning.timer` — runs `scripts/morning_brief.py` daily at 07:00 Europe/Berlin (the timer unit's `OnCalendar` carries the timezone directly, so it tracks DST — the server itself stays on UTC)
 
-All three load secrets via `EnvironmentFile=/home/nost/AI-OS/.env` — the `.env` file itself stays at the repo root (gitignored), not inside the vault, since it's a secret rather than vault content.
+All of them load secrets via `EnvironmentFile=/home/nost/AI-OS/.env` — the `.env` file itself stays at the repo root (gitignored), not inside the vault, since it's a secret rather than vault content.
 
 `AIOS_WORKSPACE` in `.env` points at this folder (`/home/nost/AI-OS/AI-OS/02_Systems/Automation/TaskRunner`) — that's what `aios_runner.py`, `dispatch_task.py`, and `telegram_bridge.py` resolve `tasks/inbox|completed|logs` against. `cloud_backup.py` doesn't use that variable — it hardcodes the repo root as its backup source independently, since it needs to tar the whole tree, not just this folder.
 
@@ -139,6 +141,28 @@ Agents could be selected but never talked to each other — every task ran in is
 The directive line itself is stripped from what actually reaches the log/Telegram/memory — Felix sees a plain "(Handed off to Business Development: reason)" footer instead of raw HTML-comment syntax. A self-handoff (an agent naming itself) is a silent no-op rather than a queued task, and every handoff-created file carries `<!-- handoff_depth: N -->`; past `agents.MAX_HANDOFF_DEPTH` (3), a handoff is suppressed and says so in the output rather than chaining further. That cap is structural, not a prompt instruction telling agents to stop — free models under load already don't reliably follow the ones they have (see `System_Prompt.md`'s guardrail section), so a two-agent ping-pong needs a real ceiling, not a polite request.
 
 Only wired into the two flows that are real today — Research_Analyst → Business_Development and Content_Producer → Business_Development, both now spelled out in the relevant agent's Executable Prompt block, not just the human-facing prose above it (Content_Producer's "hand to Business_Development" line existed since Sprint 024ish and had never once done anything). See [[04_Agents/README|04_Agents]] for the framing; this section is the implementation.
+
+## Scheduled agents (added 2026-08-30)
+
+Agents ran only when Felix asked. They now also run on their own schedule: drop a Markdown file in `schedules/`, and `scripts/run_schedules.py` (systemd timer, every 10 min) enqueues it whenever it's due.
+
+```markdown
+<!-- agent: Business_Development -->
+<!-- schedule: weekly mon 08:00 -->
+Report which TemplateSales products are still unpublished and the next action.
+```
+
+**A file, not a systemd unit per schedule** — deliberately. One unit per recurring task would put every new schedule behind `sudo`, and adding one should cost exactly what adding any other vault content costs: writing a Markdown file.
+
+Cadence grammar is intentionally tiny — `daily HH:MM`, `weekly <day> HH:MM`, `hourly`. A real cron parser is more expressive and offers more ways to be subtly wrong about what runs unattended at 3am. Times are **Europe/Berlin**, not the server's UTC, so `07:30` means 07:30 where Felix is and keeps meaning it across DST.
+
+Two behaviours worth knowing:
+- **A missed run fires once, not never and not N times.** `next_due_after()` returns the most recent *scheduled* moment and compares it against the last run, so the server being off overnight produces exactly one catch-up run rather than a backfill burst.
+- **A bad schedule file never blocks the others.** An unparseable cadence, a missing instruction or an unreadable file is reported and skipped; every other schedule still fires.
+
+**`<!-- notify -->` is what makes any of this useful.** Interactive tasks are shown to whoever is waiting — `dispatch_task.py` and `telegram_bridge.py` both poll for the log themselves. A scheduled task has nobody waiting, so without this directive its answer would land in `tasks/logs/` and be read by no one. The scheduler adds it to everything it queues, and the worker pushes the result through the same `send_telegram_notification.py` the backup and health-check paths use. A failed push is a printed warning, never a failed task — the work is already done and logged by then.
+
+**`PYTHONUNBUFFERED=1` is set on `aios-worker.service`/`aios-telegram.service`** and matters more than it looks: Python block-buffers stdout when it's a pipe, so `[✓] Done` lines sat in the buffer and never reached journald. Verified live 2026-08-30 — a task's log file was written at 16:25 while the journal's last line was 16:23:52. For a system meant to run unattended, "did that task ever finish?" has to be answerable from the journal.
 
 ## Write-back (2026-08-27)
 `09_Analytics` held four databases with zero rows since Sprint 012 and `Promotion_Candidates` was empty just as long — the Learning Loop in `02_Systems/Analytics/` was fully specified and never executed, because the worker could only read the vault.
