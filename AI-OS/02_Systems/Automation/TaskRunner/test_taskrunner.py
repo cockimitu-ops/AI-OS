@@ -161,6 +161,45 @@ class TestEmptyTask(TaskRunnerTestCase):
         self.assert_quarantined("empty.md")
 
 
+class TestAttemptAppliesItsFieldsToTheRealLlmObject(TaskRunnerTestCase):
+    """_attempt() is what actually sets interpreter.llm.* before calling
+    .chat() - MODEL_CHAIN having the right data means nothing if this function
+    doesn't apply it. Direct test of _attempt() itself, not the chain around
+    it, closing a gap left when the FreeLLMAPI-era end-to-end test was deleted
+    along with the feature it was testing."""
+
+    def setUp(self):
+        super().setUp()
+        # Base stub's chat() returns [] (used elsewhere to simulate a
+        # rate-limited/empty response); these tests care about field
+        # application, not that specific failure path, so give it a real
+        # answer to return.
+        self.fake.chat = lambda *a, **k: [
+            {"role": "assistant", "type": "message", "content": "ok"}]
+
+    def test_sets_every_field_including_none_ones(self):
+        self.runner._attempt("some/model", "do a thing",
+                             api_base="http://x", api_key="key123",
+                             context_window=1_000_000, max_tokens=16_384)
+        self.assertEqual(self.fake.llm.model, "some/model")
+        self.assertEqual(self.fake.llm.api_base, "http://x")
+        self.assertEqual(self.fake.llm.api_key, "key123")
+        self.assertEqual(self.fake.llm.context_window, 1_000_000)
+        self.assertEqual(self.fake.llm.max_tokens, 16_384)
+
+    def test_omitted_fields_reset_to_none_not_left_stale(self):
+        """The actual property being guarded: a previous attempt's custom
+        endpoint/context-window must not survive into one that didn't ask
+        for it."""
+        self.runner._attempt("model-a", "x", api_base="http://stale",
+                             context_window=999)
+        self.runner._attempt("model-b", "x")  # no overrides this time
+        self.assertIsNone(self.fake.llm.api_base)
+        self.assertIsNone(self.fake.llm.api_key)
+        self.assertIsNone(self.fake.llm.context_window)
+        self.assertIsNone(self.fake.llm.max_tokens)
+
+
 class TestModelChain(TaskRunnerTestCase):
     def test_first_working_model_wins_and_is_logged(self):
         self.runner._attempt = lambda model, instr, sp=None, history=None, **kwargs: f"done by {model}"
@@ -285,6 +324,29 @@ class TestBackupProviders(TaskRunnerTestCase):
         for entry in self.runner.MODEL_CHAIN:
             self.assertIsNone(entry["api_base"], entry["model"])
             self.assertIsNone(entry["api_key"], entry["model"])
+
+    def test_openrouter_carries_its_verified_context_window(self):
+        """Found live 2026-08-30: without this, Open Interpreter can't
+        auto-detect the model's window and silently caps it at 8000 against
+        an actual 1M (OpenRouter's own model page) - a real capability loss,
+        not just a cosmetic warning."""
+        self._import_with(None, "or-test")
+        entry = self.runner.MODEL_CHAIN[-1]
+        self.assertEqual(entry["model"],
+                         "openrouter/nvidia/nemotron-3-super-120b-a12b:free")
+        self.assertEqual(entry["context_window"], 1_000_000)
+        self.assertEqual(entry["max_tokens"], 16_384)
+
+    def test_entries_without_a_verified_window_leave_it_to_auto_detection(self):
+        """Groq/Gemini/Cerebras all auto-detect correctly without this - only
+        assert None here, not a guessed number, to avoid hard-coding a figure
+        nobody has actually checked."""
+        self._import_with("ck-test", None)
+        for entry in self.runner.MODEL_CHAIN:
+            if entry["model"] == "openrouter/nvidia/nemotron-3-super-120b-a12b:free":
+                continue
+            self.assertIsNone(entry["context_window"], entry["model"])
+            self.assertIsNone(entry["max_tokens"], entry["model"])
 
 
 class TestCrashGuard(TaskRunnerTestCase):

@@ -50,13 +50,23 @@ for folder in [INBOX, COMPLETED, LOGS]:
 PRIMARY_MODEL = "groq/openai/gpt-oss-120b"
 FALLBACK_MODEL = "gemini/gemini-3.6-flash"
 
-# Ordered chain of free models to try per task. Each entry is a dict rather
-# than a tuple - api_base/api_key exist alongside model/delay so a future
-# provider needing a custom endpoint (a self-hosted gateway, an OpenAI-
-# compatible third party) can be added as data, not a code change. None means
-# "use litellm's own native routing for this model," a real, intentional
-# value here, not an unset one - a provider that DOES need a custom endpoint
-# must not inherit None left behind by the entry before it, or vice versa.
+def _chain_entry(model, delay=0, api_base=None, api_key=None,
+                  context_window=None, max_tokens=None):
+    """One MODEL_CHAIN entry. A factory instead of 7+ hand-written dict
+    literals - context_window/max_tokens were added after api_base/api_key
+    without touching every existing entry, which is the point of building
+    entries this way rather than inline. None on any field means "let litellm/
+    Open Interpreter use its own default or auto-detection for this model,"
+    a real intentional value, not an unset one - it must be explicitly
+    re-asserted on every entry so nothing leaks from the attempt before it."""
+    return {
+        "model": model, "delay": delay,
+        "api_base": api_base, "api_key": api_key,
+        "context_window": context_window, "max_tokens": max_tokens,
+    }
+
+
+# Ordered chain of free models to try per task.
 #
 # FreeLLMAPI (a self-hosted router in front of many free providers) sat as the
 # primary tier here 2026-08-30, briefly. Removed the same day - reverted to
@@ -67,13 +77,13 @@ FALLBACK_MODEL = "gemini/gemini-3.6-flash"
 # PRIMARY_MODEL and FALLBACK_MODEL failed live in the same test run - Felix has
 # no budget for a paid API, so more free tiers beat a paid one.
 MODEL_CHAIN = [
-    {"model": PRIMARY_MODEL, "delay": 0, "api_base": None, "api_key": None},
+    _chain_entry(PRIMARY_MODEL),
     # Groq's per-minute token bucket is small enough that open-interpreter's
     # system prompt alone can trip it; that clears in well under a minute.
-    {"model": PRIMARY_MODEL, "delay": 20, "api_base": None, "api_key": None},
+    _chain_entry(PRIMARY_MODEL, delay=20),
     # Smaller sibling of PRIMARY_MODEL on the same Groq key - separate quota.
-    {"model": "groq/openai/gpt-oss-20b", "delay": 0, "api_base": None, "api_key": None},
-    {"model": FALLBACK_MODEL, "delay": 0, "api_base": None, "api_key": None},
+    _chain_entry("groq/openai/gpt-oss-20b"),
+    _chain_entry(FALLBACK_MODEL),
     # Lite sibling of FALLBACK_MODEL on the same Gemini key - separate quota.
     # NOT "gemini-flash-lite-latest": that alias currently resolves to a newer
     # model that 400s inside Open Interpreter's tool-calling flow (missing
@@ -81,7 +91,7 @@ MODEL_CHAIN = [
     # newer "thinking" Gemini models, not a config mistake). Verified
     # 2026-08-26 that gemini-3.5-flash-lite works cleanly through the same
     # tool-calling path the worker actually uses.
-    {"model": "gemini/gemini-3.5-flash-lite", "delay": 0, "api_base": None, "api_key": None},
+    _chain_entry("gemini/gemini-3.5-flash-lite"),
 ]
 
 # Two more free providers, added 2026-08-30 as backup tiers - direct API
@@ -92,15 +102,13 @@ MODEL_CHAIN = [
 # since both are litellm-native providers, same as Groq and Gemini above.
 if os.environ.get("CEREBRAS_API_KEY"):
     # gpt-oss-120b - same model family already used via Groq (PRIMARY_MODEL),
-    # just a separate vendor's quota. Genuinely generous free tier as of
-    # 2026-08-30 (verified against Cerebras' own docs, not an aggregator site:
-    # 1M tokens/day, 14,400 requests/day per model, no expiration, 65k context
-    # on the free tier specifically - not the smaller cap some third-party
-    # summaries claimed). Placed early in the chain to match that headroom.
-    MODEL_CHAIN.insert(2, {
-        "model": "cerebras/gpt-oss-120b", "delay": 0,
-        "api_base": None, "api_key": None,
-    })
+    # just a separate vendor's quota. Genuinely generous free tier per
+    # Cerebras' own docs (1M tokens/day, 14,400 requests/day per model, no
+    # expiration, 65k context on the free tier) - blocked live as of
+    # 2026-08-30 by a "Payment required" error on Felix's specific account,
+    # unresolved, see README. Placed early in the chain to match the
+    # documented headroom once that's sorted out.
+    MODEL_CHAIN.insert(2, _chain_entry("cerebras/gpt-oss-120b"))
 
 if os.environ.get("OPENROUTER_API_KEY"):
     # OpenRouter's free (":free" suffix) models are known to rotate without
@@ -110,13 +118,20 @@ if os.environ.get("OPENROUTER_API_KEY"):
     # by the time this was checked - exactly the failure mode being guarded
     # against). If this model 404s later, re-check that endpoint for a
     # current replacement rather than guessing a new name.
+    #
+    # context_window/max_tokens set explicitly: verified live 2026-08-30 that
+    # without them, Open Interpreter can't auto-detect this model's window and
+    # silently defaults to 8000 - a real cap against the model's actual 1M
+    # (OpenRouter's own model page), not just a cosmetic warning. Numbers
+    # taken from that page, not guessed.
+    #
     # Last in the chain deliberately: the free tier caps at 50 requests/day
     # on an unfunded account, the tightest quota of anything here - genuinely
     # last-resort, not a peer to Groq/Gemini/Cerebras.
-    MODEL_CHAIN.append({
-        "model": "openrouter/nvidia/nemotron-3-super-120b-a12b:free", "delay": 0,
-        "api_base": None, "api_key": None,
-    })
+    MODEL_CHAIN.append(_chain_entry(
+        "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+        context_window=1_000_000, max_tokens=16_384,
+    ))
 
 # Last-resort escalation via Claude Code headless (`claude -p`), billed against
 # Felix's Pro subscription's 5h/weekly quota rather than a metered API. DISABLED
@@ -230,17 +245,17 @@ def format_interpreter_output(messages):
     return "Task completed."
 
 def _attempt(model, instruction, system_prompt=None, history=None,
-             api_base=None, api_key=None):
+             api_base=None, api_key=None, context_window=None, max_tokens=None):
     """Run one chat turn on `model`. Raises on failure (including the
     swallowed-RateLimitError case where open-interpreter returns an empty
     message list instead of raising - see respond.py's display_markdown_message
     branch).
 
-    api_base/api_key are always set explicitly, never left as "whatever the
-    previous attempt left behind" - a freellmapi entry's custom endpoint must
-    not leak into the next entry's direct-provider call, and a direct-provider
-    entry must not inherit a stale endpoint from a prior freellmapi attempt
-    either. None means "use litellm's native routing for this model," which is
+    Every one of api_base/api_key/context_window/max_tokens is always set
+    explicitly, never left as "whatever the previous attempt left behind" - a
+    custom endpoint or a context-window override from one entry must not leak
+    into the next entry's attempt in either direction. None means "use
+    litellm/Open Interpreter's own default or auto-detection for this field,"
     a real, intentional value here, not an unset one."""
     # Seed with prior conversation turns, or [] for a cold task. Assigning a
     # fresh list every attempt matters: a failed model leaves its partial
@@ -249,6 +264,8 @@ def _attempt(model, instruction, system_prompt=None, history=None,
     interpreter.llm.model = model
     interpreter.llm.api_base = api_base
     interpreter.llm.api_key = api_key
+    interpreter.llm.context_window = context_window
+    interpreter.llm.max_tokens = max_tokens
     if system_prompt is not None:
         interpreter.system_message = system_prompt
     raw_output = interpreter.chat(instruction, display=False, stream=False)
@@ -336,7 +353,9 @@ def _run_task(task_path, filename):
             time.sleep(entry["delay"])
         try:
             output = _attempt(model, instruction, system_prompt, history,
-                              api_base=entry["api_base"], api_key=entry["api_key"])
+                              api_base=entry["api_base"], api_key=entry["api_key"],
+                              context_window=entry["context_window"],
+                              max_tokens=entry["max_tokens"])
             break
         except Exception as e:
             print(f"[!] {model} failed ({e})")

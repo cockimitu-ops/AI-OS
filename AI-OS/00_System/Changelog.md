@@ -671,3 +671,11 @@ Two more secrets got printed into this session's transcript while removing the f
 ### Found, not yet resolved
 - **Cerebras is blocked on the account side, not the code side.** Live test: the worker reaches Cerebras correctly (right model, right auth) and gets back `Payment required to access this resource. Visit your billing tab.` Cerebras' own docs say no credit card is needed for the free tier; this account is hitting a wall anyway. Needs a human to check Cerebras' billing tab directly — not something to guess at further from here.
 - OpenRouter has not been exercised yet — it's last in the chain and the one live test succeeded earlier, so its actual working status is still unconfirmed beyond "the model ID exists."
+
+## [0.47.0-alpha] - 2026-08-30
+### Fixed
+- **OpenRouter proven working, and a real gap fixed at the same time.** Called directly through `_attempt()` — the actual code path, not a raw API ping, matching this file's own established discipline — and confirmed a correct response. The same test surfaced that Open Interpreter couldn't auto-detect this model's context window and silently capped it at 8000 against an actual 1,000,000 (confirmed on OpenRouter's own model page, not guessed). `MODEL_CHAIN` entries gained `context_window`/`max_tokens` fields, applied via `_attempt()`, explicitly reset to `None` on every other entry so nothing leaks between attempts. Re-tested afterward: no warning, clean success.
+- `MODEL_CHAIN` construction refactored to a `_chain_entry()` factory instead of hand-written dict literals — adding two more fields without touching all 7 existing entries is the actual argument for building it this way, not a style preference.
+
+### Process
+Found and closed a real test coverage gap while adding this: the end-to-end check that `_attempt()` actually applies `api_base`/`api_key` to `interpreter.llm` (not just that `MODEL_CHAIN`'s data is correct) was deleted along with the FreeLLMAPI test class it lived in, and nothing replaced it. Added `TestAttemptAppliesItsFieldsToTheRealLlmObject`, covering all four fields including the "resets to None, doesn't leak between calls" property. 65 → 69 tests.

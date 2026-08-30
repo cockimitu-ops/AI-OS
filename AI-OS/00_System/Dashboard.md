@@ -42,7 +42,7 @@ None tracked yet. See [[Experiment_Tracking]].
 [[00_System/Commands/Command_Index|Full Command Index]] · [[00_System/Commands/Quick_Start|Quick Start]]
 
 ## Current Version
-`0.46.0-alpha`
+`0.47.0-alpha`
 
 ## Repository Health
 Structural audit: [[00_System/Repository_Audit|Repository Audit]] (Sprint 013). Strategic review: [[00_System/Design_Review|Design Review]] (Sprint 014) — confirms the actual business is original horror content, not Reddit adaptation; 17 ranked recommendations, 5 critical.
