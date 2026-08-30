@@ -163,17 +163,17 @@ class TestEmptyTask(TaskRunnerTestCase):
 
 class TestModelChain(TaskRunnerTestCase):
     def test_first_working_model_wins_and_is_logged(self):
-        self.runner._attempt = lambda model, instr, sp=None, history=None: f"done by {model}"
+        self.runner._attempt = lambda model, instr, sp=None, history=None, **kwargs: f"done by {model}"
         self.queue("t.md", "do a thing")
         self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
         self.assertEqual(self.log_of("t.md"),
-                         f"done by {self.runner.MODEL_CHAIN[0][0]}")
+                         f"done by {self.runner.MODEL_CHAIN[0]['model']}")
         self.assert_quarantined("t.md")
 
     def test_falls_through_to_a_later_model(self):
         calls = []
 
-        def flaky(model, instr, sp=None, history=None):
+        def flaky(model, instr, sp=None, history=None, **kwargs):
             calls.append(model)
             if len(calls) < 3:
                 raise RuntimeError("rate limited")
@@ -187,7 +187,7 @@ class TestModelChain(TaskRunnerTestCase):
         self.assertEqual(len(calls), 3)
 
     def test_total_failure_writes_a_diagnostic_not_an_empty_log(self):
-        def dead(model, instr, sp=None, history=None):
+        def dead(model, instr, sp=None, history=None, **kwargs):
             raise RuntimeError("quota exhausted")
 
         self.runner._attempt = dead
@@ -197,20 +197,105 @@ class TestModelChain(TaskRunnerTestCase):
         log = self.log_of("t.md")
         self.assertIn("All models failed", log)
         self.assertIn("quota exhausted", log)
-        for model, _ in self.runner.MODEL_CHAIN:
-            self.assertIn(model, log)
+        for entry in self.runner.MODEL_CHAIN:
+            self.assertIn(entry["model"], log)
         self.assert_quarantined("t.md")
 
     def test_escalation_disabled_is_stated_in_the_failure_log(self):
         """CLAUDE_ESCALATION_ENABLED is off pending a ToS decision. If it is off,
         the log must say so - otherwise the failure looks like the escalation
         tier ran and also failed."""
-        self.runner._attempt = lambda m, i, sp=None, history=None: (_ for _ in ()).throw(RuntimeError("x"))
+        self.runner._attempt = lambda m, i, sp=None, history=None, **kwargs: (_ for _ in ()).throw(RuntimeError("x"))
         self.runner.time.sleep = lambda s: None
         self.queue("t.md", "do a thing")
         self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
         if not self.runner.CLAUDE_ESCALATION_ENABLED:
             self.assertIn("Escalation: disabled", self.log_of("t.md"))
+
+
+class TestFreellmapiIntegration(TaskRunnerTestCase):
+    """Added 2026-08-30: FreeLLMAPI (a self-hosted router in front of ~34 free
+    providers) became the primary tier, with the original direct Groq/Gemini
+    chain kept as fallback rather than replaced. MODEL_CHAIN is built at import
+    time from FREELLMAPI_BASE_URL/FREELLMAPI_API_KEY, so these tests set those
+    env vars before the fresh import setUp() already does."""
+
+    def setUp(self):
+        # Base setUp imports aios_runner fresh; do that AFTER setting the env
+        # vars each test needs, so MODEL_CHAIN is built under the right config.
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        os.environ["AIOS_WORKSPACE"] = self.tmp.name
+
+    def _import_with_freellmapi(self, base_url, api_key):
+        if base_url is None:
+            os.environ.pop("FREELLMAPI_BASE_URL", None)
+        else:
+            os.environ["FREELLMAPI_BASE_URL"] = base_url
+        if api_key is None:
+            os.environ.pop("FREELLMAPI_API_KEY", None)
+        else:
+            os.environ["FREELLMAPI_API_KEY"] = api_key
+        self.addCleanup(os.environ.pop, "FREELLMAPI_BASE_URL", None)
+        self.addCleanup(os.environ.pop, "FREELLMAPI_API_KEY", None)
+
+        self.fake = _install_stubs()
+        sys.path.insert(0, HERE)
+        self.addCleanup(lambda: sys.path.remove(HERE))
+        sys.modules.pop("aios_runner", None)
+        self.runner = importlib.import_module("aios_runner")
+        self.addCleanup(lambda: sys.modules.pop("aios_runner", None))
+
+    def test_freellmapi_is_prepended_when_both_env_vars_are_set(self):
+        self._import_with_freellmapi("http://localhost:3001/v1", "freellmapi-testkey")
+        first = self.runner.MODEL_CHAIN[0]
+        self.assertEqual(first["model"], "openai/auto")
+        self.assertEqual(first["api_base"], "http://localhost:3001/v1")
+        self.assertEqual(first["api_key"], "freellmapi-testkey")
+        # the original direct chain must still be present, unmodified, after it
+        self.assertEqual(self.runner.MODEL_CHAIN[1]["model"], self.runner.PRIMARY_MODEL)
+        self.assertEqual(len(self.runner.MODEL_CHAIN), 6)  # 1 freellmapi + 5 direct
+
+    def test_falls_back_to_direct_chain_only_when_either_var_is_missing(self):
+        for base_url, api_key in [(None, "key"), ("http://x", None), (None, None)]:
+            with self.subTest(base_url=base_url, api_key=api_key):
+                self._import_with_freellmapi(base_url, api_key)
+                self.assertEqual(len(self.runner.MODEL_CHAIN), 5)
+                self.assertEqual(self.runner.MODEL_CHAIN[0]["model"],
+                                 self.runner.PRIMARY_MODEL)
+
+    def test_direct_chain_entries_have_no_custom_endpoint(self):
+        """A freellmapi call's api_base must never leak into a direct-provider
+        attempt - each direct entry explicitly carries api_base=None,
+        api_key=None rather than omitting the keys."""
+        self._import_with_freellmapi("http://localhost:3001/v1", "freellmapi-testkey")
+        for entry in self.runner.MODEL_CHAIN[1:]:
+            self.assertIsNone(entry["api_base"], entry["model"])
+            self.assertIsNone(entry["api_key"], entry["model"])
+
+    def test_attempt_sets_and_resets_api_base_between_calls(self):
+        """End to end through _attempt: the freellmapi entry's endpoint must be
+        gone from interpreter.llm by the time a direct-provider entry runs -
+        not just correct in the MODEL_CHAIN data, but actually applied."""
+        self._import_with_freellmapi("http://localhost:3001/v1", "freellmapi-testkey")
+        self.runner.time.sleep = lambda s: None  # skip the 20s cooldown entry
+        seen_api_bases = []
+
+        real_chat = self.fake.chat
+        def spy_chat(*a, **k):
+            seen_api_bases.append(self.fake.llm.api_base)
+            return []  # empty -> _attempt raises, loop moves to the next entry
+        self.fake.chat = spy_chat
+
+        self.queue("t.md", "do a thing")
+        try:
+            self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        except Exception:
+            pass  # every entry "fails" (empty output) by design of spy_chat above
+
+        self.assertEqual(seen_api_bases[0], "http://localhost:3001/v1")
+        self.assertTrue(all(b is None for b in seen_api_bases[1:]),
+                        seen_api_bases)
 
 
 class TestCrashGuard(TaskRunnerTestCase):
@@ -250,7 +335,7 @@ class TestCrashGuard(TaskRunnerTestCase):
         self.assertIn("input/output error", log)
 
     def test_a_good_task_still_runs_in_the_same_pass(self):
-        self.runner._attempt = lambda model, instr, sp=None, history=None: "fine"
+        self.runner._attempt = lambda model, instr, sp=None, history=None, **kwargs: "fine"
         self.queue("good.md", "do a thing")
         self._run_one_pass()
         self.assertEqual(self.log_of("good.md"), "fine")
@@ -258,7 +343,7 @@ class TestCrashGuard(TaskRunnerTestCase):
 
     def test_tasks_are_processed_in_filename_order(self):
         order = []
-        self.runner._attempt = lambda model, instr, sp=None, history=None: order.append(instr) or "ok"
+        self.runner._attempt = lambda model, instr, sp=None, history=None, **kwargs: order.append(instr) or "ok"
         self.queue("task_b.md", "second")
         self.queue("task_a.md", "first")
         self._run_one_pass()
@@ -386,7 +471,7 @@ class TestAgentSelection(TaskRunnerTestCase):
         prompt handed to the model is the scoped one."""
         seen = {}
 
-        def spy(model, instruction, system_prompt=None, history=None):
+        def spy(model, instruction, system_prompt=None, history=None, **kwargs):
             seen["instruction"] = instruction
             seen["prompt"] = system_prompt
             return "ok"
@@ -469,7 +554,7 @@ class TestMemory(TaskRunnerTestCase):
         self.memory.save_turn("conv", "first question", "first answer")
         seen = {}
 
-        def spy(model, instruction, system_prompt=None, history=None):
+        def spy(model, instruction, system_prompt=None, history=None, **kwargs):
             seen["history"] = history
             return "second answer"
 
@@ -496,7 +581,7 @@ class TestMemory(TaskRunnerTestCase):
         self.memory.save_turn("conv3", "q", "a", agent="Vault_Architect")
         seen = {}
 
-        def spy(model, instruction, system_prompt=None, history=None):
+        def spy(model, instruction, system_prompt=None, history=None, **kwargs):
             seen["prompt"] = system_prompt
             return "ok"
 
@@ -508,7 +593,7 @@ class TestMemory(TaskRunnerTestCase):
     def test_a_task_with_no_thread_still_runs_cold(self):
         seen = {}
 
-        def spy(model, instruction, system_prompt=None, history=None):
+        def spy(model, instruction, system_prompt=None, history=None, **kwargs):
             seen["history"] = history
             return "ok"
 

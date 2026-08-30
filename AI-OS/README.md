@@ -1,7 +1,7 @@
 # AI OS
 
 ## Status
-Version: 0.43.0-alpha
+Version: 0.44.0-alpha
 Current Sprint: Sprint 029 — Full Audit and Fix Pass
 Last Updated: 2026-08-26
 
@@ -56,7 +56,7 @@ Each folder contains its own `README.md` describing its responsibility in detail
 Architecture is owned by the Chief Systems Architect. Implementation is owned by the Lead Repository Engineer. Changes to structure or conventions are proposed as suggestions, not applied unilaterally — see [[Development_Workflow]] and `Suggestions.md`. Formal architectural decisions are recorded as ADRs under `01_Architecture/ADR/`.
 
 ## Current Version
-`0.43.0-alpha`
+`0.44.0-alpha`
 
 ## Current Sprint
 **Sprint 029 — Full Audit and Fix Pass.** See [[Dashboard]] for live status and [[Changelog]] for the full history.

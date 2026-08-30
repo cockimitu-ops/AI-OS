@@ -50,20 +50,54 @@ for folder in [INBOX, COMPLETED, LOGS]:
 PRIMARY_MODEL = "groq/openai/gpt-oss-120b"
 FALLBACK_MODEL = "gemini/gemini-3.6-flash"
 
-# Ordered chain of free models to try per task: (model, delay_before_seconds).
-# Everything here is genuinely free - Groq and Gemini both meter quota
-# per-model, not per-account, so a second model on the same provider is a
-# separate bucket, not just another name for the same limit. Added 2026-08-26
-# after both PRIMARY_MODEL and FALLBACK_MODEL failed live in the same test run
-# - Felix has no budget for a paid API, so more free tiers beat a paid one.
-MODEL_CHAIN = [
-    (PRIMARY_MODEL, 0),
+# FreeLLMAPI (https://freellmapi.co) - a self-hosted, OpenAI-compatible router
+# in front of ~34 free-tier providers (Groq and Gemini among them, plus
+# Mistral, Cerebras, OpenRouter, Z.ai/GLM, and more), with its own internal
+# failover across whichever providers have keys configured in its dashboard.
+# Added 2026-08-30: the two-provider hand-rolled chain below kept running out
+# of quota under real use - this replaces "we maintain 5 fallback tuples"
+# with "a dedicated service maintains 34 providers' worth," as an interim
+# measure until there's budget for a metered GLM tier. Runs locally
+# (systemd unit: freellmapi.service) so this is a loopback call, not a new
+# external dependency in the failure-mode sense - if it's down, the chain
+# below still runs unchanged.
+FREELLMAPI_BASE_URL = os.environ.get("FREELLMAPI_BASE_URL")
+FREELLMAPI_API_KEY = os.environ.get("FREELLMAPI_API_KEY")
+
+# Ordered chain of free models to try per task. Each entry is a dict, not a
+# tuple - api_base/api_key were added alongside model/delay, and named fields
+# stay readable where positional ones would not. api_base=None means "use
+# litellm's own native routing for this model," not "no endpoint" - it must
+# be explicitly reset between entries so a freellmapi call's custom endpoint
+# never leaks into a subsequent direct-provider attempt.
+MODEL_CHAIN = []
+
+if FREELLMAPI_BASE_URL and FREELLMAPI_API_KEY:
+    # "auto" lets the router itself pick a live provider from whatever keys
+    # are configured in its dashboard; it already retries internally, so one
+    # entry here is enough. Falls through to the direct chain below with zero
+    # behaviour change if no provider keys are configured yet, or if the
+    # freellmapi process itself is unreachable.
+    MODEL_CHAIN.append({
+        "model": "openai/auto", "delay": 0,
+        "api_base": FREELLMAPI_BASE_URL, "api_key": FREELLMAPI_API_KEY,
+    })
+
+# Direct-provider chain - unchanged from before FreeLLMAPI, kept as the
+# fallback tier rather than deleted. Everything here is genuinely free - Groq
+# and Gemini both meter quota per-model, not per-account, so a second model on
+# the same provider is a separate bucket, not just another name for the same
+# limit. Added 2026-08-26 after both PRIMARY_MODEL and FALLBACK_MODEL failed
+# live in the same test run - Felix has no budget for a paid API, so more free
+# tiers beat a paid one.
+MODEL_CHAIN += [
+    {"model": PRIMARY_MODEL, "delay": 0, "api_base": None, "api_key": None},
     # Groq's per-minute token bucket is small enough that open-interpreter's
     # system prompt alone can trip it; that clears in well under a minute.
-    (PRIMARY_MODEL, 20),
+    {"model": PRIMARY_MODEL, "delay": 20, "api_base": None, "api_key": None},
     # Smaller sibling of PRIMARY_MODEL on the same Groq key - separate quota.
-    ("groq/openai/gpt-oss-20b", 0),
-    (FALLBACK_MODEL, 0),
+    {"model": "groq/openai/gpt-oss-20b", "delay": 0, "api_base": None, "api_key": None},
+    {"model": FALLBACK_MODEL, "delay": 0, "api_base": None, "api_key": None},
     # Lite sibling of FALLBACK_MODEL on the same Gemini key - separate quota.
     # NOT "gemini-flash-lite-latest": that alias currently resolves to a newer
     # model that 400s inside Open Interpreter's tool-calling flow (missing
@@ -71,7 +105,7 @@ MODEL_CHAIN = [
     # newer "thinking" Gemini models, not a config mistake). Verified
     # 2026-08-26 that gemini-3.5-flash-lite works cleanly through the same
     # tool-calling path the worker actually uses.
-    ("gemini/gemini-3.5-flash-lite", 0),
+    {"model": "gemini/gemini-3.5-flash-lite", "delay": 0, "api_base": None, "api_key": None},
 ]
 
 # Last-resort escalation via Claude Code headless (`claude -p`), billed against
@@ -185,16 +219,26 @@ def format_interpreter_output(messages):
         return "\n\n".join(transcript)
     return "Task completed."
 
-def _attempt(model, instruction, system_prompt=None, history=None):
+def _attempt(model, instruction, system_prompt=None, history=None,
+             api_base=None, api_key=None):
     """Run one chat turn on `model`. Raises on failure (including the
     swallowed-RateLimitError case where open-interpreter returns an empty
     message list instead of raising - see respond.py's display_markdown_message
-    branch)."""
+    branch).
+
+    api_base/api_key are always set explicitly, never left as "whatever the
+    previous attempt left behind" - a freellmapi entry's custom endpoint must
+    not leak into the next entry's direct-provider call, and a direct-provider
+    entry must not inherit a stale endpoint from a prior freellmapi attempt
+    either. None means "use litellm's native routing for this model," which is
+    a real, intentional value here, not an unset one."""
     # Seed with prior conversation turns, or [] for a cold task. Assigning a
     # fresh list every attempt matters: a failed model leaves its partial
     # messages behind, and the next model in MODEL_CHAIN must not inherit them.
     interpreter.messages = list(history) if history else []
     interpreter.llm.model = model
+    interpreter.llm.api_base = api_base
+    interpreter.llm.api_key = api_key
     if system_prompt is not None:
         interpreter.system_message = system_prompt
     raw_output = interpreter.chat(instruction, display=False, stream=False)
@@ -276,11 +320,13 @@ def _run_task(task_path, filename):
     print(f"[*] Processing task: {filename}{label}", flush=True)
     output = None
     errors = []
-    for model, delay in MODEL_CHAIN:
-        if delay:
-            time.sleep(delay)
+    for entry in MODEL_CHAIN:
+        model = entry["model"]
+        if entry["delay"]:
+            time.sleep(entry["delay"])
         try:
-            output = _attempt(model, instruction, system_prompt, history)
+            output = _attempt(model, instruction, system_prompt, history,
+                              api_base=entry["api_base"], api_key=entry["api_key"])
             break
         except Exception as e:
             print(f"[!] {model} failed ({e})")

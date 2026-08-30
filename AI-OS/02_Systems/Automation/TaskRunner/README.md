@@ -68,6 +68,16 @@ Verified live: worker restarted, then a real `dispatch_task.py` call asked it to
 
 `cloud_backup.py` tars the entire repo including this folder. Without an explicit exclude, every new archive would embed all previous archives inside itself, growing without bound. `EXCLUDE_RELATIVE_PATHS` in the script excludes its own `backups/` and `tasks/logs/` for exactly that reason — don't remove those excludes without addressing that.
 
+## FreeLLMAPI (added 2026-08-30)
+
+The hand-rolled 5-model Groq/Gemini chain kept running out of quota under real use. Replaced its *primary* tier with [FreeLLMAPI](https://freellmapi.co) — a self-hosted, OpenAI-compatible router in front of ~34 free-tier providers (Groq and Gemini among them, plus Mistral, Cerebras, OpenRouter, Z.ai/GLM, and more), with its own internal failover. Runs as `freellmapi.service` on this same box (`/opt/freellmapi`), listening on `:3001`.
+
+**The old direct Groq/Gemini chain is kept as the fallback tier, not deleted.** If freellmapi has no provider keys configured, or the process itself is down, `MODEL_CHAIN` falls through to the original 5 entries with zero behaviour change — verified live: `openai/auto` failed cleanly (no keys yet) and the task still completed via the direct chain.
+
+**One-time manual step, not yet done as of this writing:** open `http://100.64.2.100:3001` from a browser, create the account (first-run setup code was printed once to `journalctl -u freellmapi` at first boot), then add provider keys on the **Keys** page — same Groq/Gemini values already in `.env`, plus whichever other free providers are wanted. Nothing routes through freellmapi until this is done; the fallback chain covers the gap.
+
+Interim measure, per Felix: until there's budget for a metered GLM tier. GLM-4.5/4.7 are already in freellmapi's free catalog (via Z.ai and Cloudflare) if that's enough in the meantime.
+
 ## Agents and memory (2026-08-27)
 
 ```bash
