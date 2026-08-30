@@ -19,7 +19,7 @@ Related Documents: [[02_Systems/Automation/README|Automation]], [[Future_Integra
 | `scripts/health_check.py` | The supervision layer (added 2026-08-30) — see below. |
 | `scripts/run_schedules.py` | Enqueues due recurring agent tasks from `schedules/` (added 2026-08-30) — see below. |
 | `proposals.py` | The propose/approve gate: what agents want to change, waiting on Felix (added 2026-08-30) — see below. |
-| `scripts/evening_review.py` | 20:00 sharp — sends the day's proposals to Telegram and asks which to take. |
+| `scripts/evening_review.py` | 20:00 sharp — sends the day's proposals to Telegram, grouped into AI work and work only Felix can do. |
 | `scripts/morning_brief.py` | Daily good-morning digest over Telegram (added 2026-08-30) — see below. |
 | `scripts/send_telegram_notification.py` | One-off outbound Telegram message, reusing the same bot token — for things other than task results. Wired into `cloud_backup.py`'s failure path and `health_check.py`'s alerts. Stdlib-only on purpose: systemd runs both under `/usr/bin/python3`, which has no `python-dotenv`, so a notifier importing it would have failed exactly when it was needed. |
 | `agents.py` | Agent selection. Resolves aliases (`@research` → `Research_Analyst`), loads each agent's Executable Prompt block from [[04_Agents/README|04_Agents]]. Shared by all three entry points so they can't disagree about what an alias means. |
@@ -178,12 +178,21 @@ schedules/*.md  --(propose)-->  proposals/pending.json     [agents: unattended, 
                                   tasks/inbox/  ------------> worker executes
 ```
 
+**Proposals come in two kinds, and the split is operational rather than cosmetic:**
+
+- **`AI_PROPOSAL:`** — the worker can finish it alone with a shell and the vault: drafting copy, research, restructuring a file, changing a schedule. Approving it queues a real task.
+- **`HUMAN_PROPOSAL:`** — needs Felix: an account, a card, a publish button, a conversation, a judgement call. Approving it adds to his list and **never** queues a task, because a worker handed "publish the Gumroad listing" will either flail or report a success it did not achieve. The planner prompts explicitly tell agents to think *bigger* here — this is where a move worth real money belongs even if it takes a week, and it is not to be shrunk to fit an hour.
+
+**An unlabelled proposal is treated as human.** The two mistakes are not symmetric: calling human work "AI" queues something impossible that may come back reported as done, while calling AI work "human" only means Felix reads a line he could have delegated. Guess toward the harmless one.
+
+Approved human items land in `proposals/todo.json` and are **surfaced in the morning brief every day** until `done N` clears them — otherwise approving one would be the same write-only black hole the `notify` directive fixed for scheduled tasks. Telegram: `todo` lists it, `done 2` clears an item.
+
 Two daily planners ship with it, both pointed at revenue because that is the actual goal: `daily_revenue_plan.md` (Business_Development, 18:30 — TemplateSales has three built products earning nothing and the bottleneck is publishing) and `daily_system_plan.md` (Vault_Architect, 18:45 — judged by whether a change helps Felix earn sooner, not by tidiness).
 
 **This is also how agents schedule themselves.** `daily_system_plan` is explicitly allowed to propose new or changed files in `schedules/`, so the system can evolve its own cadence — but every such change still lands in the 20:00 review first. Self-scheduling and the approval gate are the same mechanism, which is why there is no separate one. It works: the very first live run proposed changing its own `daily_revenue_plan.md`.
 
 Behaviours worth knowing:
-- **Proposals are numbered against a snapshot.** `open_review()` copies pending into `review.json` and clears pending, so `approve 2` means entry 2 of what Felix is looking at, even if a planner runs while he is deciding.
+- **Proposals are numbered against a snapshot, grouped AI-first.** `open_review()` copies pending into `review.json`, sorts AI work ahead of human work, and clears pending — so `approve 2` means entry 2 of exactly what Felix is looking at, even if a planner runs while he is deciding. The sort lives in the snapshot rather than the display for that reason: the number he replies with indexes that file. (The first live grouped review numbered 1,2,5,6 then 3,4,7 — correct, but it reads as a bug on a phone.)
 - **Declined is a decision, not a deferral.** A declined proposal is archived, not returned to pending — otherwise it would be re-asked every night until approved out of attrition rather than agreement.
 - **Out-of-range is an error, not a partial approval.** `approve 1 5` of four proposals does nothing and says so, rather than doing three-quarters of what was asked.
 - **Failed runs store nothing.** "All models failed" is not a proposal, and padding the review with them trains Felix to skim it.

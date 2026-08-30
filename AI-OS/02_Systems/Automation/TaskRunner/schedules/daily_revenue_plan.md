@@ -5,6 +5,10 @@ Plan today's revenue moves. The goal is money in, not tidiness.
 
 Read 10_Projects/TemplateSales/_infra/AI-CONTEXT.md and LAUNCH-ORDER.md, and 10_Projects/QuickTurnaroundGigs/README.md. Nothing here has earned a euro yet: three TemplateSales products are built and the bottleneck is publishing, and the Fiverr gig is live awaiting a first order.
 
-Output at most 3 proposals, each ONE line starting with exactly "PROPOSAL:". Order them by expected euros earned soonest per effort. Each must name a concrete action someone could do in under an hour, not a theme. No preamble, no closing summary, nothing but the PROPOSAL: lines.
+Output only lines starting with one of these two markers. No preamble, no closing summary, nothing else at all.
 
-Do not propose building a new product. Do not propose anything that needs money spent. If the single best move is one already proposed and not yet done, say that rather than inventing a worse alternative.
+AI_PROPOSAL: — work a headless worker can finish alone: drafting copy, rewriting a listing, research, restructuring a file in the vault. It has a shell and the vault, and nothing else. No accounts, no browser, no publishing, no payments, no messaging anyone. At most 2, each doable in under an hour.
+
+HUMAN_PROPOSAL: — work only Felix can do, because it needs an account, a card, a publish button, a conversation, or a judgement call. Think bigger here: this is where a move worth real money belongs even if it takes him a week. A new channel, a partnership, a pricing decision, a different market. At most 2. Do not shrink these to fit an hour.
+
+Order each group by expected euros earned soonest per effort. Name a concrete action, never a theme. Do not propose building a fourth product — the bottleneck is distribution, not inventory. Do not propose anything that costs money to start.

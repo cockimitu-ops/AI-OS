@@ -16,7 +16,9 @@ import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
+sys.path.insert(0, os.path.dirname(SCRIPT_DIR))
 import health_check  # noqa: E402  (needs sys.path set first)
+import proposals  # noqa: E402
 
 NOTIFIER = os.path.join(SCRIPT_DIR, "send_telegram_notification.py")
 
@@ -31,15 +33,33 @@ def format_status_section(current_checks):
     return "\n".join(lines)
 
 
-def build_digest(current_checks, now=None):
+def format_todo_section(todos):
+    """Approved human-intervention work, surfaced every morning.
+
+    Without this the list would be write-only: Felix approves something at
+    20:00 that only he can do, and then nothing ever reminds him. Same
+    failure the notify directive fixed for scheduled tasks - work that
+    lands somewhere nobody looks."""
+    if not todos:
+        return None
+    lines = [f"Your list ({len(todos)}):"]
+    for i, item in enumerate(todos, 1):
+        lines.append(f"  {i}. {item.get('text','')}")
+    return "\n".join(lines)
+
+
+def build_digest(current_checks, todos=None, now=None):
     now = now or time.localtime()
     date_str = time.strftime("%A, %d %B %Y", now)
-    status = format_status_section(current_checks)
-    return f"Good morning - {date_str}\n\n{status}"
+    parts = [f"Good morning - {date_str}", "", format_status_section(current_checks)]
+    todo_section = format_todo_section(todos)
+    if todo_section:
+        parts += ["", todo_section]
+    return "\n".join(parts)
 
 
 def main():
-    digest = build_digest(health_check.run_checks())
+    digest = build_digest(health_check.run_checks(), proposals.load_todos())
     print(digest)
     result = subprocess.run([sys.executable, NOTIFIER, digest], timeout=30, check=False)
     sys.exit(result.returncode)

@@ -639,36 +639,47 @@ class TestProposals(TaskRunnerTestCase):
         self.p = proposals
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        for attr, name in (("PROPOSALS_DIR", ""), ("PENDING_PATH", "pending.json"),
-                           ("REVIEW_PATH", "review.json"), ("ARCHIVE_PATH", "archive.jsonl")):
+        for attr in ("PROPOSALS_DIR", "PENDING_PATH", "REVIEW_PATH",
+                     "ARCHIVE_PATH", "TODO_PATH"):
             self.addCleanup(setattr, self.p, attr, getattr(self.p, attr))
         self.p.PROPOSALS_DIR = tmp.name
         self.p.PENDING_PATH = os.path.join(tmp.name, "pending.json")
         self.p.REVIEW_PATH = os.path.join(tmp.name, "review.json")
         self.p.ARCHIVE_PATH = os.path.join(tmp.name, "archive.jsonl")
+        self.p.TODO_PATH = os.path.join(tmp.name, "todo.json")
 
-    def test_parses_marked_lines_into_separate_proposals(self):
+    def test_parses_both_kinds_of_marked_line(self):
         out = ("Here is my thinking.\n"
-               "PROPOSAL: Publish the Pricing Teardown Gumroad listing.\n"
-               "PROPOSAL: Post the Moat Blueprint to r/SaaS.\n")
+               "AI_PROPOSAL: Rewrite the Pricing Teardown listing copy.\n"
+               "HUMAN_PROPOSAL: Create the Gumroad listing and hit publish.\n")
         self.assertEqual(self.p.parse(out), [
-            "Publish the Pricing Teardown Gumroad listing.",
-            "Post the Moat Blueprint to r/SaaS.",
+            {"kind": "ai", "text": "Rewrite the Pricing Teardown listing copy."},
+            {"kind": "human", "text": "Create the Gumroad listing and hit publish."},
         ])
 
-    def test_unmarked_output_becomes_one_proposal_rather_than_being_lost(self):
+    def test_an_unlabelled_proposal_defaults_to_human(self):
+        """The two mistakes are not symmetric. Calling human work "AI" queues
+        something the worker cannot do and may report as done; calling AI work
+        "human" just means Felix reads a line he could have delegated. Guess
+        toward the harmless one."""
+        self.assertEqual(self.p.parse("PROPOSAL: do a thing")[0]["kind"], "human")
+
+    def test_marker_case_does_not_matter(self):
+        self.assertEqual(self.p.parse("ai_proposal: x")[0]["kind"], "ai")
+
+    def test_unmarked_output_becomes_one_human_proposal_rather_than_being_lost(self):
         """A model that forgets the marker should cost Felix one oddly long
         line, not a whole day of an agent's thinking."""
         self.assertEqual(self.p.parse("Just publish the thing already"),
-                         ["Just publish the thing already"])
+                         [{"kind": "human", "text": "Just publish the thing already"}])
 
     def test_empty_output_produces_nothing(self):
         self.assertEqual(self.p.parse(""), [])
         self.assertEqual(self.p.parse(None), [])
 
     def test_add_then_open_review_moves_and_clears_pending(self):
-        self.p.add("Business_Development", ["do X"])
-        self.p.add("Vault_Architect", ["do Y"])
+        self.p.add("Business_Development", [{"kind": "ai", "text": "do X"}])
+        self.p.add("Vault_Architect", [{"kind": "human", "text": "do Y"}])
         review = self.p.open_review()
         self.assertEqual([r["text"] for r in review], ["do X", "do Y"])
         self.assertEqual(self.p.load(self.p.PENDING_PATH), [])
@@ -676,7 +687,7 @@ class TestProposals(TaskRunnerTestCase):
     def test_declined_proposals_do_not_reappear_tomorrow(self):
         """Without clearing, a declined item would be re-asked every night
         until Felix approved it out of attrition rather than agreement."""
-        self.p.add("Business_Development", ["do X"])
+        self.p.add("Business_Development", [{"kind": "ai", "text": "do X"}])
         review = self.p.open_review()
         _, rejected, _ = self.p.resolve("none", review)
         self.p.close_review([], rejected)
@@ -726,12 +737,82 @@ class TestProposals(TaskRunnerTestCase):
         self.assertEqual({r["decision"] for r in rows}, {"approved", "declined"})
 
     def test_review_message_numbers_items_and_names_the_agent(self):
-        text = self.p.format_review([{"agent": "Business_Development", "text": "ship it"}])
+        text = self.p.format_review([{"agent": "Business_Development",
+                                      "kind": "ai", "text": "ship it"}])
         self.assertIn("1. [Business Development] ship it", text)
         self.assertIn("approve", text.lower())
 
     def test_an_empty_review_reads_as_a_real_answer_not_a_failure(self):
         self.assertIn("Nothing proposed", self.p.format_review([]))
+
+    def test_review_groups_by_who_does_the_work(self):
+        review = [{"agent": "a", "kind": "ai", "text": "I build this"},
+                  {"agent": "b", "kind": "human", "text": "you do this"}]
+        text = self.p.format_review(review)
+        self.assertIn("AI work", text)
+        self.assertIn("Needs you", text)
+        self.assertLess(text.index("AI work"), text.index("Needs you"))
+
+    def test_numbering_runs_continuously_across_both_groups(self):
+        """Grouping must not restart numbering - `approve 3` has to mean
+        exactly one thing, whichever group it landed in."""
+        review = [{"agent": "a", "kind": "human", "text": "yours"},
+                  {"agent": "b", "kind": "ai", "text": "mine"},
+                  {"agent": "c", "kind": "human", "text": "yours too"}]
+        text = self.p.format_review(review)
+        self.assertIn("2. [b] mine", text)
+        self.assertIn("1. [a] yours", text)
+        self.assertIn("3. [c] yours too", text)
+
+    def test_open_review_groups_ai_first_so_numbers_read_contiguously(self):
+        """Live 2026-08-30 the first grouped review numbered 1,2,5,6 then
+        3,4,7 - correct and unambiguous, but it reads as a bug on a phone.
+        Sorting the snapshot (not just the display) keeps the number Felix
+        replies with indexing exactly this file."""
+        self.p.add("a", [{"kind": "human", "text": "yours"}])
+        self.p.add("b", [{"kind": "ai", "text": "mine"}])
+        self.p.add("c", [{"kind": "human", "text": "yours too"}])
+        review = self.p.open_review()
+        self.assertEqual([r["kind"] for r in review], ["ai", "human", "human"])
+        text = self.p.format_review(review)
+        self.assertIn("1. [b] mine", text)
+        self.assertIn("2. [a] yours", text)
+
+    def test_grouping_is_stable_within_each_kind(self):
+        self.p.add("a", [{"kind": "ai", "text": "first"}])
+        self.p.add("b", [{"kind": "ai", "text": "second"}])
+        review = self.p.open_review()
+        self.assertEqual([r["text"] for r in review], ["first", "second"])
+
+    def test_a_group_with_nothing_in_it_is_omitted(self):
+        text = self.p.format_review([{"agent": "a", "kind": "ai", "text": "x"}])
+        self.assertIn("AI work", text)
+        self.assertNotIn("Needs you", text)
+
+    def test_todos_round_trip_and_complete(self):
+        self.p.add_todos([{"agent": "a", "text": "publish it"},
+                          {"agent": "b", "text": "call them"}])
+        self.assertEqual(len(self.p.load_todos()), 2)
+        done, error = self.p.complete_todo("1")
+        self.assertIsNone(error)
+        self.assertEqual(done[0]["text"], "publish it")
+        self.assertEqual([t["text"] for t in self.p.load_todos()], ["call them"])
+
+    def test_completing_an_out_of_range_todo_is_an_error(self):
+        self.p.add_todos([{"agent": "a", "text": "one"}])
+        done, error = self.p.complete_todo("4")
+        self.assertEqual(done, [])
+        self.assertIn("no item 4", error)
+        self.assertEqual(len(self.p.load_todos()), 1)
+
+    def test_completing_several_at_once_removes_exactly_those(self):
+        self.p.add_todos([{"agent": "a", "text": f"item {n}"} for n in range(1, 5)])
+        done, _ = self.p.complete_todo("1 3")
+        self.assertEqual([d["text"] for d in done], ["item 1", "item 3"])
+        self.assertEqual([t["text"] for t in self.p.load_todos()], ["item 2", "item 4"])
+
+    def test_an_empty_todo_list_reads_as_such(self):
+        self.assertIn("Nothing on your list", self.p.format_todos())
 
     # --- the gate itself -----------------------------------------------------
 
@@ -739,7 +820,7 @@ class TestProposals(TaskRunnerTestCase):
         """The whole trust boundary in one test: an unattended proposing
         agent changes nothing Felix has not approved."""
         self.runner._attempt = lambda m, i, sp=None, history=None, **kw: (
-            "PROPOSAL: Publish the Pricing Teardown listing.")
+            "AI_PROPOSAL: Publish the Pricing Teardown listing.")
         before = set(os.listdir(self.runner.INBOX))
         self.queue("t.md", "<!-- agent: Business_Development -->\n<!-- propose -->\nplan")
         self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
@@ -754,7 +835,7 @@ class TestProposals(TaskRunnerTestCase):
         """Felix sees proposals once, at 20:00, not as they trickle in."""
         pushed = []
         self.runner._push_to_telegram = pushed.append
-        self.runner._attempt = lambda m, i, sp=None, history=None, **kw: "PROPOSAL: x"
+        self.runner._attempt = lambda m, i, sp=None, history=None, **kw: "AI_PROPOSAL: x"
         self.queue("t.md", "<!-- notify -->\n<!-- propose -->\nplan")
         self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
         self.assertEqual(pushed, [])

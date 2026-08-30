@@ -122,8 +122,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _md_lite_to_telegram_html(error), parse_mode=ParseMode.HTML)
             return
 
-        queued = []
-        for item in chosen:
+        # Approval branches on who can actually do the work. Queueing a
+        # human-intervention item would hand the worker something it cannot
+        # possibly do - "publish the Gumroad listing" - and a free model
+        # given an impossible task tends to report success rather than
+        # refuse. Those go on Felix's list instead.
+        ai_items = [i for i in chosen if i.get("kind") == "ai"]
+        human_items = [i for i in chosen if i.get("kind") != "ai"]
+
+        for item in ai_items:
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             name = f"task_approved_{stamp}.md"
             path = os.path.join(INBOX, name)
@@ -136,13 +143,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write(body)
             os.replace(tmp, path)
-            queued.append(name)
 
+        proposals.add_todos(human_items)
         proposals.close_review(chosen, rejected)
-        summary = (f"✅ {len(chosen)} approved and queued, {len(rejected)} declined."
-                   if chosen else f"Nothing approved - {len(rejected)} declined.")
+
+        if not chosen:
+            summary = f"Nothing approved — {len(rejected)} declined."
+        else:
+            parts = []
+            if ai_items:
+                parts.append(f"{len(ai_items)} queued for me")
+            if human_items:
+                parts.append(f"{len(human_items)} added to your list")
+            summary = ("✅ " + ", ".join(parts)
+                       + (f", {len(rejected)} declined." if rejected else "."))
+            if human_items:
+                summary += "\n\nSend `todo` to see your list."
         await update.message.reply_text(
             _md_lite_to_telegram_html(summary), parse_mode=ParseMode.HTML)
+        return
+
+    if command in ("todo", "todos", "list"):
+        await update.message.reply_text(
+            _md_lite_to_telegram_html(proposals.format_todos()),
+            parse_mode=ParseMode.HTML)
+        return
+
+    if command.startswith("done"):
+        done, error = proposals.complete_todo(instruction.strip().lstrip("/")[len("done"):])
+        await update.message.reply_text(
+            _md_lite_to_telegram_html(
+                error or ("✅ Done: " + "; ".join(d.get("text", "") for d in done))),
+            parse_mode=ParseMode.HTML)
         return
 
     if command in ("agents", "agent"):
