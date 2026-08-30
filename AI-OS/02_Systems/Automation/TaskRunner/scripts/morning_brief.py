@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Daily good-morning digest, sent over the same Telegram bridge as
 everything else. Currently just server health (from health_check.py) -
-more sections (email, project status) slot in here once their data sources
-actually exist, without needing a rewrite of what's already working.
+more sections slot in here once their data sources actually exist, without
+needing a rewrite of what's already working. Email was tried twice (OAuth,
+then IMAP + App Password) and dropped both times - see the TaskRunner
+README for why - so there's nothing email-shaped here for now.
 
 Stdlib only, same reasoning as the rest of scripts/: systemd runs this
 under /usr/bin/python3, which has no third-party packages installed.
@@ -29,37 +31,15 @@ def format_status_section(current_checks):
     return "\n".join(lines)
 
 
-def format_email_section():
-    """None (not an empty string) until GMAIL_ADDRESS/GMAIL_APP_PASSWORD
-    exist in .env - mail_read.fetch_unread_summaries() returns the same
-    signal, and build_digest() below treats it as "not configured yet"."""
-    import mail_read
-    emails = mail_read.fetch_unread_summaries()
-    if emails is None:
-        return None
-    if not emails:
-        return "Email: inbox zero - nothing unread."
-    lines = [f"Email: {len(emails)} unread:"]
-    for e in emails:
-        lines.append(f"  - {e['subject']} (from {e['from']})")
-    return "\n".join(lines)
-
-
-def build_digest(current_checks, email_text=None, now=None):
+def build_digest(current_checks, now=None):
     now = now or time.localtime()
     date_str = time.strftime("%A, %d %B %Y", now)
     status = format_status_section(current_checks)
-
-    parts = [f"Good morning - {date_str}", "", status]
-    if email_text:
-        parts += ["", email_text]
-    else:
-        parts += ["", "(Email isn't wired in yet - still waiting on a Gmail app password in .env.)"]
-    return "\n".join(parts).strip()
+    return f"Good morning - {date_str}\n\n{status}"
 
 
 def main():
-    digest = build_digest(health_check.run_checks(), format_email_section())
+    digest = build_digest(health_check.run_checks())
     print(digest)
     result = subprocess.run([sys.executable, NOTIFIER, digest], timeout=30, check=False)
     sys.exit(result.returncode)

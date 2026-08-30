@@ -976,95 +976,9 @@ class TestMorningBrief(unittest.TestCase):
         digest = self.mb.build_digest({"a": (True, "fine")}, now=now)
         self.assertTrue(digest.startswith("Good morning - Sunday, 30 August 2026"))
 
-    def test_digest_notes_email_is_still_pending_when_no_email_text_given(self):
-        digest = self.mb.build_digest({"a": (True, "fine")})
-        self.assertIn("still waiting on a Gmail app password", digest)
-
     def test_digest_includes_the_status_line(self):
         digest = self.mb.build_digest({"x": (False, "down")})
         self.assertIn("x: down", digest)
-
-    def test_digest_includes_email_text_when_provided(self):
-        digest = self.mb.build_digest({"a": (True, "fine")}, email_text="Email: 2 unread:\n  - Hi (from a@b.com)")
-        self.assertIn("2 unread", digest)
-        self.assertNotIn("still waiting", digest)
-
-
-class TestMailRead(unittest.TestCase):
-    """mail_read.py (added 2026-08-30, replacing an OAuth approach that hit
-    a real wall - Google Cloud required a billing-enabled project just to
-    register the API). Only the pure header-decoding and the "not configured"
-    short-circuit are tested here - the IMAP connection itself isn't mocked,
-    matching how cloud_backup.py's own network calls aren't unit tested."""
-
-    @classmethod
-    def setUpClass(cls):
-        spec = importlib.util.spec_from_file_location(
-            "mail_read", os.path.join(HERE, "scripts", "mail_read.py"))
-        cls.mr = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(cls.mr)
-
-    def test_returns_none_when_address_is_missing(self):
-        result = self.mr.fetch_unread_summaries(env={"GMAIL_APP_PASSWORD": "x"})
-        self.assertIsNone(result)
-
-    def test_returns_none_when_app_password_is_missing(self):
-        result = self.mr.fetch_unread_summaries(env={"GMAIL_ADDRESS": "a@b.com"})
-        self.assertIsNone(result)
-
-    def test_returns_none_when_neither_is_configured(self):
-        self.assertIsNone(self.mr.fetch_unread_summaries(env={}))
-
-    def test_decode_header_value_passes_plain_ascii_through(self):
-        self.assertEqual(self.mr.decode_header_value("Hello there"), "Hello there")
-
-    def test_decode_header_value_decodes_mime_encoded_words(self):
-        # "Café" encoded as UTF-8 base64 - the form Gmail actually sends for
-        # non-ASCII subjects/senders.
-        encoded = "=?UTF-8?B?Q2Fmw6k=?="
-        self.assertEqual(self.mr.decode_header_value(encoded), "Café")
-
-    def test_decode_header_value_handles_empty_input(self):
-        self.assertEqual(self.mr.decode_header_value(""), "")
-        self.assertEqual(self.mr.decode_header_value(None), "")
-
-
-class TestEnvFileHelpers(unittest.TestCase):
-    """load_env() is duplicated (deliberately - see send_telegram_notification.py's
-    own note on staying dependency-free) across several scripts. Exercised
-    here via mail_read.py's copy; the parsing rules are identical everywhere
-    it appears."""
-
-    @classmethod
-    def setUpClass(cls):
-        spec = importlib.util.spec_from_file_location(
-            "mail_read_env", os.path.join(HERE, "scripts", "mail_read.py"))
-        cls.mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(cls.mod)
-
-    def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.env_path = os.path.join(tmp.name, ".env")
-
-    def _write(self, content):
-        with open(self.env_path, "w", encoding="utf-8") as f:
-            f.write(content)
-
-    def test_parses_key_value_pairs(self):
-        self._write("FOO=bar\nBAZ=qux\n")
-        self.assertEqual(self.mod.load_env(self.env_path), {"FOO": "bar", "BAZ": "qux"})
-
-    def test_skips_comments_and_blank_lines(self):
-        self._write("# a comment\n\nFOO=bar\n")
-        self.assertEqual(self.mod.load_env(self.env_path), {"FOO": "bar"})
-
-    def test_strips_surrounding_quotes(self):
-        self._write('FOO="bar"\n')
-        self.assertEqual(self.mod.load_env(self.env_path)["FOO"], "bar")
-
-    def test_missing_file_returns_empty_not_an_error(self):
-        self.assertEqual(self.mod.load_env(os.path.join(os.path.dirname(self.env_path), "nope.env")), {})
 
 
 if __name__ == "__main__":
