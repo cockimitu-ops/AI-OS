@@ -50,47 +50,23 @@ for folder in [INBOX, COMPLETED, LOGS]:
 PRIMARY_MODEL = "groq/openai/gpt-oss-120b"
 FALLBACK_MODEL = "gemini/gemini-3.6-flash"
 
-# FreeLLMAPI (https://freellmapi.co) - a self-hosted, OpenAI-compatible router
-# in front of ~34 free-tier providers (Groq and Gemini among them, plus
-# Mistral, Cerebras, OpenRouter, Z.ai/GLM, and more), with its own internal
-# failover across whichever providers have keys configured in its dashboard.
-# Added 2026-08-30: the two-provider hand-rolled chain below kept running out
-# of quota under real use - this replaces "we maintain 5 fallback tuples"
-# with "a dedicated service maintains 34 providers' worth," as an interim
-# measure until there's budget for a metered GLM tier. Runs locally
-# (systemd unit: freellmapi.service) so this is a loopback call, not a new
-# external dependency in the failure-mode sense - if it's down, the chain
-# below still runs unchanged.
-FREELLMAPI_BASE_URL = os.environ.get("FREELLMAPI_BASE_URL")
-FREELLMAPI_API_KEY = os.environ.get("FREELLMAPI_API_KEY")
-
-# Ordered chain of free models to try per task. Each entry is a dict, not a
-# tuple - api_base/api_key were added alongside model/delay, and named fields
-# stay readable where positional ones would not. api_base=None means "use
-# litellm's own native routing for this model," not "no endpoint" - it must
-# be explicitly reset between entries so a freellmapi call's custom endpoint
-# never leaks into a subsequent direct-provider attempt.
-MODEL_CHAIN = []
-
-if FREELLMAPI_BASE_URL and FREELLMAPI_API_KEY:
-    # "auto" lets the router itself pick a live provider from whatever keys
-    # are configured in its dashboard; it already retries internally, so one
-    # entry here is enough. Falls through to the direct chain below with zero
-    # behaviour change if no provider keys are configured yet, or if the
-    # freellmapi process itself is unreachable.
-    MODEL_CHAIN.append({
-        "model": "openai/auto", "delay": 0,
-        "api_base": FREELLMAPI_BASE_URL, "api_key": FREELLMAPI_API_KEY,
-    })
-
-# Direct-provider chain - unchanged from before FreeLLMAPI, kept as the
-# fallback tier rather than deleted. Everything here is genuinely free - Groq
-# and Gemini both meter quota per-model, not per-account, so a second model on
-# the same provider is a separate bucket, not just another name for the same
-# limit. Added 2026-08-26 after both PRIMARY_MODEL and FALLBACK_MODEL failed
-# live in the same test run - Felix has no budget for a paid API, so more free
-# tiers beat a paid one.
-MODEL_CHAIN += [
+# Ordered chain of free models to try per task. Each entry is a dict rather
+# than a tuple - api_base/api_key exist alongside model/delay so a future
+# provider needing a custom endpoint (a self-hosted gateway, an OpenAI-
+# compatible third party) can be added as data, not a code change. None means
+# "use litellm's own native routing for this model," a real, intentional
+# value here, not an unset one - a provider that DOES need a custom endpoint
+# must not inherit None left behind by the entry before it, or vice versa.
+#
+# FreeLLMAPI (a self-hosted router in front of many free providers) sat as the
+# primary tier here 2026-08-30, briefly. Removed the same day - reverted to
+# direct providers only, no separate service to run or keep patched. Everything
+# here is genuinely free - Groq and Gemini both meter quota per-model, not per
+# account, so a second model on the same provider is a separate bucket, not
+# just another name for the same limit. Added 2026-08-26 after both
+# PRIMARY_MODEL and FALLBACK_MODEL failed live in the same test run - Felix has
+# no budget for a paid API, so more free tiers beat a paid one.
+MODEL_CHAIN = [
     {"model": PRIMARY_MODEL, "delay": 0, "api_base": None, "api_key": None},
     # Groq's per-minute token bucket is small enough that open-interpreter's
     # system prompt alone can trip it; that clears in well under a minute.
@@ -107,6 +83,40 @@ MODEL_CHAIN += [
     # tool-calling path the worker actually uses.
     {"model": "gemini/gemini-3.5-flash-lite", "delay": 0, "api_base": None, "api_key": None},
 ]
+
+# Two more free providers, added 2026-08-30 as backup tiers - direct API
+# integrations, not another service to run. Each is appended only if its key
+# is actually present, so shipping this causes zero behaviour change until
+# Felix adds the corresponding key to .env; litellm reads these env vars
+# itself (CEREBRAS_API_KEY, OPENROUTER_API_KEY), no api_base override needed
+# since both are litellm-native providers, same as Groq and Gemini above.
+if os.environ.get("CEREBRAS_API_KEY"):
+    # gpt-oss-120b - same model family already used via Groq (PRIMARY_MODEL),
+    # just a separate vendor's quota. Genuinely generous free tier as of
+    # 2026-08-30 (verified against Cerebras' own docs, not an aggregator site:
+    # 1M tokens/day, 14,400 requests/day per model, no expiration, 65k context
+    # on the free tier specifically - not the smaller cap some third-party
+    # summaries claimed). Placed early in the chain to match that headroom.
+    MODEL_CHAIN.insert(2, {
+        "model": "cerebras/gpt-oss-120b", "delay": 0,
+        "api_base": None, "api_key": None,
+    })
+
+if os.environ.get("OPENROUTER_API_KEY"):
+    # OpenRouter's free (":free" suffix) models are known to rotate without
+    # warning - confirmed live via https://openrouter.ai/api/v1/models on
+    # 2026-08-30, not assumed from a blog post (an initial pick,
+    # meta-llama/llama-3.3-70b-instruct:free, was already gone from that list
+    # by the time this was checked - exactly the failure mode being guarded
+    # against). If this model 404s later, re-check that endpoint for a
+    # current replacement rather than guessing a new name.
+    # Last in the chain deliberately: the free tier caps at 50 requests/day
+    # on an unfunded account, the tightest quota of anything here - genuinely
+    # last-resort, not a peer to Groq/Gemini/Cerebras.
+    MODEL_CHAIN.append({
+        "model": "openrouter/nvidia/nemotron-3-super-120b-a12b:free", "delay": 0,
+        "api_base": None, "api_key": None,
+    })
 
 # Last-resort escalation via Claude Code headless (`claude -p`), billed against
 # Felix's Pro subscription's 5h/weekly quota rather than a metered API. DISABLED

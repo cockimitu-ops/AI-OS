@@ -44,6 +44,15 @@ Felix has no budget for a paid API, so the whole chain stays free by constructio
 
 **One real dead end during this, worth remembering:** the obvious pick, `gemini/gemini-flash-lite-latest`, works fine as a raw API call but 400s specifically inside Open Interpreter's tool-calling flow (`Function call is missing a thought_signature` — a real constraint newer "thinking" Gemini models impose on function-call parts, not a config mistake). Always verify a new model through the *actual* code path (`_attempt()`), not just a raw curl — that's what caught this before it shipped silently broken. `gemini-3.5-flash-lite` was checked the same way and works cleanly.
 
+## Two more backup providers, direct this time (2026-08-30)
+
+Tried [FreeLLMAPI](https://freellmapi.co) as a self-hosted router the same day — worked, but Felix wanted more free capacity without a second service to run and patch, so it was removed a few hours later. Added **Cerebras** and **OpenRouter** directly instead — litellm-native providers, no custom endpoint, same pattern as Groq/Gemini above.
+
+Each is gated on its own env var (`CEREBRAS_API_KEY`, `OPENROUTER_API_KEY`) being present in `.env` — absent either one, `MODEL_CHAIN` is unchanged from before this section existed. Neither key is set yet as of this writing.
+
+- **Cerebras** (`cerebras/gpt-oss-120b`) — same model family already used via Groq, a separate vendor's quota. Genuinely generous free tier, verified against Cerebras' own docs rather than an aggregator site: 1M tokens/day, 14,400 requests/day per model, no expiration, 65k context on the free tier. Inserted early in the chain to match that headroom.
+- **OpenRouter** (`openrouter/nvidia/nemotron-3-super-120b-a12b:free`) — appended last, deliberately: the free tier caps at 50 requests/day on an unfunded account, the tightest quota of anything in this chain. **OpenRouter's free models rotate without warning** — confirmed live against `https://openrouter.ai/api/v1/models` on 2026-08-30; the first pick (`meta-llama/llama-3.3-70b-instruct:free`) was already gone from that list by the time it was checked, which is exactly why it was checked rather than assumed. If this one 404s later, re-query that endpoint for a current replacement rather than guessing a new name.
+
 ## Vault-aware system prompt (added 2026-08-26)
 
 The system prompt used to be a generic six-line string hardcoded in `aios_runner.py` — no awareness this worker runs inside a specific, structured vault. Every task that needed to find something (e.g. "check TemplateSales status") burned a `find`/`grep` round-trip rediscovering the folder layout from scratch, which costs more on the small free models in `MODEL_CHAIN` than on a large one.
@@ -67,16 +76,6 @@ Verified live: worker restarted, then a real `dispatch_task.py` call asked it to
 ## Why backups/ excludes itself
 
 `cloud_backup.py` tars the entire repo including this folder. Without an explicit exclude, every new archive would embed all previous archives inside itself, growing without bound. `EXCLUDE_RELATIVE_PATHS` in the script excludes its own `backups/` and `tasks/logs/` for exactly that reason — don't remove those excludes without addressing that.
-
-## FreeLLMAPI (added 2026-08-30)
-
-The hand-rolled 5-model Groq/Gemini chain kept running out of quota under real use. Replaced its *primary* tier with [FreeLLMAPI](https://freellmapi.co) — a self-hosted, OpenAI-compatible router in front of ~34 free-tier providers (Groq and Gemini among them, plus Mistral, Cerebras, OpenRouter, Z.ai/GLM, and more), with its own internal failover. Runs as `freellmapi.service` on this same box (`/opt/freellmapi`), listening on `:3001`.
-
-**The old direct Groq/Gemini chain is kept as the fallback tier, not deleted.** If freellmapi has no provider keys configured, or the process itself is down, `MODEL_CHAIN` falls through to the original 5 entries with zero behaviour change — verified live: `openai/auto` failed cleanly (no keys yet) and the task still completed via the direct chain.
-
-**One-time manual step, not yet done as of this writing:** open `http://100.64.2.100:3001` from a browser, create the account (first-run setup code was printed once to `journalctl -u freellmapi` at first boot), then add provider keys on the **Keys** page — same Groq/Gemini values already in `.env`, plus whichever other free providers are wanted. Nothing routes through freellmapi until this is done; the fallback chain covers the gap.
-
-Interim measure, per Felix: until there's budget for a metered GLM tier. GLM-4.5/4.7 are already in freellmapi's free catalog (via Z.ai and Cloudflare) if that's enough in the meantime.
 
 ## Agents and memory (2026-08-27)
 

@@ -213,31 +213,24 @@ class TestModelChain(TaskRunnerTestCase):
             self.assertIn("Escalation: disabled", self.log_of("t.md"))
 
 
-class TestFreellmapiIntegration(TaskRunnerTestCase):
-    """Added 2026-08-30: FreeLLMAPI (a self-hosted router in front of ~34 free
-    providers) became the primary tier, with the original direct Groq/Gemini
-    chain kept as fallback rather than replaced. MODEL_CHAIN is built at import
-    time from FREELLMAPI_BASE_URL/FREELLMAPI_API_KEY, so these tests set those
-    env vars before the fresh import setUp() already does."""
+class TestBackupProviders(TaskRunnerTestCase):
+    """Cerebras and OpenRouter, added 2026-08-30 as direct-API backup tiers
+    after FreeLLMAPI (a self-hosted router, tried the same day) was removed -
+    Felix wanted more free capacity without another service to run. Each is
+    gated on its own env var being present, so shipping this causes zero
+    behaviour change until the corresponding key is actually added."""
 
-    def setUp(self):
-        # Base setUp imports aios_runner fresh; do that AFTER setting the env
-        # vars each test needs, so MODEL_CHAIN is built under the right config.
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        os.environ["AIOS_WORKSPACE"] = self.tmp.name
-
-    def _import_with_freellmapi(self, base_url, api_key):
-        if base_url is None:
-            os.environ.pop("FREELLMAPI_BASE_URL", None)
+    def _import_with(self, cerebras_key, openrouter_key):
+        if cerebras_key is None:
+            os.environ.pop("CEREBRAS_API_KEY", None)
         else:
-            os.environ["FREELLMAPI_BASE_URL"] = base_url
-        if api_key is None:
-            os.environ.pop("FREELLMAPI_API_KEY", None)
+            os.environ["CEREBRAS_API_KEY"] = cerebras_key
+        if openrouter_key is None:
+            os.environ.pop("OPENROUTER_API_KEY", None)
         else:
-            os.environ["FREELLMAPI_API_KEY"] = api_key
-        self.addCleanup(os.environ.pop, "FREELLMAPI_BASE_URL", None)
-        self.addCleanup(os.environ.pop, "FREELLMAPI_API_KEY", None)
+            os.environ["OPENROUTER_API_KEY"] = openrouter_key
+        self.addCleanup(os.environ.pop, "CEREBRAS_API_KEY", None)
+        self.addCleanup(os.environ.pop, "OPENROUTER_API_KEY", None)
 
         self.fake = _install_stubs()
         sys.path.insert(0, HERE)
@@ -246,56 +239,52 @@ class TestFreellmapiIntegration(TaskRunnerTestCase):
         self.runner = importlib.import_module("aios_runner")
         self.addCleanup(lambda: sys.modules.pop("aios_runner", None))
 
-    def test_freellmapi_is_prepended_when_both_env_vars_are_set(self):
-        self._import_with_freellmapi("http://localhost:3001/v1", "freellmapi-testkey")
-        first = self.runner.MODEL_CHAIN[0]
-        self.assertEqual(first["model"], "openai/auto")
-        self.assertEqual(first["api_base"], "http://localhost:3001/v1")
-        self.assertEqual(first["api_key"], "freellmapi-testkey")
-        # the original direct chain must still be present, unmodified, after it
-        self.assertEqual(self.runner.MODEL_CHAIN[1]["model"], self.runner.PRIMARY_MODEL)
-        self.assertEqual(len(self.runner.MODEL_CHAIN), 6)  # 1 freellmapi + 5 direct
+    def test_neither_key_present_leaves_the_original_five_entries_untouched(self):
+        self._import_with(None, None)
+        models = [e["model"] for e in self.runner.MODEL_CHAIN]
+        self.assertEqual(models, [
+            self.runner.PRIMARY_MODEL, self.runner.PRIMARY_MODEL,
+            "groq/openai/gpt-oss-20b", self.runner.FALLBACK_MODEL,
+            "gemini/gemini-3.5-flash-lite",
+        ])
 
-    def test_falls_back_to_direct_chain_only_when_either_var_is_missing(self):
-        for base_url, api_key in [(None, "key"), ("http://x", None), (None, None)]:
-            with self.subTest(base_url=base_url, api_key=api_key):
-                self._import_with_freellmapi(base_url, api_key)
-                self.assertEqual(len(self.runner.MODEL_CHAIN), 5)
-                self.assertEqual(self.runner.MODEL_CHAIN[0]["model"],
-                                 self.runner.PRIMARY_MODEL)
+    def test_cerebras_is_inserted_early_when_its_key_is_present(self):
+        self._import_with("ck-test", None)
+        models = [e["model"] for e in self.runner.MODEL_CHAIN]
+        self.assertIn("cerebras/gpt-oss-120b", models)
+        # Early in the chain, not appended at the end - it has real headroom
+        # (14,400 req/day), it shouldn't wait behind every Groq/Gemini retry.
+        self.assertLess(models.index("cerebras/gpt-oss-120b"), 3)
 
-    def test_direct_chain_entries_have_no_custom_endpoint(self):
-        """A freellmapi call's api_base must never leak into a direct-provider
-        attempt - each direct entry explicitly carries api_base=None,
-        api_key=None rather than omitting the keys."""
-        self._import_with_freellmapi("http://localhost:3001/v1", "freellmapi-testkey")
-        for entry in self.runner.MODEL_CHAIN[1:]:
+    def test_openrouter_is_appended_last_when_its_key_is_present(self):
+        self._import_with(None, "or-test")
+        self.assertEqual(self.runner.MODEL_CHAIN[-1]["model"],
+                         "openrouter/nvidia/nemotron-3-super-120b-a12b:free")
+
+    def test_both_keys_present_adds_both_without_disturbing_the_original_five(self):
+        self._import_with("ck-test", "or-test")
+        models = [e["model"] for e in self.runner.MODEL_CHAIN]
+        self.assertEqual(len(models), 7)
+        self.assertIn("cerebras/gpt-oss-120b", models)
+        self.assertEqual(models[-1], "openrouter/nvidia/nemotron-3-super-120b-a12b:free")
+        # The original five must all still be present, in their original
+        # relative order, just with cerebras inserted among them.
+        original = [self.runner.PRIMARY_MODEL, self.runner.PRIMARY_MODEL,
+                   "groq/openai/gpt-oss-20b", self.runner.FALLBACK_MODEL,
+                   "gemini/gemini-3.5-flash-lite"]
+        remaining = [m for m in models if m != "cerebras/gpt-oss-120b"
+                    and m != "openrouter/nvidia/nemotron-3-super-120b-a12b:free"]
+        self.assertEqual(remaining, original)
+
+    def test_new_entries_use_litellms_native_routing_not_a_custom_endpoint(self):
+        """Unlike the removed FreeLLMAPI tier, these are litellm-native
+        providers - api_base/api_key on the entry itself must stay None,
+        since litellm reads CEREBRAS_API_KEY/OPENROUTER_API_KEY from the
+        environment directly."""
+        self._import_with("ck-test", "or-test")
+        for entry in self.runner.MODEL_CHAIN:
             self.assertIsNone(entry["api_base"], entry["model"])
             self.assertIsNone(entry["api_key"], entry["model"])
-
-    def test_attempt_sets_and_resets_api_base_between_calls(self):
-        """End to end through _attempt: the freellmapi entry's endpoint must be
-        gone from interpreter.llm by the time a direct-provider entry runs -
-        not just correct in the MODEL_CHAIN data, but actually applied."""
-        self._import_with_freellmapi("http://localhost:3001/v1", "freellmapi-testkey")
-        self.runner.time.sleep = lambda s: None  # skip the 20s cooldown entry
-        seen_api_bases = []
-
-        real_chat = self.fake.chat
-        def spy_chat(*a, **k):
-            seen_api_bases.append(self.fake.llm.api_base)
-            return []  # empty -> _attempt raises, loop moves to the next entry
-        self.fake.chat = spy_chat
-
-        self.queue("t.md", "do a thing")
-        try:
-            self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
-        except Exception:
-            pass  # every entry "fails" (empty output) by design of spy_chat above
-
-        self.assertEqual(seen_api_bases[0], "http://localhost:3001/v1")
-        self.assertTrue(all(b is None for b in seen_api_bases[1:]),
-                        seen_api_bases)
 
 
 class TestCrashGuard(TaskRunnerTestCase):
