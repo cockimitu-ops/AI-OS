@@ -164,6 +164,37 @@ def handoff_depth_marker(depth):
     return f"<!-- handoff_depth: {depth} -->\n"
 
 
+def summaries():
+    """[(canonical_name, one_line_scope)] for every agent on disk.
+
+    The scope line is each file's own `Purpose:` header - already written,
+    already human-maintained, and already required by the vault's naming
+    convention, so routing reads the same description a person would rather
+    than a second copy that can drift from it."""
+    out = []
+    for name in available():
+        path = os.path.join(AGENTS_DIR, f"{name}.md")
+        purpose = ""
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("Purpose:"):
+                        purpose = line[len("Purpose:"):].strip()
+                        break
+        except OSError:
+            pass
+        # Wikilinks are noise to a model that cannot resolve them, and the
+        # first sentence carries the scope; the rest is provenance.
+        purpose = re.sub(r"\[\[[^\]|]*\|([^\]]*)\]\]", r"\1", purpose)
+        purpose = re.sub(r"\[\[([^\]]*)\]\]", r"\1", purpose)
+        # First clause only: these headers trail into provenance ("Rescoped
+        # 2026-08-13 — was horror-specific, but...") that describes the
+        # file's history, not the role's scope.
+        purpose = purpose.split(" — ")[0].split(". ")[0].strip()
+        out.append((name, purpose))
+    return out
+
+
 def describe():
     """Human-readable roster, for --help and Telegram's /agents."""
     out = []

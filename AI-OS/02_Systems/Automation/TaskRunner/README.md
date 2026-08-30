@@ -142,6 +142,21 @@ The directive line itself is stripped from what actually reaches the log/Telegra
 
 Only wired into the two flows that are real today — Research_Analyst → Business_Development and Content_Producer → Business_Development, both now spelled out in the relevant agent's Executable Prompt block, not just the human-facing prose above it (Content_Producer's "hand to Business_Development" line existed since Sprint 024ish and had never once done anything). See [[04_Agents/README|04_Agents]] for the framing; this section is the implementation.
 
+## Orchestration: routing (added 2026-08-30)
+
+TaskRunner used to *dispatch* — you named an agent or got the base prompt. It now *orchestrates*: a task that names no agent gets one picked for it. `_route()` in `aios_runner.py` sends the request plus a catalog of agents and their scopes to one model, and runs the task under whichever specialist comes back.
+
+**Routing is a direct `litellm.completion()` call, deliberately not `_attempt()`.** Picking an agent is a classification; putting it through Open Interpreter would spin up the entire tool-calling loop — shell access included — to answer a question that needs one word. Direct is cheaper, faster, and structurally cannot execute a command.
+
+Three properties that make it safe to leave on by default:
+- **An explicit agent always wins.** Routing runs last, after the `<!-- agent: -->` directive and after a thread's inherited role, so it can never override a stated intent.
+- **Every failure path returns `None`**, which is precisely the pre-routing behaviour. A dead router degrades to "runs on the base prompt", never to a failed task.
+- **Only the first 3 `MODEL_CHAIN` entries are tried.** Routing must not cost more than the task it routes; if the chain is that degraded, running general-purpose is the right answer.
+
+The agent catalog is built from each agent file's own `Purpose:` header (`agents.summaries()`) rather than a second list — so routing reads the same description a person does, and the two can't drift apart.
+
+**One real trap, found live rather than by inspection:** the first version used `max_tokens=16` — plenty for one agent name — and routing returned an empty string *every single time*. `gpt-oss`, the whole top of `MODEL_CHAIN`, is a reasoning model: it spends its token budget thinking before emitting any content, so 16 tokens produced pure reasoning and no answer. The failure is completely silent, because an empty reply is indistinguishable from "no specialist fits" — routing would have sat there looking enabled and doing nothing. `ROUTING_MAX_TOKENS = 512`; verified the same prompt returns `Business_Development` at 512 and `''` at 16.
+
 ## Scheduled agents (added 2026-08-30)
 
 Agents ran only when Felix asked. They now also run on their own schedule: drop a Markdown file in `schedules/`, and `scripts/run_schedules.py` (systemd timer, every 10 min) enqueues it whenever it's due.

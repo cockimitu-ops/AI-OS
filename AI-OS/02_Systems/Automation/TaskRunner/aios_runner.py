@@ -327,6 +327,77 @@ def _attempt(model, instruction, system_prompt=None, history=None,
         raise RuntimeError(f"{model} produced no output (likely rate-limited)")
     return format_interpreter_output(raw_output)
 
+# Orchestration: pick the right agent when Felix didn't name one.
+#
+# Deliberately a direct litellm call rather than _attempt() - routing is a
+# classification, and putting it through Open Interpreter would spin up the
+# whole tool-calling loop (shell access included) to answer a question that
+# needs one word. Direct is cheaper, faster, and structurally can't run a
+# command.
+#
+# Only the first few MODEL_CHAIN entries are tried: routing must not become
+# more expensive than the task it routes, and if the chain is that degraded
+# the right answer is to run on the base prompt rather than keep spending.
+ROUTING_ENABLED = True
+ROUTING_TIMEOUT_S = 45
+ROUTING_MAX_MODELS = 3
+# Generous for a one-word answer, and it has to be. gpt-oss - the whole top
+# of MODEL_CHAIN - is a reasoning model: it spends tokens thinking before it
+# emits any content. Verified live 2026-08-30 that max_tokens=16 returns an
+# empty string every time (the entire budget goes to reasoning), while 512
+# returns "Business_Development" for the same prompt. The failure is silent -
+# an empty reply just looks like "no specialist fits" - so this is exactly
+# the kind of thing that would have quietly disabled routing forever.
+ROUTING_MAX_TOKENS = 512
+
+
+def _route(instruction):
+    """-> canonical agent name, or None to run on the base prompt.
+
+    Never raises and never blocks the task: every failure path returns None,
+    which is exactly the behaviour that existed before routing did."""
+    catalog = agents.summaries()
+    if not catalog:
+        return None
+
+    options = "\n".join(f"- {name}: {scope}" for name, scope in catalog)
+    system = (
+        "You route a task to exactly one specialist, or to none.\n\n"
+        f"Specialists:\n{options}\n\n"
+        "Reply with one agent name from that list, or NONE if no specialist "
+        "clearly fits. Reply with the name only - no explanation, no "
+        "punctuation. Prefer NONE over a weak guess: a general-purpose run "
+        "handles anything, a wrong specialist actively misleads."
+    )
+
+    for entry in MODEL_CHAIN[:ROUTING_MAX_MODELS]:
+        try:
+            with _time_limit(ROUTING_TIMEOUT_S):
+                response = litellm.completion(
+                    model=entry["model"],
+                    messages=[{"role": "system", "content": system},
+                              {"role": "user", "content": instruction[:2000]}],
+                    api_base=entry["api_base"], api_key=entry["api_key"],
+                    max_tokens=ROUTING_MAX_TOKENS, temperature=0,
+                )
+            reply = (response.choices[0].message.content or "").strip()
+        except Exception as e:
+            print(f"[!] routing via {entry['model']} failed ({type(e).__name__}: {e})")
+            continue
+
+        if not reply or reply.strip().upper().startswith("NONE"):
+            return None
+        # Take the first bare token: small models like to add a period, a
+        # bullet, or a "The answer is" preamble no instruction prevents.
+        for token in re.findall(r"[A-Za-z0-9_\-]+", reply):
+            resolved = agents.resolve(token)
+            if resolved:
+                return resolved
+        return None
+
+    return None
+
+
 def _attempt_claude(instruction):
     """Last-resort escalation - see CLAUDE_MODEL comment above. Mirrors
     AI-Bridge's askClaude() directly instead of shelling out through
@@ -437,6 +508,14 @@ def _run_task(task_path, filename):
     if not agent_name and thread_id:
         agent_name = agents.resolve(memory.last_agent(thread_id) or "")
 
+    # Nothing named an agent and no thread implied one, so orchestrate: pick
+    # the specialist this task actually belongs to. Runs last, so it can
+    # never override an explicit choice or a thread's established role.
+    routed = False
+    if not agent_name and instruction and ROUTING_ENABLED:
+        agent_name = _route(instruction)
+        routed = bool(agent_name)
+
     system_prompt = _system_prompt_for(agent_name)
     history = memory.as_messages(thread_id) if thread_id else None
 
@@ -449,7 +528,7 @@ def _run_task(task_path, filename):
 
     bits = []
     if agent_name:
-        bits.append(f"agent: {agent_name}")
+        bits.append(f"agent: {agent_name}{' (routed)' if routed else ''}")
     if handoff_depth:
         bits.append(f"handoff depth: {handoff_depth}")
     if history:

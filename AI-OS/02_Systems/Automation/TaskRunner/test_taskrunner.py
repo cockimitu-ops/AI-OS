@@ -39,9 +39,17 @@ def _install_stubs():
     sys.modules["dotenv"] = dotenv
 
     # aios_runner sets litellm.request_timeout at import to override litellm's
-    # 100-minute default (see the comment there). A bare module object is
-    # enough - the assignment just has to land somewhere.
-    sys.modules["litellm"] = types.ModuleType("litellm")
+    # 100-minute default, and calls litellm.completion() directly for agent
+    # routing. Default the latter to raising: "routing unavailable" is the
+    # correct quiet default for every test that isn't about routing, and it
+    # exercises the guarantee that a dead router never blocks a task.
+    litellm = types.ModuleType("litellm")
+
+    def _no_routing(*a, **k):
+        raise RuntimeError("routing not stubbed for this test")
+
+    litellm.completion = _no_routing
+    sys.modules["litellm"] = litellm
 
     fake = types.SimpleNamespace(
         auto_run=False, safe_mode=None, offline=None, verbose=None,
@@ -616,6 +624,136 @@ class TestAttemptTimeout(TaskRunnerTestCase):
         self.assertIn("All models failed", log)
         self.assertIn("AttemptTimeout", log)
         self.assert_quarantined("t.md")
+
+
+class TestOrchestration(TaskRunnerTestCase):
+    """Routing (added 2026-08-30): a task that names no agent gets one
+    picked for it, so TaskRunner orchestrates rather than only dispatching.
+    Routing is a direct litellm call, not _attempt() - a classification does
+    not need Open Interpreter's tool-calling loop, and structurally cannot
+    run a shell command this way."""
+
+    def setUp(self):
+        super().setUp()
+        import litellm
+        self.litellm = litellm
+        self.addCleanup(setattr, litellm, "completion", litellm.completion)
+
+    def _reply(self, text):
+        """Minimal stand-in for litellm's response object shape."""
+        def completion(*a, **k):
+            msg = types.SimpleNamespace(content=text)
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)])
+        self.litellm.completion = completion
+
+    def test_routes_a_task_to_the_named_agent(self):
+        self._reply("Business_Development")
+        self.assertEqual(self.runner._route("should we raise prices?"),
+                         "Business_Development")
+
+    def test_none_means_run_on_the_base_prompt(self):
+        self._reply("NONE")
+        self.assertIsNone(self.runner._route("what is 2+2"))
+
+    def test_a_chatty_model_reply_still_resolves(self):
+        """Small models add periods, bullets and preambles no instruction
+        reliably prevents, so the parse takes the first resolvable token."""
+        for reply in ("Business_Development.", "- Business_Development",
+                      "The answer is Business_Development", "@bizdev"):
+            self._reply(reply)
+            self.assertEqual(self.runner._route("pricing question"),
+                             "Business_Development", reply)
+
+    def test_routing_asks_for_enough_tokens_for_a_reasoning_model(self):
+        """Live 2026-08-30: max_tokens=16 made every routing call return an
+        empty string, because gpt-oss (the top of MODEL_CHAIN) spends its
+        budget on reasoning tokens before emitting content. An empty reply
+        is indistinguishable from "no specialist fits", so routing was
+        silently dead. Guards the budget, not the prompt."""
+        seen = {}
+
+        def completion(*a, **k):
+            seen.update(k)
+            msg = types.SimpleNamespace(content="Business_Development")
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)])
+
+        self.litellm.completion = completion
+        self.runner._route("pricing question")
+        self.assertGreaterEqual(seen.get("max_tokens", 0), 256)
+
+    def test_an_empty_reply_falls_back_instead_of_erroring(self):
+        self._reply("")
+        self.assertIsNone(self.runner._route("something"))
+
+    def test_an_unrecognisable_reply_falls_back_rather_than_guessing(self):
+        self._reply("Marketing_Department")
+        self.assertIsNone(self.runner._route("something"))
+
+    def test_a_dead_router_never_blocks_the_task(self):
+        """The guarantee that makes this safe to enable by default: every
+        routing failure path returns None, which is exactly the behaviour
+        that existed before routing did."""
+        def boom(*a, **k):
+            raise RuntimeError("all providers down")
+        self.litellm.completion = boom
+        self.assertIsNone(self.runner._route("anything"))
+
+    def test_an_explicit_agent_is_never_overridden_by_routing(self):
+        """Routing runs last precisely so a stated intent always wins."""
+        self._reply("Vault_Architect")
+        seen = {}
+
+        def spy(model, instruction, system_prompt=None, history=None, **kw):
+            seen["prompt"] = system_prompt
+            return "ok"
+
+        self.runner._attempt = spy
+        self.queue("t.md", "<!-- agent: Research_Analyst -->\ndo a thing")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        self.assertIn("Research Analyst", seen["prompt"])
+        self.assertNotIn("Vault Architect", seen["prompt"])
+
+    def test_an_unrouted_task_runs_on_the_base_prompt_exactly_as_before(self):
+        self._reply("NONE")
+        seen = {}
+
+        def spy(model, instruction, system_prompt=None, history=None, **kw):
+            seen["prompt"] = system_prompt
+            return "ok"
+
+        self.runner._attempt = spy
+        self.queue("t.md", "do a thing")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        self.assertEqual(seen["prompt"], self.runner.BASE_SYSTEM_PROMPT)
+
+    def test_routing_applies_the_chosen_agents_prompt(self):
+        self._reply("Vault_Architect")
+        seen = {}
+
+        def spy(model, instruction, system_prompt=None, history=None, **kw):
+            seen["prompt"] = system_prompt
+            return "ok"
+
+        self.runner._attempt = spy
+        self.queue("t.md", "check the vault for status drift")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        self.assertIn("Vault Architect", seen["prompt"])
+
+    def test_the_routing_catalog_covers_every_agent_with_a_real_scope_line(self):
+        """Routing quality depends entirely on these descriptions, and they
+        come from each file's own Purpose: header - so an agent whose header
+        drifted into uselessness would silently degrade routing."""
+        summaries = self.agentsmod.summaries()
+        self.assertEqual(len(summaries), len(self.agentsmod.available()))
+        for name, scope in summaries:
+            self.assertTrue(scope, f"{name} has no usable scope line")
+            self.assertNotIn("[[", scope, f"{name} scope leaks a wikilink")
+            self.assertLess(len(scope), 200, f"{name} scope is not one line")
+
+    @property
+    def agentsmod(self):
+        import agents
+        return agents
 
 
 class TestNotifyDirective(TaskRunnerTestCase):

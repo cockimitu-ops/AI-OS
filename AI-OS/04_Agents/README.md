@@ -30,6 +30,16 @@ Every agent ran in isolation per task until now — Research_Analyst could finis
 
 Wired into the two flows that are actually real right now: Research_Analyst → Business_Development when a finding has pricing/market implications beyond the current order, and Content_Producer → Business_Development for exactly the "pricing/packaging is out of scope" line that already existed here as prose and did nothing on its own. Vault_Architect and Business_Development don't emit handoffs — nothing in either's real scope hands off to another agent today, and this wasn't wired speculatively for a flow that doesn't exist yet.
 
+## Routing and schedules (added 2026-08-30)
+
+Two things changed about *when* an agent runs, on top of the handoffs above:
+
+**You no longer have to name one.** A task with no `--agent`/`@alias` is routed: TaskRunner asks one model which specialist fits, using each agent's own `Purpose:` line as the catalog, and runs it under that role. An explicitly named agent always wins — routing only fills a gap. If routing fails for any reason, the task runs on the base prompt exactly as it did before, so this can't turn a working task into a broken one.
+
+**Agents run on a schedule.** A Markdown file in `TaskRunner/schedules/` with a `<!-- schedule: weekly mon 08:00 -->` directive queues that task automatically, and its result is pushed to Telegram rather than left in a log. The first live one checks which TemplateSales products are still unpublished — chosen because Business_Development's own prompt names distribution, not inventory, as the bottleneck.
+
+Implementation detail and the traps found while building it are in [[02_Systems/Automation/TaskRunner/README|TaskRunner's README]]; this is the framing.
+
 ## Contents
 - [[Vault_Architect]] — maintains the AI OS itself
 - [[Content_Producer]] — runs story production for SocialMediaContent
