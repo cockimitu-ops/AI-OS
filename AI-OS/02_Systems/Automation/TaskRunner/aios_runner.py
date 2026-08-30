@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import agents
 import memory
+import proposals
 
 # Disable telemetry and interactive terminal hooks before importing interpreter
 os.environ["INTERPRETER_ANONYMOUS_TELEMETRY"] = "false"
@@ -436,6 +437,12 @@ def _attempt_claude(instruction):
 # land in tasks/logs/ and be read by no one, which is not automation so much
 # as a very slow way of writing files.
 NOTIFY_RE = re.compile(r"^\s*<!--\s*notify\s*-->\s*\n?", re.I)
+
+# A task carrying this writes its output into the proposals store instead of
+# notifying, and is the only thing a self-directed agent run is allowed to
+# produce. The gate is that there is no code path from here into
+# tasks/inbox/ - see proposals.py.
+PROPOSE_RE = re.compile(r"^\s*<!--\s*propose\s*-->\s*\n?", re.I)
 NOTIFIER = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "scripts",
     "send_telegram_notification.py")
@@ -444,6 +451,14 @@ NOTIFIER = os.path.join(
 def _parse_notify(raw):
     """-> (should_notify, remaining_text)."""
     m = NOTIFY_RE.match(raw or "")
+    if not m:
+        return False, raw or ""
+    return True, raw[m.end():]
+
+
+def _parse_propose(raw):
+    """-> (is_proposal_run, remaining_text)."""
+    m = PROPOSE_RE.match(raw or "")
     if not m:
         return False, raw or ""
     return True, raw[m.end():]
@@ -502,7 +517,8 @@ def _run_task(task_path, filename):
     thread_id, raw = memory.parse_directive(raw)
     agent_name, raw = agents.parse_directive(raw)
     handoff_depth, raw = agents.parse_handoff_depth(raw)
-    notify, instruction = _parse_notify(raw)
+    notify, raw = _parse_notify(raw)
+    propose, instruction = _parse_propose(raw)
 
     # A bare follow-up stays in whatever role the conversation was already in.
     if not agent_name and thread_id:
@@ -591,9 +607,18 @@ def _run_task(task_path, filename):
     if thread_id and not output.startswith("ERROR"):
         memory.save_turn(thread_id, instruction, output, agent_name)
 
+    # A proposal run's output goes into the store and nowhere else - not to
+    # Telegram (Felix sees it at 20:00, in one place, not as it trickles in)
+    # and never into tasks/inbox/. Failures are deliberately not stored: a
+    # list of "all models failed" is not a proposal, and padding the evening
+    # review with them would train him to skim it.
+    if propose and not output.startswith("ERROR"):
+        stored = proposals.add(agent_name, proposals.parse(output))
+        print(f"[~] Stored {stored} proposal(s) from {agent_name or 'worker'}")
+
     _write_log(filename, output)
     os.rename(task_path, os.path.join(COMPLETED, filename))
-    if notify:
+    if notify and not propose:
         label = f" [{agent_name.replace('_', ' ')}]" if agent_name else ""
         _push_to_telegram(f"Scheduled task{label}:\n\n{output}")
     print(f"[✓] Done: {filename}")

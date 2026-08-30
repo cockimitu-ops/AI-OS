@@ -20,6 +20,7 @@ second under /usr/bin/python3.
 """
 import importlib
 import importlib.util
+import json
 import os
 import sys
 import tempfile
@@ -624,6 +625,150 @@ class TestAttemptTimeout(TaskRunnerTestCase):
         self.assertIn("All models failed", log)
         self.assertIn("AttemptTimeout", log)
         self.assert_quarantined("t.md")
+
+
+class TestProposals(TaskRunnerTestCase):
+    """The propose/approve gate (added 2026-08-30). Agents plan unattended
+    all day and change nothing; Felix picks at 20:00 and only then does
+    anything execute. The gate is structural - proposals.py has no path into
+    tasks/inbox/ - rather than a prompt asking the model to behave."""
+
+    def setUp(self):
+        super().setUp()
+        import proposals
+        self.p = proposals
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        for attr, name in (("PROPOSALS_DIR", ""), ("PENDING_PATH", "pending.json"),
+                           ("REVIEW_PATH", "review.json"), ("ARCHIVE_PATH", "archive.jsonl")):
+            self.addCleanup(setattr, self.p, attr, getattr(self.p, attr))
+        self.p.PROPOSALS_DIR = tmp.name
+        self.p.PENDING_PATH = os.path.join(tmp.name, "pending.json")
+        self.p.REVIEW_PATH = os.path.join(tmp.name, "review.json")
+        self.p.ARCHIVE_PATH = os.path.join(tmp.name, "archive.jsonl")
+
+    def test_parses_marked_lines_into_separate_proposals(self):
+        out = ("Here is my thinking.\n"
+               "PROPOSAL: Publish the Pricing Teardown Gumroad listing.\n"
+               "PROPOSAL: Post the Moat Blueprint to r/SaaS.\n")
+        self.assertEqual(self.p.parse(out), [
+            "Publish the Pricing Teardown Gumroad listing.",
+            "Post the Moat Blueprint to r/SaaS.",
+        ])
+
+    def test_unmarked_output_becomes_one_proposal_rather_than_being_lost(self):
+        """A model that forgets the marker should cost Felix one oddly long
+        line, not a whole day of an agent's thinking."""
+        self.assertEqual(self.p.parse("Just publish the thing already"),
+                         ["Just publish the thing already"])
+
+    def test_empty_output_produces_nothing(self):
+        self.assertEqual(self.p.parse(""), [])
+        self.assertEqual(self.p.parse(None), [])
+
+    def test_add_then_open_review_moves_and_clears_pending(self):
+        self.p.add("Business_Development", ["do X"])
+        self.p.add("Vault_Architect", ["do Y"])
+        review = self.p.open_review()
+        self.assertEqual([r["text"] for r in review], ["do X", "do Y"])
+        self.assertEqual(self.p.load(self.p.PENDING_PATH), [])
+
+    def test_declined_proposals_do_not_reappear_tomorrow(self):
+        """Without clearing, a declined item would be re-asked every night
+        until Felix approved it out of attrition rather than agreement."""
+        self.p.add("Business_Development", ["do X"])
+        review = self.p.open_review()
+        _, rejected, _ = self.p.resolve("none", review)
+        self.p.close_review([], rejected)
+        self.assertEqual(self.p.load_review(), [])
+        self.assertEqual(self.p.load(self.p.PENDING_PATH), [])
+
+    def test_resolve_picks_the_selected_numbers(self):
+        review = [{"agent": "a", "text": "one"}, {"agent": "b", "text": "two"},
+                  {"agent": "c", "text": "three"}]
+        chosen, rejected, error = self.p.resolve("1 3", review)
+        self.assertIsNone(error)
+        self.assertEqual([c["text"] for c in chosen], ["one", "three"])
+        self.assertEqual([r["text"] for r in rejected], ["two"])
+
+    def test_resolve_handles_all_and_none(self):
+        review = [{"agent": "a", "text": "one"}, {"agent": "b", "text": "two"}]
+        chosen, rejected, _ = self.p.resolve("all", review)
+        self.assertEqual(len(chosen), 2)
+        self.assertEqual(rejected, [])
+        chosen, rejected, _ = self.p.resolve("none", review)
+        self.assertEqual(chosen, [])
+        self.assertEqual(len(rejected), 2)
+
+    def test_out_of_range_is_an_error_not_a_partial_approval(self):
+        """Approving '1 5' of 4 must not quietly do three-quarters of it."""
+        review = [{"agent": "a", "text": "one"}]
+        chosen, _, error = self.p.resolve("1 5", review)
+        self.assertEqual(chosen, [])
+        self.assertIn("no proposal 5", error)
+
+    def test_unparseable_selection_explains_itself(self):
+        chosen, _, error = self.p.resolve("maybe the first one?",
+                                          [{"agent": "a", "text": "one"}])
+        self.assertEqual(chosen, [])
+        self.assertIn("approve", error.lower())
+
+    def test_approving_an_empty_review_says_so(self):
+        _, _, error = self.p.resolve("all", [])
+        self.assertIn("nothing waiting", error.lower())
+
+    def test_close_review_archives_both_decisions(self):
+        review = [{"agent": "a", "text": "one"}, {"agent": "b", "text": "two"}]
+        chosen, rejected, _ = self.p.resolve("1", review)
+        self.p.close_review(chosen, rejected)
+        with open(self.p.ARCHIVE_PATH, encoding="utf-8") as f:
+            rows = [json.loads(line) for line in f if line.strip()]
+        self.assertEqual({r["decision"] for r in rows}, {"approved", "declined"})
+
+    def test_review_message_numbers_items_and_names_the_agent(self):
+        text = self.p.format_review([{"agent": "Business_Development", "text": "ship it"}])
+        self.assertIn("1. [Business Development] ship it", text)
+        self.assertIn("approve", text.lower())
+
+    def test_an_empty_review_reads_as_a_real_answer_not_a_failure(self):
+        self.assertIn("Nothing proposed", self.p.format_review([]))
+
+    # --- the gate itself -----------------------------------------------------
+
+    def test_a_propose_run_stores_and_queues_nothing(self):
+        """The whole trust boundary in one test: an unattended proposing
+        agent changes nothing Felix has not approved."""
+        self.runner._attempt = lambda m, i, sp=None, history=None, **kw: (
+            "PROPOSAL: Publish the Pricing Teardown listing.")
+        before = set(os.listdir(self.runner.INBOX))
+        self.queue("t.md", "<!-- agent: Business_Development -->\n<!-- propose -->\nplan")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+
+        pending = self.p.load(self.p.PENDING_PATH)
+        self.assertEqual([x["text"] for x in pending],
+                         ["Publish the Pricing Teardown listing."])
+        self.assertEqual(pending[0]["agent"], "Business_Development")
+        self.assertEqual(set(os.listdir(self.runner.INBOX)) - before - {"t.md"}, set())
+
+    def test_a_propose_run_does_not_notify(self):
+        """Felix sees proposals once, at 20:00, not as they trickle in."""
+        pushed = []
+        self.runner._push_to_telegram = pushed.append
+        self.runner._attempt = lambda m, i, sp=None, history=None, **kw: "PROPOSAL: x"
+        self.queue("t.md", "<!-- notify -->\n<!-- propose -->\nplan")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        self.assertEqual(pushed, [])
+
+    def test_a_failed_propose_run_stores_nothing(self):
+        """'All models failed' is not a proposal, and padding the evening
+        review with them would train Felix to skim it."""
+        def dead(model, instr, sp=None, history=None, **kwargs):
+            raise RuntimeError("quota exhausted")
+        self.runner._attempt = dead
+        self.runner.time.sleep = lambda s: None
+        self.queue("t.md", "<!-- propose -->\nplan")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        self.assertEqual(self.p.load(self.p.PENDING_PATH), [])
 
 
 class TestOrchestration(TaskRunnerTestCase):
@@ -1412,7 +1557,8 @@ class TestSchedules(unittest.TestCase):
         text = ("<!-- agent: Business_Development -->\n"
                 "<!-- schedule: daily 07:30 -->\n"
                 "Check what is still unpublished.")
-        cadence, agent, instruction = self.rs.parse_schedule_file(text)
+        cadence, agent, propose, instruction = self.rs.parse_schedule_file(text)
+        self.assertFalse(propose)
         self.assertEqual(cadence, "daily 07:30")
         self.assertEqual(agent, "Business_Development")
         self.assertEqual(instruction, "Check what is still unpublished.")
@@ -1423,7 +1569,7 @@ class TestSchedules(unittest.TestCase):
         text = ("<!-- agent: Research_Analyst -->\n"
                 "<!-- schedule: hourly -->\n"
                 "Do the thing.")
-        _, _, instruction = self.rs.parse_schedule_file(text)
+        _, _, _, instruction = self.rs.parse_schedule_file(text)
         self.assertNotIn("<!--", instruction)
 
     def test_daily_resolves_to_todays_occurrence_once_it_has_passed(self):
@@ -1470,6 +1616,59 @@ class TestSchedules(unittest.TestCase):
         one per missed occurrence."""
         last = self._at(2026, 8, 27, 7, 35).isoformat()
         self.assertTrue(self.rs.is_due("daily 07:30", last, self._at(2026, 8, 30, 9)))
+
+    def test_two_schedules_due_in_the_same_second_do_not_collide(self):
+        """Observed live 2026-08-30: daily_revenue_plan and daily_system_plan
+        both produced task_sched_20260830_164116.md, the second overwrote the
+        first, and state.json recorded both as run - so the lost one would
+        not retry until the next day, having never executed. This runner
+        walks every schedule in one pass, so same-second firing is the normal
+        case, not an edge case."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.addCleanup(setattr, self.rs, "INBOX", self.rs.INBOX)
+        self.rs.INBOX = tmp.name
+        first = self.rs.enqueue("Business_Development", "do X", "daily_revenue_plan.md")
+        second = self.rs.enqueue("Vault_Architect", "do Y", "daily_system_plan.md")
+        self.assertNotEqual(first, second)
+        self.assertEqual(len(os.listdir(tmp.name)), 2)
+
+    def test_propose_is_lifted_into_the_header_where_the_worker_can_see_it(self):
+        """Found live 2026-08-30: <!-- propose --> was left in the body,
+        after the "(Scheduled task from ...)" line. The worker anchors its
+        directive parsing to the start of what remains, so it never matched -
+        both daily planners ran as ordinary tasks and stored no proposals,
+        silently. Asserts the directive order the worker actually requires."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.addCleanup(setattr, self.rs, "INBOX", self.rs.INBOX)
+        self.rs.INBOX = tmp.name
+        name = self.rs.enqueue("Business_Development", "plan revenue",
+                               "daily_revenue_plan.md", propose=True)
+        with open(os.path.join(tmp.name, name), encoding="utf-8") as f:
+            body = f.read()
+        head = body.split("(Scheduled task from")[0]
+        self.assertIn("<!-- agent: Business_Development -->", head)
+        self.assertIn("<!-- notify -->", head)
+        self.assertIn("<!-- propose -->", head)
+
+    def test_a_non_proposing_schedule_gets_no_propose_directive(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.addCleanup(setattr, self.rs, "INBOX", self.rs.INBOX)
+        self.rs.INBOX = tmp.name
+        name = self.rs.enqueue("Business_Development", "just report",
+                               "templatesales_publish_check.md")
+        with open(os.path.join(tmp.name, name), encoding="utf-8") as f:
+            self.assertNotIn("<!-- propose -->", f.read())
+
+    def test_enqueued_filename_names_its_schedule_for_debuggability(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.addCleanup(setattr, self.rs, "INBOX", self.rs.INBOX)
+        self.rs.INBOX = tmp.name
+        name = self.rs.enqueue("Vault_Architect", "do Y", "daily_system_plan.md")
+        self.assertIn("daily_system_plan", name)
 
     def test_corrupt_state_re_runs_rather_than_never_running_again(self):
         self.assertTrue(self.rs.is_due("daily 07:30", "not-a-timestamp",

@@ -1,8 +1,8 @@
 # 04_Agents
 
 Purpose: Definitions of scoped AI roles — their allowed capabilities, required context, and where their authority ends.
-Last Updated: 2026-08-11
-Status: Active — 4 agents defined
+Last Updated: 2026-08-30
+Status: Active — 4 agents defined; routed, scheduled, and self-directing behind a daily approval gate as of 2026-08-30
 Related Documents: [[Glossary]], [[03_Capabilities/README|03_Capabilities]], [[Future_Integration]]
 
 ---
@@ -39,6 +39,16 @@ Two things changed about *when* an agent runs, on top of the handoffs above:
 **Agents run on a schedule.** A Markdown file in `TaskRunner/schedules/` with a `<!-- schedule: weekly mon 08:00 -->` directive queues that task automatically, and its result is pushed to Telegram rather than left in a log. The first live one checks which TemplateSales products are still unpublished — chosen because Business_Development's own prompt names distribution, not inventory, as the bottleneck.
 
 Implementation detail and the traps found while building it are in [[02_Systems/Automation/TaskRunner/README|TaskRunner's README]]; this is the framing.
+
+## Self-direction, gated (added 2026-08-30)
+
+The agents now plan on their own every day — and change nothing on their own. Two daily planners (Business_Development at 18:30, Vault_Architect at 18:45) write **proposals**; at 20:00 Felix gets one Telegram message listing them and replies `approve 1 3`. Only then does anything become a real task.
+
+That gate is structural rather than a rule in a prompt: a proposing run can write to the proposals store and has no code path into the task queue at all. It is the same reasoning [[02_Systems/Automation/TaskRunner/External_Access_Plan|External_Access_Plan.md]] applied to sending email — a confirmation outside the model's own judgement, because an instruction to "ask first" is exactly what a small model under load drops.
+
+Both planners are pointed at revenue, deliberately: Business_Development at the fact that three finished TemplateSales products have earned nothing because none are published, and Vault_Architect at whether a system change helps Felix earn sooner rather than whether it makes the vault tidier.
+
+**This is also how agents schedule themselves.** Vault_Architect may propose new or changed files in `TaskRunner/schedules/`, so the system can change its own cadence — through the 20:00 review like anything else. Self-scheduling and the approval gate are one mechanism, not two.
 
 ## Contents
 - [[Vault_Architect]] — maintains the AI OS itself

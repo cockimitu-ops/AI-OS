@@ -2,7 +2,7 @@
 
 Purpose: The live automation loop that lets Felix hand AI-OS a task from anywhere (shell or Telegram) and get it executed headlessly on the server. Moved here from the repo root on 2026-08-26 so the vault's own README reflects what's actually running, instead of the automation living as loose scripts beside it.
 Last Updated: 2026-08-30
-Status: Active — two continuous services plus four timers on the server; agents run on schedule and can hand off to each other as of 2026-08-30
+Status: Active — two continuous services plus five timers; agents plan unattended daily and act only on Felix's 20:00 approval as of 2026-08-30
 Related Documents: [[02_Systems/Automation/README|Automation]], [[Future_Integration]]
 
 ---
@@ -18,6 +18,8 @@ Related Documents: [[02_Systems/Automation/README|Automation]], [[Future_Integra
 | `scripts/cloud_backup.py` | Tars the whole repo (`/home/nost/AI-OS`), uploads to Google Drive via `rclone`, prunes local archives older than 7 days. |
 | `scripts/health_check.py` | The supervision layer (added 2026-08-30) — see below. |
 | `scripts/run_schedules.py` | Enqueues due recurring agent tasks from `schedules/` (added 2026-08-30) — see below. |
+| `proposals.py` | The propose/approve gate: what agents want to change, waiting on Felix (added 2026-08-30) — see below. |
+| `scripts/evening_review.py` | 20:00 sharp — sends the day's proposals to Telegram and asks which to take. |
 | `scripts/morning_brief.py` | Daily good-morning digest over Telegram (added 2026-08-30) — see below. |
 | `scripts/send_telegram_notification.py` | One-off outbound Telegram message, reusing the same bot token — for things other than task results. Wired into `cloud_backup.py`'s failure path and `health_check.py`'s alerts. Stdlib-only on purpose: systemd runs both under `/usr/bin/python3`, which has no `python-dotenv`, so a notifier importing it would have failed exactly when it was needed. |
 | `agents.py` | Agent selection. Resolves aliases (`@research` → `Research_Analyst`), loads each agent's Executable Prompt block from [[04_Agents/README|04_Agents]]. Shared by all three entry points so they can't disagree about what an alias means. |
@@ -31,13 +33,14 @@ Related Documents: [[02_Systems/Automation/README|Automation]], [[Future_Integra
 
 ## How it's wired to the server
 
-Six systemd units, all under `/etc/systemd/system/`, `WorkingDirectory` and `ExecStart` pointing into this folder — two continuous services and four timers:
+Seven systemd units, all under `/etc/systemd/system/`, `WorkingDirectory` and `ExecStart` pointing into this folder — two continuous services and five timers:
 
 - `aios-worker.service` — runs `aios_runner.py`, `Restart=always`
 - `aios-telegram.service` — runs `telegram_bridge.py`, `Restart=always`, starts `After=aios-worker.service`
 - `aios-backup.service` (`Type=oneshot`) + `aios-backup.timer` — runs `scripts/cloud_backup.py` daily at 03:00
 - `aios-healthcheck.service` (`Type=oneshot`) + `aios-healthcheck.timer` — runs `scripts/health_check.py` every 15 minutes
 - `aios-scheduler.service` (`Type=oneshot`) + `aios-scheduler.timer` — runs `scripts/run_schedules.py` every 10 minutes
+- `aios-review.service` (`Type=oneshot`) + `aios-review.timer` — runs `scripts/evening_review.py` at 20:00 Europe/Berlin, `AccuracySec=1s` (systemd defaults to a 1-minute window and would otherwise batch the wakeup; Felix asked for 20:00 sharp)
 - `aios-morning.service` (`Type=oneshot`) + `aios-morning.timer` — runs `scripts/morning_brief.py` daily at 07:00 Europe/Berlin (the timer unit's `OnCalendar` carries the timezone directly, so it tracks DST — the server itself stays on UTC)
 
 All of them load secrets via `EnvironmentFile=/home/nost/AI-OS/.env` — the `.env` file itself stays at the repo root (gitignored), not inside the vault, since it's a secret rather than vault content.
@@ -156,6 +159,37 @@ Three properties that make it safe to leave on by default:
 The agent catalog is built from each agent file's own `Purpose:` header (`agents.summaries()`) rather than a second list — so routing reads the same description a person does, and the two can't drift apart.
 
 **One real trap, found live rather than by inspection:** the first version used `max_tokens=16` — plenty for one agent name — and routing returned an empty string *every single time*. `gpt-oss`, the whole top of `MODEL_CHAIN`, is a reasoning model: it spends its token budget thinking before emitting any content, so 16 tokens produced pure reasoning and no answer. The failure is completely silent, because an empty reply is indistinguishable from "no specialist fits" — routing would have sat there looking enabled and doing nothing. `ROUTING_MAX_TOKENS = 512`; verified the same prompt returns `Business_Development` at 512 and `''` at 16.
+
+## Self-directed agents: propose, then approve (added 2026-08-30)
+
+The agents plan on their own every day and change nothing. At 20:00 Europe/Berlin Felix gets one Telegram message listing what they came up with, replies `approve 1 3`, and only the approved items become real tasks.
+
+**The gate is structural, not a prompt.** A proposing run writes to `proposals/pending.json` and has no code path into `tasks/inbox/` at all. The only place a proposal becomes an executable task is the `approve` handler in `telegram_bridge.py`. `External_Access_Plan.md` already made this argument for Gmail and it holds identically here: a confirmation that lives outside the model's own judgement beats a system prompt asking it to check first, because free models under load demonstrably skip instructions they were given.
+
+```
+schedules/*.md  --(propose)-->  proposals/pending.json     [agents: unattended, changes nothing]
+                                        |
+                                    20:00 sharp
+                                        v
+                                 proposals/review.json  --> Telegram
+                                        |
+                                 Felix: approve 1 3          [the only crossing]
+                                        v
+                                  tasks/inbox/  ------------> worker executes
+```
+
+Two daily planners ship with it, both pointed at revenue because that is the actual goal: `daily_revenue_plan.md` (Business_Development, 18:30 — TemplateSales has three built products earning nothing and the bottleneck is publishing) and `daily_system_plan.md` (Vault_Architect, 18:45 — judged by whether a change helps Felix earn sooner, not by tidiness).
+
+**This is also how agents schedule themselves.** `daily_system_plan` is explicitly allowed to propose new or changed files in `schedules/`, so the system can evolve its own cadence — but every such change still lands in the 20:00 review first. Self-scheduling and the approval gate are the same mechanism, which is why there is no separate one. It works: the very first live run proposed changing its own `daily_revenue_plan.md`.
+
+Behaviours worth knowing:
+- **Proposals are numbered against a snapshot.** `open_review()` copies pending into `review.json` and clears pending, so `approve 2` means entry 2 of what Felix is looking at, even if a planner runs while he is deciding.
+- **Declined is a decision, not a deferral.** A declined proposal is archived, not returned to pending — otherwise it would be re-asked every night until approved out of attrition rather than agreement.
+- **Out-of-range is an error, not a partial approval.** `approve 1 5` of four proposals does nothing and says so, rather than doing three-quarters of what was asked.
+- **Failed runs store nothing.** "All models failed" is not a proposal, and padding the review with them trains Felix to skim it.
+- **A missing `PROPOSAL:` marker costs one long line, not the day's thinking** — unmarked output becomes a single proposal rather than being dropped.
+
+Telegram: `proposals` (or `review`) re-shows the current review, `approve ...` decides it.
 
 ## Scheduled agents (added 2026-08-30)
 

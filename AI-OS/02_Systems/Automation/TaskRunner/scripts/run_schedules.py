@@ -43,6 +43,7 @@ INBOX = os.path.join(
 TZ = ZoneInfo("Europe/Berlin")
 
 SCHEDULE_RE = re.compile(r"^\s*<!--\s*schedule:\s*(.+?)\s*-->\s*\n?", re.I | re.M)
+PROPOSE_RE = re.compile(r"^\s*<!--\s*propose\s*-->\s*\n?", re.I | re.M)
 
 DAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
@@ -50,19 +51,28 @@ DAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 # --- parsing: pure -----------------------------------------------------------
 
 def parse_schedule_file(text):
-    """-> (cadence_string_or_None, agent_or_None, instruction).
+    """-> (cadence_or_None, agent_or_None, propose_bool, instruction).
 
-    Both directives are stripped from the instruction: what reaches the
-    worker should be the task itself, and the agent directive is re-emitted
-    by the enqueue step rather than passed through, so a malformed schedule
-    can't smuggle a second one into the task body."""
+    Every directive is stripped here and re-emitted by enqueue() rather than
+    passed through in the body. That ordering is load-bearing: the worker
+    parses its directives anchored to the start of the task, so one left
+    sitting after the "(Scheduled task from ...)" line is invisible to it.
+    Found live 2026-08-30 - <!-- propose --> was being passed through in the
+    body, so both daily planners ran as ordinary tasks and stored nothing."""
     cadence = None
     m = SCHEDULE_RE.search(text or "")
     if m:
         cadence = m.group(1).strip()
         text = text[:m.start()] + text[m.end():]
+
+    propose = False
+    m = PROPOSE_RE.search(text or "")
+    if m:
+        propose = True
+        text = text[:m.start()] + text[m.end():]
+
     agent, instruction = agents.parse_directive(text)
-    return cadence, agent, instruction
+    return cadence, agent, propose, instruction
 
 
 def next_due_after(cadence, reference):
@@ -146,21 +156,34 @@ def save_state(state):
     os.replace(tmp, STATE_PATH)
 
 
-def enqueue(agent, instruction, source_name):
+def enqueue(agent, instruction, source_name, propose=False):
     """Same atomic .part-then-rename the other producers use - the worker
     globs tasks/inbox/*.md every two seconds and would happily pick up a
     half-written file."""
     os.makedirs(INBOX, exist_ok=True)
+    # The schedule's own name is part of the filename, not just a timestamp.
+    # Second-resolution stamps collide the moment two schedules come due in
+    # the same tick - which is the normal case here, not an edge case: this
+    # runner walks every schedule in one pass. Observed live 2026-08-30,
+    # daily_revenue_plan and daily_system_plan both produced
+    # "task_sched_20260830_164116.md" and the second silently overwrote the
+    # first, while state.json recorded both as having run - so the lost one
+    # would not retry until the next day, having never executed at all.
     stamp = time.strftime("%Y%m%d_%H%M%S")
-    filename = f"task_sched_{stamp}.md"
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", os.path.splitext(source_name)[0])[:40]
+    filename = f"task_sched_{stamp}_{safe}.md"
     path = os.path.join(INBOX, filename)
     tmp = f"{path}.part"
     # <!-- notify --> so the result reaches Telegram: nothing is polling for
     # a scheduled task's log the way dispatch_task.py/telegram_bridge.py do
     # for an interactive one, so without it the answer would go unread.
+    # Directive order matters: the worker reads agent, then notify, then
+    # propose, each anchored to the start of what remains.
     header = agents.directive(agent) if agent else ""
-    body = (f"{header}<!-- notify -->\n"
-            f"(Scheduled task from {source_name}.)\n\n{instruction}\n")
+    header += "<!-- notify -->\n"
+    if propose:
+        header += "<!-- propose -->\n"
+    body = f"{header}(Scheduled task from {source_name}.)\n\n{instruction}\n"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(body)
     os.replace(tmp, path)
@@ -182,7 +205,7 @@ def run(now=None):
     for name in files:
         try:
             with open(os.path.join(SCHEDULES_DIR, name), encoding="utf-8") as f:
-                cadence, agent, instruction = parse_schedule_file(f.read())
+                cadence, agent, propose, instruction = parse_schedule_file(f.read())
         except OSError as e:
             results.append((name, f"unreadable: {e}"))
             continue
@@ -200,7 +223,7 @@ def run(now=None):
             results.append((name, "not due"))
             continue
 
-        queued = enqueue(agent, instruction, name)
+        queued = enqueue(agent, instruction, name, propose=propose)
         state[name] = now.isoformat()
         results.append((name, f"queued as {queued}"))
 

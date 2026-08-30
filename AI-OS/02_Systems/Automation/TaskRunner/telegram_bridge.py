@@ -23,6 +23,7 @@ LOGS = os.path.join(AIOS_DIR, "tasks", "logs")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import agents
 import memory
+import proposals
 
 
 def _split_agent_prefix(text):
@@ -100,6 +101,48 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _md_lite_to_telegram_html("🧠 **Memory**\n\n" + memory.summary(thread_id)),
             parse_mode=ParseMode.HTML,
         )
+        return
+
+    # The approval half of the propose/approve gate. This is the only place
+    # a proposal becomes a task the worker will execute - the agents that
+    # wrote them have no path into tasks/inbox/ at all (see proposals.py).
+    if command == "proposals" or command == "review":
+        await update.message.reply_text(
+            _md_lite_to_telegram_html(proposals.format_review(proposals.load_review())),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if command.startswith("approve"):
+        selection = instruction.strip().lstrip("/")[len("approve"):]
+        review = proposals.load_review()
+        chosen, rejected, error = proposals.resolve(selection, review)
+        if error:
+            await update.message.reply_text(
+                _md_lite_to_telegram_html(error), parse_mode=ParseMode.HTML)
+            return
+
+        queued = []
+        for item in chosen:
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            name = f"task_approved_{stamp}.md"
+            path = os.path.join(INBOX, name)
+            body = (agents.directive(item["agent"])
+                    if agents.resolve(item.get("agent", "")) else "")
+            body += ("<!-- notify -->\n"
+                     "(Approved by Felix from tonight's review.)\n\n"
+                     f"{item['text']}\n")
+            tmp = f"{path}.part"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(body)
+            os.replace(tmp, path)
+            queued.append(name)
+
+        proposals.close_review(chosen, rejected)
+        summary = (f"✅ {len(chosen)} approved and queued, {len(rejected)} declined."
+                   if chosen else f"Nothing approved - {len(rejected)} declined.")
+        await update.message.reply_text(
+            _md_lite_to_telegram_html(summary), parse_mode=ParseMode.HTML)
         return
 
     if command in ("agents", "agent"):
