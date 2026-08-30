@@ -16,7 +16,8 @@ Related Documents: [[02_Systems/Automation/README|Automation]], [[Future_Integra
 | `dispatch_task.py` | CLI entry point. Drops a task file into `tasks/inbox/`, then polls for the matching log (up to 180s) and prints the result. `--no-wait` to fire and return immediately. |
 | `telegram_bridge.py` | Same idea, over Telegram — only replies to the one allowed user ID, edits its own status message once the worker's log appears. |
 | `scripts/cloud_backup.py` | Tars the whole repo (`/home/nost/AI-OS`), uploads to Google Drive via `rclone`, prunes local archives older than 7 days. |
-| `scripts/send_telegram_notification.py` | One-off outbound Telegram message, reusing the same bot token — for things other than task results. Now actually wired into `cloud_backup.py`'s failure path. Stdlib-only on purpose: systemd runs `cloud_backup.py` under `/usr/bin/python3`, which has no `python-dotenv`, so a notifier importing it would have failed exactly when it was needed. |
+| `scripts/health_check.py` | The supervision layer (added 2026-08-30) — see below. |
+| `scripts/send_telegram_notification.py` | One-off outbound Telegram message, reusing the same bot token — for things other than task results. Wired into `cloud_backup.py`'s failure path and `health_check.py`'s alerts. Stdlib-only on purpose: systemd runs both under `/usr/bin/python3`, which has no `python-dotenv`, so a notifier importing it would have failed exactly when it was needed. |
 | `agents.py` | Agent selection. Resolves aliases (`@research` → `Research_Analyst`), loads each agent's Executable Prompt block from [[04_Agents/README|04_Agents]]. Shared by all three entry points so they can't disagree about what an alias means. |
 | `memory.py` | Bounded per-conversation memory. Stores the *conversation* (your message + the worker's prose answer), never Open Interpreter's raw transcript — replaying old command output into a small free model degrades it silently. |
 | `vault_write.py` | Structured write-back. Creates notes and appends Analytics rows, with an allowlist of destinations, correct vault headers, and no code path that overwrites. |
@@ -33,6 +34,7 @@ Three systemd services, all under `/etc/systemd/system/`, `WorkingDirectory` and
 - `aios-worker.service` — runs `aios_runner.py`, `Restart=always`
 - `aios-telegram.service` — runs `telegram_bridge.py`, `Restart=always`, starts `After=aios-worker.service`
 - `aios-backup.service` (`Type=oneshot`) + `aios-backup.timer` — runs `scripts/cloud_backup.py` daily at 03:00
+- `aios-healthcheck.service` (`Type=oneshot`) + `aios-healthcheck.timer` — runs `scripts/health_check.py` every 15 minutes
 
 All three load secrets via `EnvironmentFile=/home/nost/AI-OS/.env` — the `.env` file itself stays at the repo root (gitignored), not inside the vault, since it's a secret rather than vault content.
 
@@ -76,6 +78,20 @@ Verified live: worker restarted, then a real `dispatch_task.py` call asked it to
 **Failures were invisible.** This runs unattended from a timer at 03:00, and a failure only reached the journal. `aios-backup.service` was in fact sitting in a `failed` state — the 19:40 run on 2026-08-26 predated the `rclone config`, so the upload had never actually succeeded from systemd. Nothing said so anywhere. `cloud_backup.py` now calls `send_telegram_notification.py` on upload failure. The stale failed state was cleared and the `gdrive:` remote confirmed reachable.
 
 **One open item:** the timer's first *scheduled* run since rclone was configured has not happened yet. The remote is confirmed working and the script path is confirmed working; the systemd-triggered combination of the two is the piece still unproven.
+
+## Supervision layer (added 2026-08-30)
+
+`health_check.py`, on a 15-minute timer, checks the three things the 2026-08-30 LAN outage showed nobody was watching:
+
+- **Services up** — `systemctl is-active` on `aios-worker.service` and `aios-telegram.service`.
+- **Network has a real default route** — parses `ip route show default` for the interface(s) actually carrying it, checks `eno1` (the server's real uplink) specifically has an IPv4 address, and confirms an actual socket connect to `1.1.1.1:443` succeeds. This exists because of what really happened that day: `eno1` silently lost its IPv4, traffic kept working because `wlo1` (a phone-based bridge Felix built for a different purpose) picked up the default route, and nothing said so anywhere — the failure was invisible until someone went looking. The check specifically flags a default route that exists but isn't via `eno1`, not just "no route at all", so this exact failure mode gets caught even though connectivity technically still works.
+- **Last backup succeeded** — `systemctl is-failed aios-backup.service` (did the last run fail) *and* the newest archive's age in `backups/` (is a run even still happening — `is-failed` alone would miss a disabled or removed timer, since it only reflects whatever the last run that actually happened returned).
+
+Alerts go out over the same `send_telegram_notification.py` used by backup failures. State (which checks are currently failing, when each was last alerted) persists to `health/state.json` — gitignored runtime data, same pattern as `tasks/` and `backups/*.tar.gz`. This is what keeps it from being spam: a new failure alerts immediately, an unresolved one reminds again only every 6 hours, and a recovery alerts once. A check that has never failed stays completely silent.
+
+The gather/evaluate split (`gather_*` does subprocess/socket/filesystem calls, `evaluate_*` and `decide_alerts` are pure functions on their output) exists so the actual pass/fail and alert-timing logic is unit tested (`TestHealthCheck` in `test_taskrunner.py`) without mocking subprocess or touching the network.
+
+**Deliberately not implemented:** an alert on the health-check service itself dying — the same blind spot `aios-backup.service` had before this existed. `Restart=` doesn't apply to a `Type=oneshot` unit, but the timer's `Persistent=true` means a missed run (server was off) catches up on the next boot. If this needs a stronger guarantee later, a `OnFailure=` unit on `aios-healthcheck.service` is the standard way, not built here since two silent-failure classes were already fixed today and a third can wait for Felix to actually want it.
 
 ## Why backups/ excludes itself
 

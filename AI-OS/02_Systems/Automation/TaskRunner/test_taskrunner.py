@@ -825,5 +825,125 @@ class TestBackupExclusions(unittest.TestCase):
         self.assertFalse(self._kept("a/b/__pycache__/x.pyc"))
 
 
+class TestHealthCheck(unittest.TestCase):
+    """The supervision layer (added 2026-08-30): services up, network has a
+    real default route, last backup succeeded. These tests exercise only the
+    pure evaluate_*/decide_alerts functions - no subprocess, no socket, no
+    real filesystem - so they say nothing about whether systemctl/ip actually
+    behave as assumed on the box, only that the logic is right once given
+    their output."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "health_check", os.path.join(HERE, "scripts", "health_check.py"))
+        cls.hc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.hc)
+
+    def test_service_active_is_ok(self):
+        ok, detail = self.hc.evaluate_service("active")
+        self.assertTrue(ok)
+        self.assertEqual(detail, "active")
+
+    def test_service_anything_else_is_not_ok(self):
+        for status in ("inactive", "failed", "activating", "<error: boom>"):
+            ok, _ = self.hc.evaluate_service(status)
+            self.assertFalse(ok, f"{status!r} should not be considered ok")
+
+    def test_network_healthy_when_default_route_is_via_the_lan_and_internet_reachable(self):
+        route = "default via 192.168.178.1 dev eno1 proto dhcp src 192.168.178.69"
+        addr = "inet 192.168.178.69/24 metric 100 brd 192.168.178.255 scope global dynamic eno1"
+        ok, detail = self.hc.evaluate_network(route, addr, "eno1", True)
+        self.assertTrue(ok)
+        self.assertIn("eno1", detail)
+
+    def test_network_flags_no_default_route_at_all(self):
+        ok, detail = self.hc.evaluate_network("", "inet 10.0.0.5/24 ... eno1", "eno1", True)
+        self.assertFalse(ok)
+        self.assertIn("no default route", detail)
+
+    def test_network_flags_silent_failover_to_a_different_interface(self):
+        """The actual 2026-08-30 bug: eno1 loses its route/address and traffic
+        moves to wlo1 (the phone bridge) without anyone noticing."""
+        route = "default via 192.168.1.1 dev wlo1 proto dhcp"
+        ok, detail = self.hc.evaluate_network(route, "", "eno1", True)
+        self.assertFalse(ok)
+        self.assertIn("wlo1", detail)
+        self.assertIn("eno1", detail)
+
+    def test_network_flags_missing_ipv4_on_the_lan_interface_even_if_a_route_exists(self):
+        route = "default via 192.168.178.1 dev eno1 proto dhcp"
+        ok, detail = self.hc.evaluate_network(route, "", "eno1", True)
+        self.assertFalse(ok)
+        self.assertIn("no IPv4", detail)
+
+    def test_network_flags_unreachable_internet_even_with_a_good_route_and_address(self):
+        route = "default via 192.168.178.1 dev eno1 proto dhcp"
+        addr = "inet 192.168.178.69/24 ... eno1"
+        ok, detail = self.hc.evaluate_network(route, addr, "eno1", False)
+        self.assertFalse(ok)
+        self.assertIn("internet", detail)
+
+    def test_backup_ok_when_recent_and_not_failed(self):
+        ok, _ = self.hc.evaluate_backup("inactive", 11.8, 30)
+        self.assertTrue(ok)
+
+    def test_backup_flags_a_failed_last_run(self):
+        ok, detail = self.hc.evaluate_backup("failed", 1.0, 30)
+        self.assertFalse(ok)
+        self.assertIn("failed", detail)
+
+    def test_backup_flags_a_stale_archive_even_if_the_last_run_reported_success(self):
+        """Catches a disabled/removed timer, which is_failed alone would miss -
+        is-failed only reflects the *last run that happened*, not whether one
+        has happened recently."""
+        ok, detail = self.hc.evaluate_backup("inactive", 48.0, 30)
+        self.assertFalse(ok)
+        self.assertIn("48.0h", detail)
+
+    def test_backup_flags_no_archive_found(self):
+        ok, detail = self.hc.evaluate_backup("inactive", None, 30)
+        self.assertFalse(ok)
+        self.assertIn("no backup archive", detail)
+
+    def test_decide_alerts_new_failure_fires_immediately(self):
+        messages, new_failing = self.hc.decide_alerts(
+            {}, {"x": (False, "broken")}, now=1000.0)
+        self.assertEqual(len(messages), 1)
+        self.assertIn("DOWN: x", messages[0])
+        self.assertEqual(new_failing["x"]["since"], 1000.0)
+        self.assertEqual(new_failing["x"]["last_alert"], 1000.0)
+
+    def test_decide_alerts_recovery_fires_once_and_clears_state(self):
+        prev = {"x": {"since": 100.0, "last_alert": 100.0}}
+        messages, new_failing = self.hc.decide_alerts(
+            prev, {"x": (True, "fine")}, now=200.0)
+        self.assertEqual(len(messages), 1)
+        self.assertIn("RECOVERED: x", messages[0])
+        self.assertNotIn("x", new_failing)
+
+    def test_decide_alerts_suppresses_repeat_alerts_inside_the_realert_window(self):
+        prev = {"x": {"since": 0.0, "last_alert": 100.0}}
+        messages, new_failing = self.hc.decide_alerts(
+            prev, {"x": (False, "still broken")}, now=200.0, realert_seconds=3600)
+        self.assertEqual(messages, [])
+        self.assertEqual(new_failing["x"], prev["x"])  # untouched, no new alert timestamp
+
+    def test_decide_alerts_reminds_again_once_the_realert_window_has_passed(self):
+        prev = {"x": {"since": 0.0, "last_alert": 100.0}}
+        messages, new_failing = self.hc.decide_alerts(
+            prev, {"x": (False, "still broken")}, now=4000.0, realert_seconds=3600)
+        self.assertEqual(len(messages), 1)
+        self.assertIn("STILL DOWN: x", messages[0])
+        self.assertEqual(new_failing["x"]["since"], 0.0)  # original onset preserved
+        self.assertEqual(new_failing["x"]["last_alert"], 4000.0)
+
+    def test_decide_alerts_ok_check_that_was_never_failing_is_silent(self):
+        messages, new_failing = self.hc.decide_alerts(
+            {}, {"x": (True, "fine")}, now=200.0)
+        self.assertEqual(messages, [])
+        self.assertEqual(new_failing, {})
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
