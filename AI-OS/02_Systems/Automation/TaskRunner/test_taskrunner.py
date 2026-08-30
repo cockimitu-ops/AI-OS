@@ -38,6 +38,11 @@ def _install_stubs():
     dotenv.load_dotenv = lambda *a, **k: None
     sys.modules["dotenv"] = dotenv
 
+    # aios_runner sets litellm.request_timeout at import to override litellm's
+    # 100-minute default (see the comment there). A bare module object is
+    # enough - the assignment just has to land somewhere.
+    sys.modules["litellm"] = types.ModuleType("litellm")
+
     fake = types.SimpleNamespace(
         auto_run=False, safe_mode=None, offline=None, verbose=None,
         disable_telemetry=None, system_message=None, messages=[],
@@ -534,6 +539,83 @@ class TestAgentSelection(TaskRunnerTestCase):
         self.assertEqual(seen["instruction"], "Check drift.")
         self.assertIn("Vault Architect", seen["prompt"])
         self.assertNotIn("<!-- agent:", seen["instruction"])
+
+
+class TestAttemptTimeout(TaskRunnerTestCase):
+    """Bug, observed live 2026-08-30: one task occupied the worker from
+    14:32:31 to 16:14:01 - 101 minutes - on a single groq attempt, because
+    litellm's request_timeout defaults to 6000.0 seconds (100 minutes) and
+    nothing else bounded the call. The queue is strictly serial, so every
+    task behind it waited, and `systemctl is-active` reported the worker
+    healthy throughout. Nothing anywhere said a word."""
+
+    def test_litellm_default_hundred_minute_timeout_is_overridden(self):
+        """The specific regression: if this ever reverts to litellm's own
+        default, a single stuck call silently wedges the queue again."""
+        self.assertLessEqual(self.runner.LLM_REQUEST_TIMEOUT_S, 300)
+        import litellm
+        self.assertEqual(litellm.request_timeout, self.runner.LLM_REQUEST_TIMEOUT_S)
+
+    def test_time_limit_lets_a_fast_call_through_untouched(self):
+        with self.runner._time_limit(5):
+            result = "finished"
+        self.assertEqual(result, "finished")
+
+    def test_time_limit_raises_once_the_ceiling_is_passed(self):
+        with self.assertRaises(self.runner.AttemptTimeout):
+            with self.runner._time_limit(1):
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    pass
+
+    def test_time_limit_clears_its_alarm_so_it_cannot_fire_later(self):
+        """A leaked alarm would fire during an unrelated later task - the
+        classic way this kind of fix creates a worse bug than it fixes."""
+        with self.runner._time_limit(1):
+            pass
+        time.sleep(1.5)  # would have fired by now if the alarm leaked
+
+    def test_a_hanging_model_is_just_a_failed_model_and_the_chain_continues(self):
+        self.runner.ATTEMPT_TIMEOUT_S = 1
+        self.runner.MODEL_CHAIN = [
+            self.runner._chain_entry("hangs/forever"),
+            self.runner._chain_entry("works/fine"),
+        ]
+        calls = []
+
+        def attempt(model, instr, sp=None, history=None, **kwargs):
+            calls.append(model)
+            if model == "hangs/forever":
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    pass
+            return f"answered by {model}"
+
+        self.runner._attempt = attempt
+        self.queue("t.md", "do a thing")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        self.assertEqual(calls, ["hangs/forever", "works/fine"])
+        self.assertEqual(self.log_of("t.md"), "answered by works/fine")
+
+    def test_every_model_hanging_still_writes_a_diagnostic_log(self):
+        """A task where nothing answers must still complete and be readable -
+        the failure mode being fixed is the queue silently stalling, so a
+        timeout that produced no log would only move the silence."""
+        self.runner.ATTEMPT_TIMEOUT_S = 1
+        self.runner.MODEL_CHAIN = [self.runner._chain_entry("hangs/forever")]
+
+        def hang(model, instr, sp=None, history=None, **kwargs):
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                pass
+
+        self.runner._attempt = hang
+        self.queue("t.md", "do a thing")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        log = self.log_of("t.md")
+        self.assertIn("All models failed", log)
+        self.assertIn("AttemptTimeout", log)
+        self.assert_quarantined("t.md")
 
 
 class TestAgentHandoff(TaskRunnerTestCase):
@@ -1036,6 +1118,30 @@ class TestHealthCheck(unittest.TestCase):
         ok, detail = self.hc.evaluate_backup("inactive", None, 30)
         self.assertFalse(ok)
         self.assertIn("no backup archive", detail)
+
+    def test_queue_empty_is_healthy(self):
+        ok, detail = self.hc.evaluate_queue(None)
+        self.assertTrue(ok)
+        self.assertIn("empty", detail)
+
+    def test_queue_draining_normally_is_healthy(self):
+        ok, _ = self.hc.evaluate_queue(3.0, 45)
+        self.assertTrue(ok)
+
+    def test_queue_flags_a_task_stuck_past_the_worst_legitimate_case(self):
+        """The 2026-08-30 wedge: 101 minutes on one task while every
+        service-level check still reported OK."""
+        ok, detail = self.hc.evaluate_queue(101.0, 45)
+        self.assertFalse(ok)
+        self.assertIn("101min", detail)
+        self.assertIn("wedged", detail)
+
+    def test_queue_does_not_page_on_a_merely_slow_task(self):
+        """A task can legitimately burn MODEL_CHAIN x ATTEMPT_TIMEOUT_S
+        (~35min) before answering - alerting on that would train Felix to
+        ignore the alerts, which is worse than not having them."""
+        ok, _ = self.hc.evaluate_queue(35.0, 45)
+        self.assertTrue(ok)
 
     def test_decide_alerts_new_failure_fires_immediately(self):
         messages, new_failing = self.hc.decide_alerts(

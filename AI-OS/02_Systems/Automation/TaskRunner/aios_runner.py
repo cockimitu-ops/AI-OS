@@ -1,6 +1,9 @@
 import os
+import contextlib
 import glob
+import signal
 import subprocess
+import threading
 import time
 import sys
 from dotenv import load_dotenv
@@ -28,6 +31,56 @@ from interpreter.terminal_interface.utils.display_markdown_message import (
 )
 
 _respond_module.display_markdown_message = _display_markdown_message
+
+# Bound how long a single model call may block.
+#
+# litellm ships with request_timeout = 6000.0 - one hundred minutes. That is
+# not a theoretical concern: on 2026-08-30 a single task sat in the worker
+# from 14:32:31 to 16:14:01 (101 minutes) on one groq attempt, and because
+# the queue is strictly serial, every task behind it waited too. `systemctl
+# is-active` still reported the worker healthy the entire time, so nothing
+# anywhere said a thing.
+#
+# Two independent ceilings, because they fail differently:
+#   - LLM_REQUEST_TIMEOUT_S bounds each HTTP request (litellm's own knob).
+#   - ATTEMPT_TIMEOUT_S bounds one model's *entire* tool-calling loop, which
+#     is many HTTP requests, via SIGALRM - so a model that keeps making fast
+#     calls forever is still capped and the chain moves on to the next entry.
+import litellm
+
+LLM_REQUEST_TIMEOUT_S = 120
+ATTEMPT_TIMEOUT_S = 300
+litellm.request_timeout = LLM_REQUEST_TIMEOUT_S
+
+
+class AttemptTimeout(Exception):
+    """Raised when one MODEL_CHAIN entry exceeds ATTEMPT_TIMEOUT_S. Caught by
+    the same handler as any other attempt failure, so a hung model is just a
+    failed model and the chain continues."""
+
+
+@contextlib.contextmanager
+def _time_limit(seconds):
+    """Hard wall-clock ceiling around a blocking call.
+
+    SIGALRM only works on the main thread; the worker loop is the main thread,
+    but the test suite and any future caller might not be. Degrading to "no
+    extra ceiling" there is correct - LLM_REQUEST_TIMEOUT_S still applies, and
+    silently doing nothing beats raising an unrelated ValueError."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def _fire(signum, frame):
+        raise AttemptTimeout(f"exceeded {seconds}s wall clock")
+
+    previous = signal.signal(signal.SIGALRM, _fire)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
 
 # 1. Load Environment Variables
 load_dotenv("/home/nost/AI-OS/.env")
@@ -376,10 +429,11 @@ def _run_task(task_path, filename):
         if entry["delay"]:
             time.sleep(entry["delay"])
         try:
-            output = _attempt(model, instruction, system_prompt, history,
-                              api_base=entry["api_base"], api_key=entry["api_key"],
-                              context_window=entry["context_window"],
-                              max_tokens=entry["max_tokens"])
+            with _time_limit(ATTEMPT_TIMEOUT_S):
+                output = _attempt(model, instruction, system_prompt, history,
+                                  api_base=entry["api_base"], api_key=entry["api_key"],
+                                  context_window=entry["context_window"],
+                                  max_tokens=entry["max_tokens"])
             break
         except Exception as e:
             print(f"[!] {model} failed ({e})")

@@ -33,6 +33,13 @@ LAN_INTERFACE = "eno1"  # the interface that silently lost its IPv4 on 2026-08-3
 MAX_BACKUP_AGE_HOURS = 30  # timer runs daily at 03:00 - 30h leaves a few hours' grace
 REALERT_SECONDS = 6 * 3600  # don't re-notify an unresolved problem more than every 6h
 
+INBOX = os.path.join(TASK_RUNNER_DIR, "tasks", "inbox")
+# Worst legitimate case per task is roughly MODEL_CHAIN length x
+# ATTEMPT_TIMEOUT_S (7 x 300s = 35min), so this has to sit above that or it
+# would page on a task that is merely slow. Anything past it means the queue
+# is genuinely not draining.
+MAX_QUEUE_AGE_MINUTES = 45
+
 
 # --- gathering: subprocess/socket/filesystem, no logic ---------------------
 
@@ -66,6 +73,22 @@ def gather_internet_ok(host="1.1.1.1", port=443, timeout=5):
         return True
     except OSError:
         return False
+
+
+def gather_oldest_queued_task_age_minutes():
+    """Age of the oldest thing sitting in tasks/inbox/, or None if empty.
+
+    This is the only check here that can see a *wedged* worker. `systemctl
+    is-active` reports a hung process as healthy - on 2026-08-30 the worker
+    sat on one task for 101 minutes and every check above still said OK."""
+    try:
+        queued = [f for f in os.listdir(INBOX) if f.endswith(".md")]
+    except OSError:
+        return None
+    if not queued:
+        return None
+    oldest = min(os.path.getmtime(os.path.join(INBOX, f)) for f in queued)
+    return (time.time() - oldest) / 60
 
 
 def gather_newest_backup_age_hours():
@@ -108,6 +131,19 @@ def evaluate_network(route_output, iface_addr_output, iface, internet_ok):
     if problems:
         return False, "; ".join(problems)
     return True, f"default route via {iface}, internet reachable"
+
+
+def evaluate_queue(age_minutes, max_age_minutes=MAX_QUEUE_AGE_MINUTES):
+    """An empty queue and a fast-draining queue are both fine; only a task
+    that has been sitting far past the worst legitimate case is a problem."""
+    if age_minutes is None:
+        return True, "queue empty"
+    if age_minutes > max_age_minutes:
+        return False, (
+            f"oldest queued task is {age_minutes:.0f}min old "
+            f"(>{max_age_minutes}min) - worker may be wedged"
+        )
+    return True, f"oldest queued task {age_minutes:.0f}min old"
 
 
 def evaluate_backup(is_failed_output, age_hours, max_age_hours=MAX_BACKUP_AGE_HOURS):
@@ -187,6 +223,7 @@ def run_checks():
     current["backup"] = evaluate_backup(
         gather_backup_is_failed(), gather_newest_backup_age_hours(),
     )
+    current["queue"] = evaluate_queue(gather_oldest_queued_task_age_minutes())
     return current
 
 
