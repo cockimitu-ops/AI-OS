@@ -124,7 +124,7 @@ const SCREEN_LOADERS = {
   "screen-money": loadMoneyBoard,
   "screen-dmarc": loadDmarcLeads,
   "screen-flips": loadFlipLog,
-  "screen-downloads": loadDownloads,
+  "screen-downloads": loadFilesScreen,
 };
 
 function loadActiveScreen() {
@@ -351,6 +351,110 @@ async function downloadFile(url, name, btn) {
   }
 }
 
+// --- uploads ---------------------------------------------------------------
+
+// Files go up as raw bytes with the name in the query string, one request
+// each - NOT multipart/form-data. Nothing but this client will ever call
+// the endpoint, so there is no interop reason for the server to hand-roll a
+// multipart parser (Python removed the stdlib one in 3.13).
+async function uploadOne(file) {
+  const res = await fetch(`/api/upload?name=${encodeURIComponent(file.name)}`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${getToken()}`,
+      "Content-Type": "application/octet-stream",
+    },
+    body: file,
+  });
+  if (res.status === 401) {
+    showTokenModal();
+    throw new Error("unauthorized");
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+async function sendSelectedUploads() {
+  const input = document.getElementById("upload-input");
+  const statusEl = document.getElementById("upload-status");
+  const btn = document.getElementById("upload-send");
+  const files = Array.from(input.files || []);
+  if (!files.length) return;
+  btn.disabled = true;
+  let done = 0;
+  const failed = [];
+  for (const file of files) {
+    // Counted one by one rather than after the whole batch: a phone on a
+    // slow tailnet takes real seconds per file, and a button that just sits
+    // there reads as broken rather than busy.
+    statusEl.textContent = `Lade hoch (${done + 1}/${files.length}): ${file.name}`;
+    statusEl.style.color = "";
+    try {
+      await uploadOne(file);
+      done += 1;
+    } catch (err) {
+      failed.push(`${file.name}: ${err.message}`);
+    }
+  }
+  input.value = "";
+  updateUploadButton();
+  statusEl.textContent = failed.length
+    ? `${done} hochgeladen, ${failed.length} fehlgeschlagen - ${failed.join("; ")}`
+    : `${done} Datei(en) hochgeladen.`;
+  statusEl.style.color = failed.length ? "var(--bad)" : "var(--good)";
+  loadUploads();
+}
+
+function updateUploadButton() {
+  const input = document.getElementById("upload-input");
+  document.getElementById("upload-send").disabled = !(input.files || []).length;
+}
+
+async function loadUploads() {
+  const listEl = document.getElementById("uploads-list");
+  try {
+    const data = await api("/api/uploads");
+    if (!data.files.length) {
+      listEl.innerHTML = `<div class="empty-state">Noch nichts hochgeladen.</div>`;
+      return;
+    }
+    // No download link, unlike the generated files below: these are his own
+    // private chat exports, already on his phone. Re-serving them would add
+    // exposure for nothing.
+    listEl.innerHTML = data.files.map((f) => `
+      <div class="card">
+        <div class="card-action">${escapeHtml(f.name)}</div>
+        <div class="download-meta">${formatBytes(f.size)} · ${escapeHtml(f.modified.replace("T", " "))}</div>
+      </div>
+    `).join("");
+  } catch (err) {
+    listEl.innerHTML = `<div class="empty-state">Fehler: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+async function buildVoiceProfile() {
+  const btn = document.getElementById("voice-build");
+  const statusEl = document.getElementById("voice-status");
+  btn.disabled = true;
+  statusEl.style.color = "";
+  statusEl.textContent = "Baue Profil...";
+  try {
+    const data = await api("/api/voice-import", { method: "POST", body: "{}" });
+    statusEl.textContent = data.output || `Profil aus ${data.files} Chats gebaut.`;
+    statusEl.style.color = "var(--good)";
+  } catch (err) {
+    statusEl.textContent = err.message;
+    statusEl.style.color = "var(--bad)";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function loadFilesScreen() {
+  await Promise.all([loadUploads(), loadDownloads()]);
+}
+
 async function loadDownloads() {
   const listEl = document.getElementById("downloads-list");
   try {
@@ -390,6 +494,12 @@ function escapeHtml(s) {
   div.textContent = s ?? "";
   return div.innerHTML;
 }
+
+// --- upload wiring ---------------------------------------------------------
+
+document.getElementById("upload-input").addEventListener("change", updateUploadButton);
+document.getElementById("upload-send").addEventListener("click", sendSelectedUploads);
+document.getElementById("voice-build").addEventListener("click", buildVoiceProfile);
 
 // --- boot ------------------------------------------------------------------
 

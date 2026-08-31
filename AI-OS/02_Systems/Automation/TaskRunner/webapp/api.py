@@ -16,6 +16,9 @@ same way - single user, one message in flight, no reason for anything
 fancier.
 """
 import os
+import re
+import subprocess
+import sys
 import time
 from datetime import datetime
 
@@ -29,6 +32,24 @@ TASK_RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INBOX = os.path.join(TASK_RUNNER_DIR, "tasks", "inbox")
 LOGS = os.path.join(TASK_RUNNER_DIR, "tasks", "logs")
 CHAT_TIMEOUT_S = 170  # stays under the 180s dispatch_task.py/telegram_bridge.py already use
+UPLOAD_DIR = os.path.join(TASK_RUNNER_DIR, "uploads")
+# Passed to voice_import.py explicitly rather than letting it fall back to
+# its own default. Its default is the same directory, so this changes nothing
+# in production - but it makes the destination something a caller can point
+# elsewhere, and a test that could not do that wrote a profile built from
+# fixture data straight into the live one.
+VOICE_DIR = os.path.join(TASK_RUNNER_DIR, "voice")
+# A WhatsApp export without media is a few hundred KB of text; 25 MB is
+# already generous. The cap exists because this endpoint reads the body into
+# memory before writing it - server.py refuses on Content-Length before any
+# of it is read, so an oversized POST costs nothing.
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+# Deliberately narrow: the only thing this is for is getting chat exports and
+# similar plain data onto the server. Anything executable or web-servable
+# would be a genuinely different feature with genuinely different questions
+# to answer first.
+ALLOWED_UPLOAD_EXT = (".txt", ".zip", ".csv", ".json", ".md")
+UNSAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._ ()\u00c0-\u024f-]")
 
 
 # --- dashboards --------------------------------------------------------
@@ -107,6 +128,119 @@ def get_downloads(_body):
         })
     files.sort(key=lambda f: f["modified"], reverse=True)
     return 200, {"files": files}
+
+
+# --- uploads -------------------------------------------------------------
+
+def safe_upload_name(raw):
+    """-> a filename that can only ever land directly in UPLOAD_DIR.
+
+    basename() first so "../../.ssh/authorized_keys" becomes
+    "authorized_keys", then the extension allowlist, then a character scrub.
+    Order matters: checking the extension before stripping directories would
+    happily accept "../../x.txt"."""
+    name = os.path.basename((raw or "").strip().replace("\\", "/"))
+    # Strips leading dots and surrounding spaces (no hidden files, no
+    # trailing-space names) but NOT underscores: iOS names every WhatsApp
+    # export literally "_chat.txt", and silently renaming his files is a
+    # confusing thing for an upload button to do.
+    name = UNSAFE_NAME_RE.sub("_", name).strip(" ").lstrip(".")
+    if not name or len(name) > 120:
+        return None
+    if not name.lower().endswith(ALLOWED_UPLOAD_EXT):
+        return None
+    return name
+
+
+def _unique_path(name):
+    """Never silently overwrite. Four WhatsApp exports can arrive as four
+    files called "_chat.txt" - iOS names every single one of them that -
+    and losing three of them to the fourth would be invisible until the
+    voice profile came out built on a quarter of the data."""
+    base, ext = os.path.splitext(name)
+    candidate, n = name, 2
+    while os.path.exists(os.path.join(UPLOAD_DIR, candidate)):
+        candidate = f"{base}_{n}{ext}"
+        n += 1
+    return os.path.join(UPLOAD_DIR, candidate), candidate
+
+
+def post_upload(query, raw):
+    """Raw request body -> one file in uploads/.
+
+    Deliberately not multipart/form-data: this client is the only thing that
+    will ever call this endpoint, so there is no interop reason to hand-roll
+    a multipart parser (the stdlib's cgi module, which used to do it, was
+    removed in Python 3.13 - this service runs 3.14). One file per request,
+    filename in the query string, bytes in the body. The frontend loops."""
+    name = safe_upload_name((query.get("name") or [""])[0])
+    if not name:
+        return 400, {"error": "invalid or unsupported filename "
+                              f"(allowed: {', '.join(ALLOWED_UPLOAD_EXT)})"}
+    if not raw:
+        return 400, {"error": "empty file"}
+    if len(raw) > MAX_UPLOAD_BYTES:
+        return 413, {"error": "file too large"}
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    path, final_name = _unique_path(name)
+    tmp = path + ".part"
+    with open(tmp, "wb") as f:
+        f.write(raw)
+    os.replace(tmp, path)  # atomic, same reason dispatch_task.py does it
+    return 200, {"name": final_name, "size": len(raw)}
+
+
+def get_uploads(_body):
+    try:
+        names = [n for n in os.listdir(UPLOAD_DIR)
+                 if not n.startswith(".") and not n.endswith(".part")]
+    except OSError:
+        names = []
+    files = []
+    for name in names:
+        try:
+            stat = os.stat(os.path.join(UPLOAD_DIR, name))
+        except OSError:
+            continue
+        files.append({
+            "name": name,
+            "size": stat.st_size,
+            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        })
+    files.sort(key=lambda f: f["modified"], reverse=True)
+    # No download URL, unlike get_downloads: these are Felix's own private
+    # chat exports. He uploaded them, he has them - re-serving them over
+    # HTTP would add exposure for no use.
+    return 200, {"files": files}
+
+
+def post_voice_import(_body):
+    """Rebuild the voice profile from every .txt currently in uploads/.
+
+    Runs voice_import.py as a subprocess rather than importing it: it is a
+    CLI tool with its own argument handling, and a crash in a chat-export
+    parser must not be able to take the web server down with it. Fixed argv,
+    never a shell string. No model is involved - this is pure parsing and
+    arithmetic, so it costs nothing and cannot hallucinate a profile."""
+    try:
+        txts = sorted(os.path.join(UPLOAD_DIR, n) for n in os.listdir(UPLOAD_DIR)
+                      if n.lower().endswith(".txt"))
+    except OSError:
+        txts = []
+    if len(txts) < 2:
+        return 400, {"error": "Mindestens 2 Chat-Exporte nötig - aus einem "
+                              "einzigen Chat wird das Profil eine Karikatur "
+                              "einer Beziehung, nicht deine Stimme."}
+    script = os.path.join(TASK_RUNNER_DIR, "scripts", "voice_import.py")
+    try:
+        proc = subprocess.run([sys.executable, script] + txts
+                              + ["--out", VOICE_DIR],
+                              capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        return 500, {"error": "Import hat zu lange gebraucht"}
+    if proc.returncode != 0:
+        return 400, {"error": (proc.stderr or "Import fehlgeschlagen").strip()[:500]}
+    return 200, {"files": len(txts), "output": proc.stdout.strip()}
 
 
 # --- chat ----------------------------------------------------------------

@@ -144,3 +144,18 @@ tr.win td.net { color: var(--good); }
   width: 100%; padding: 10px; border-radius: 8px; border: none;
   background: var(--accent); color: #0a1420; font-weight: 600;
 }
+
+/* Upload controls. A bare <input type="file"> is unusable on a phone - it
+   renders as a tiny unstyled button with a "no file chosen" label - so the
+   real input is hidden inside a label that acts as the tap target. */
+.section-title { font-size: 0.95rem; color: var(--text-dim); margin: 22px 0 4px;
+  text-transform: uppercase; letter-spacing: 0.06em; }
+.upload-row { display: flex; gap: 10px; align-items: center; margin: 10px 0; flex-wrap: wrap; }
+.upload-pick { flex: 1 1 auto; }
+.upload-pick input[type="file"] { display: none; }
+.upload-pick span { display: block; text-align: center; padding: 12px;
+  border: 1px dashed var(--border); border-radius: 10px; color: var(--text-dim);
+  background: var(--surface); cursor: pointer; }
+.upload-send { padding: 12px 18px; border: 0; border-radius: 10px;
+  background: var(--accent); color: #0f1115; font-weight: 600; cursor: pointer; }
+.upload-send:disabled { background: var(--surface-2); color: var(--text-dim); cursor: default; }

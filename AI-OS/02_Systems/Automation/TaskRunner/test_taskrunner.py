@@ -3126,6 +3126,97 @@ class TestWebappApi(unittest.TestCase):
         self.assertTrue(gates)
         self.assertIs(payload["actions"][0]["gates"], True)
 
+    def _upload_dir(self):
+        """Redirects BOTH the upload directory and the voice-profile output
+        into a throwaway dir. Only redirecting the first one is what let an
+        early version of these tests write a profile built from three lines
+        of fixture chat into the real voice/Voice_Profile.md - which the
+        runner would then have handed to a live Telegram conversation."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        for attr, sub in (("UPLOAD_DIR", "uploads"), ("VOICE_DIR", "voice")):
+            self.addCleanup(setattr, self.api, attr, getattr(self.api, attr))
+            setattr(self.api, attr, os.path.join(tmp.name, sub))
+        return self.api.UPLOAD_DIR
+
+    def test_upload_name_cannot_escape_the_upload_directory(self):
+        """basename() runs before the extension check, not after: otherwise
+        "../../.ssh/x.txt" passes the allowlist on its way to somewhere it
+        must never reach."""
+        for evil in ("../../../etc/passwd.txt", "..\\..\\x.txt",
+                     "/etc/shadow.txt", "chat/../../x.txt"):
+            name = self.api.safe_upload_name(evil)
+            self.assertNotIn("/", name or "")
+            self.assertNotIn("\\", name or "")
+            self.assertNotIn("..", name or "")
+
+    def test_upload_rejects_types_that_are_not_plain_data(self):
+        for bad in ("shell.php", "x.py", "app.js", "run.sh", "index.html", ""):
+            self.assertIsNone(self.api.safe_upload_name(bad))
+        for good in ("_chat.txt", "WhatsApp Chat mit Lena.txt", "export.zip"):
+            self.assertIsNotNone(self.api.safe_upload_name(good))
+
+    def test_upload_writes_the_file_and_reports_its_size(self):
+        d = self._upload_dir()
+        status, payload = self.api.post_upload({"name": ["_chat.txt"]}, b"hallo")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["size"], 5)
+        with open(os.path.join(d, "_chat.txt"), "rb") as f:
+            self.assertEqual(f.read(), b"hallo")
+
+    def test_uploads_with_the_same_name_never_overwrite_each_other(self):
+        """iOS names every single WhatsApp export "_chat.txt". Four of them
+        collapsing into one would be invisible until the voice profile came
+        out built on a quarter of the data."""
+        self._upload_dir()
+        first = self.api.post_upload({"name": ["_chat.txt"]}, b"eins")[1]
+        second = self.api.post_upload({"name": ["_chat.txt"]}, b"zwei")[1]
+        self.assertNotEqual(first["name"], second["name"])
+        _, listing = self.api.get_uploads({})
+        self.assertEqual(len(listing["files"]), 2)
+
+    def test_upload_rejects_empty_and_oversized_bodies(self):
+        self._upload_dir()
+        self.assertEqual(self.api.post_upload({"name": ["a.txt"]}, b"")[0], 400)
+        big = b"x" * (self.api.MAX_UPLOAD_BYTES + 1)
+        self.assertEqual(self.api.post_upload({"name": ["a.txt"]}, big)[0], 413)
+
+    def test_uploads_are_listed_without_a_download_url(self):
+        """Unlike generated reports, these are Felix's own private chat
+        exports - he already has them. Serving them back adds exposure for
+        no use."""
+        self._upload_dir()
+        self.api.post_upload({"name": ["_chat.txt"]}, b"hallo")
+        _, payload = self.api.get_uploads({})
+        self.assertEqual(set(payload["files"][0]), {"name", "size", "modified"})
+
+    def test_uploads_listing_survives_a_missing_directory(self):
+        self._upload_dir()  # never created - nothing uploaded yet
+        self.assertEqual(self.api.get_uploads({}), (200, {"files": []}))
+
+    def test_voice_import_refuses_a_single_chat(self):
+        """One chat produces a caricature of one relationship, not a voice -
+        register shifts a lot between a best friend, a parent and a group."""
+        d = self._upload_dir()
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "only.txt"), "w", encoding="utf-8") as f:
+            f.write("31.08.26, 19:22 - Felix: hi\n")
+        status, payload = self.api.post_voice_import({})
+        self.assertEqual(status, 400)
+        self.assertIn("2", payload["error"])
+
+    def test_voice_import_runs_the_real_script_on_uploaded_chats(self):
+        d = self._upload_dir()
+        os.makedirs(d, exist_ok=True)
+        for n, other in (("a.txt", "Lena"), ("b.txt", "Tim")):
+            with open(os.path.join(d, n), "w", encoding="utf-8") as f:
+                f.write(f"31.08.26, 19:21 - {other}: und?\n"
+                        "31.08.26, 19:22 - Felix: ne noch nicht\n"
+                        "31.08.26, 19:23 - Felix: mach ich heute abend\n")
+        status, payload = self.api.post_voice_import({})
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(payload["files"], 2)
+
     def test_dmarc_leads_shape(self):
         status, payload = self.api.get_dmarc_leads({})
         self.assertEqual(status, 200)

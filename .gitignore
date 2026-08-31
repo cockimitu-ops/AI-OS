@@ -46,3 +46,8 @@ AI-OS/02_Systems/Automation/TaskRunner/techscout/digest.md
 # Notion - it is personal chat content, and the profile embeds real messages.
 AI-OS/02_Systems/Automation/TaskRunner/voice/*
 !AI-OS/02_Systems/Automation/TaskRunner/voice/.gitkeep
+
+# Whatever Felix uploads through the web client - chat exports and similar
+# private data. Same reasoning as voice/.
+AI-OS/02_Systems/Automation/TaskRunner/uploads/*
+!AI-OS/02_Systems/Automation/TaskRunner/uploads/.gitkeep

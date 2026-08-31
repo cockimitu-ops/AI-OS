@@ -46,7 +46,31 @@
   </section>
 
   <section id="screen-downloads" class="screen">
-    <h1>Downloads</h1>
+    <h1>Dateien</h1>
+
+    <h2 class="section-title">Hochladen</h2>
+    <p class="hint">WhatsApp-Exporte (.txt) und andere Daten für den Server.
+      Bleiben lokal - nichts davon geht an ein Modell ausser dem, was du
+      ausdrücklich importierst.</p>
+    <div class="upload-row">
+      <label class="upload-pick">
+        <input id="upload-input" type="file" multiple
+               accept=".txt,.zip,.csv,.json,.md">
+        <span>Dateien wählen</span>
+      </label>
+      <button id="upload-send" class="upload-send" disabled>Hochladen</button>
+    </div>
+    <p id="upload-status" class="hint"></p>
+    <div id="uploads-list" class="cards"></div>
+
+    <h2 class="section-title">Voice-Profil</h2>
+    <p class="hint">Baut aus den hochgeladenen Chat-Exporten dein Stil-Profil.
+      Nur du siehst es, nur im Chat mit dir - alles Geschäftliche bleibt
+      professionell. Braucht mindestens 2 Chats.</p>
+    <button id="voice-build" class="upload-send">Voice-Profil bauen</button>
+    <p id="voice-status" class="hint"></p>
+
+    <h2 class="section-title">Downloads</h2>
     <p class="hint">Dateien, die der Bot auf Anfrage erstellt hat - z.B. PDFs aus dem Chat.</p>
     <div id="downloads-list" class="cards"></div>
   </section>
