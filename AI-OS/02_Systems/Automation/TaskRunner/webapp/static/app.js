@@ -7,7 +7,25 @@ const TOKEN_KEY = "aios_web_token";
 const THREAD_KEY = "aios_thread_id";
 
 function getToken() { return localStorage.getItem(TOKEN_KEY) || ""; }
-function setToken(t) { localStorage.setItem(TOKEN_KEY, t); }
+function setToken(t) { localStorage.setItem(TOKEN_KEY, t.trim()); }
+
+// Typing a 43-character random token on a phone keyboard into a masked
+// field is genuinely error-prone (autocorrect, autocapitalize, no way to
+// see what was actually typed before submitting) - this was the actual
+// live bug, not a guess: the modal kept reappearing with no explanation,
+// which reads exactly like "the token isn't accepted" whether it was
+// wrong by one character or the save never even happened. A URL param
+// removes typing entirely: opening
+// http://<host>:<port>/?token=XXXX saves it automatically and cleans the
+// URL afterward so it doesn't linger in history/bookmarks.
+function bootstrapTokenFromUrl() {
+  const params = new URLSearchParams(location.search);
+  const fromUrl = params.get("token");
+  if (fromUrl) {
+    setToken(fromUrl);
+    history.replaceState({}, "", location.pathname);
+  }
+}
 
 function getThreadId() {
   let id = localStorage.getItem(THREAD_KEY);
@@ -55,12 +73,49 @@ function hideTokenModal() {
   document.getElementById("token-modal").classList.add("hidden");
 }
 
-document.getElementById("token-save").addEventListener("click", () => {
+async function saveAndVerifyToken(val) {
+  // Verified against a real endpoint before the modal closes - previously
+  // this saved blindly and only found out it was wrong on the NEXT tab
+  // switch, when the modal would silently reappear with no explanation.
+  // That silence is what actually looked like "the token isn't accepted."
+  const statusEl = document.getElementById("token-status");
+  setToken(val);
+  statusEl.textContent = "Prüfe...";
+  statusEl.style.color = "";
+  try {
+    const res = await fetch("/api/money-board", {
+      headers: { "Authorization": `Bearer ${getToken()}` },
+    });
+    if (res.status === 401) {
+      statusEl.textContent = "Falscher Token - bitte nochmal genau abtippen oder den Link mit ?token=... öffnen.";
+      statusEl.style.color = "var(--bad)";
+      return false;
+    }
+    if (!res.ok) {
+      statusEl.textContent = `Server-Fehler (${res.status}) - Token wurde trotzdem gespeichert.`;
+      statusEl.style.color = "var(--bad)";
+      return true; // token itself was accepted, something else is wrong
+    }
+    statusEl.textContent = "";
+    return true;
+  } catch (err) {
+    statusEl.textContent = `Keine Verbindung zum Server (${err.message}). Bist du per Tailscale verbunden?`;
+    statusEl.style.color = "var(--bad)";
+    return false;
+  }
+}
+
+document.getElementById("token-save").addEventListener("click", async () => {
   const val = document.getElementById("token-input").value.trim();
   if (!val) return;
-  setToken(val);
-  hideTokenModal();
-  loadActiveScreen();
+  const ok = await saveAndVerifyToken(val);
+  if (ok) {
+    hideTokenModal();
+    // Chat has no auto-loader (it waits for you to type), so switch to
+    // Money first - otherwise a correct token on the Chat tab looks
+    // exactly like a failed one, since nothing visibly happens either way.
+    document.querySelector('.tab[data-screen="screen-money"]').click();
+  }
 });
 
 // --- tabs --------------------------------------------------------------
@@ -337,6 +392,8 @@ function escapeHtml(s) {
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("sw.js").catch(() => {});
 }
+
+bootstrapTokenFromUrl();
 
 if (!getToken()) {
   showTokenModal();

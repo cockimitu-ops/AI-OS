@@ -65,8 +65,10 @@
   <div class="modal-box">
     <h2>Zugangs-Token</h2>
     <p>Einmalig eingeben - wird nur auf diesem Gerät gespeichert.</p>
-    <input id="token-input" type="password" placeholder="Token">
+    <input id="token-input" type="text" inputmode="text" autocapitalize="off"
+           autocorrect="off" autocomplete="off" spellcheck="false" placeholder="Token">
     <button id="token-save">Speichern</button>
+    <p id="token-status" class="hint" style="margin-top:10px;"></p>
   </div>
 </div>
 
