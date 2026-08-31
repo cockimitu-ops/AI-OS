@@ -40,3 +40,9 @@ AI-OS/02_Systems/Automation/TaskRunner/webapp/static/downloads/*
 !AI-OS/02_Systems/Automation/TaskRunner/webapp/static/downloads/.gitkeep
 AI-OS/02_Systems/Automation/TaskRunner/techscout/seen.json
 AI-OS/02_Systems/Automation/TaskRunner/techscout/digest.md
+
+# Private WhatsApp import: Felix's own messages, the derived stats, and the
+# generated voice profile. None of this belongs in a repo that syncs to
+# Notion - it is personal chat content, and the profile embeds real messages.
+AI-OS/02_Systems/Automation/TaskRunner/voice/*
+!AI-OS/02_Systems/Automation/TaskRunner/voice/.gitkeep

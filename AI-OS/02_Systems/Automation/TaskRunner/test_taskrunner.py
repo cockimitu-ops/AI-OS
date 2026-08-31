@@ -538,6 +538,57 @@ class TestAgentSelection(TaskRunnerTestCase):
         self.assertEqual(self.runner._system_prompt_for("Nope"),
                          self.runner._system_prompt_for(None))
 
+    def _write_voice_profile(self, text="VOICE-PROFILE-MARKER"):
+        path = self.runner.VOICE_PROFILE_PATH
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        original = None
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                original = f.read()
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+        def restore():
+            if original is None:
+                os.remove(path)
+            else:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(original)
+        self.addCleanup(restore)
+
+    def test_voice_applies_only_to_felix_own_chat_threads(self):
+        """Felix asked for his own register in his own chats only - every
+        client-facing artefact (DMARC letters, Gumroad and Fiverr copy) has
+        to stay professional. Scheduled and dispatched tasks run with no
+        thread at all, so gating on the thread prefix makes that structural
+        rather than something a prompt has to remember."""
+        self._write_voice_profile()
+        for thread in ("tg_12345", "web_abc"):
+            self.assertIn("VOICE-PROFILE-MARKER",
+                          self.runner._system_prompt_for(None, thread))
+        for thread in (None, "", "schedule_daily_revenue_plan", "batch_1"):
+            self.assertNotIn("VOICE-PROFILE-MARKER",
+                             self.runner._system_prompt_for(None, thread))
+
+    def test_voice_never_displaces_the_guardrails_or_the_agent_block(self):
+        """The voice block is appended last and is the weakest instruction in
+        the prompt. If it could push out the base prompt or the agent role,
+        a casual chat would quietly run without the destructive-action rule."""
+        self._write_voice_profile()
+        scoped = self.runner._system_prompt_for("Research_Analyst", "tg_1")
+        self.assertIn("Guardrail", scoped)
+        self.assertIn("Research Analyst", scoped)
+        self.assertLess(scoped.index("Research Analyst"),
+                        scoped.index("VOICE-PROFILE-MARKER"))
+
+    def test_missing_voice_profile_is_not_an_error(self):
+        """He has imported nothing yet, and that must stay the normal case -
+        a missing profile means the default register, never a failed task."""
+        path = self.runner.VOICE_PROFILE_PATH
+        self.assertFalse(os.path.exists(path), "test would be meaningless")
+        self.assertEqual(self.runner._system_prompt_for(None, "tg_1"),
+                         self.runner._system_prompt_for(None))
+
     def test_worker_runs_the_task_with_the_agent_prompt(self):
         """End to end through _run_task: the directive is parsed off, and the
         prompt handed to the model is the scoped one."""
@@ -3501,3 +3552,135 @@ class TestTechScout(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestVoiceImport(unittest.TestCase):
+    """WhatsApp voice import (added 2026-08-31). The privacy property is the
+    one worth guarding hardest: the parser sees both sides of a real chat and
+    must keep only Felix's own lines, because everything it keeps can end up
+    in a model's prompt."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "voice_import", os.path.join(HERE, "scripts", "voice_import.py"))
+        cls.vi = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.vi)
+
+    ANDROID = (
+        "31.08.26, 19:20 - Nachrichten und Anrufe sind Ende-zu-Ende-verschlüsselt.\n"
+        "31.08.26, 19:21 - Lena: hast du das schon gemacht\n"
+        "31.08.26, 19:22 - Felix: ne noch nicht\n"
+        "31.08.26, 19:22 - Felix: mach ich heute abend\n"
+        "31.08.26, 19:23 - Lena: ok\n"
+        "31.08.26, 19:24 - Felix: <Medien ausgeschlossen>\n"
+        "31.08.26, 19:25 - Felix: guck mal https://example.com/x an\n"
+        "das war zeile zwei\n"
+    )
+    IOS = (
+        "\u200e[31.08.26, 19:30:01] Felix: moin\n"
+        "[31.08.26, 19:30:40] Tim: moin\n"
+        "[31.08.26, 19:31:02] Felix: alles gut bei dir?\n"
+    )
+
+    def test_parses_both_export_formats(self):
+        android = self.vi.parse_export(self.ANDROID)
+        ios = self.vi.parse_export(self.IOS)
+        self.assertTrue(android and ios)
+        # The iOS LTR mark sits before the very first "[" - a naive
+        # startswith("[") drops the opening message of every iOS export.
+        self.assertEqual(ios[0]["sender"], "Felix")
+        self.assertEqual(ios[0]["text"], "moin")
+
+    def test_system_notices_are_not_messages(self):
+        senders = {m["sender"] for m in self.vi.parse_export(self.ANDROID)}
+        self.assertEqual(senders, {"Felix", "Lena"})
+
+    def test_continuation_lines_stay_with_their_message(self):
+        msgs = self.vi.parse_export(self.ANDROID)
+        multiline = [m for m in msgs if "zeile zwei" in m["text"]]
+        self.assertEqual(len(multiline), 1)
+        self.assertIn("guck mal", multiline[0]["text"])
+
+    def test_extract_keeps_only_felix_and_drops_everyone_elses_words(self):
+        """The whole privacy design in one assertion: nothing the other side
+        typed may survive into the returned data, because that data is what
+        gets summarised into a prompt."""
+        chats = [self.vi.parse_export(self.ANDROID), self.vi.parse_export(self.IOS)]
+        mine, others = self.vi.extract_mine(chats, "Felix")
+        blob = " ".join(m["text"] for m in mine)
+        self.assertNotIn("hast du das schon gemacht", blob)
+        self.assertNotIn("ok", blob.split())
+        self.assertEqual(others, {"Lena", "Tim"})
+        self.assertTrue(all("ne noch nicht" != m["text"] or m["answering"]
+                            for m in mine))
+
+    def test_media_placeholders_are_not_counted_as_his_words(self):
+        """"<Medien ausgeschlossen>" is WhatsApp's text, not his. Counting it
+        as a two-word message drags the whole length distribution down."""
+        chats = [self.vi.parse_export(self.ANDROID)]
+        mine, _ = self.vi.extract_mine(chats, "Felix")
+        self.assertFalse(any("Medien" in m["text"] for m in mine))
+
+    def test_bursts_are_distinguished_from_replies(self):
+        chats = [self.vi.parse_export(self.ANDROID)]
+        mine, _ = self.vi.extract_mine(chats, "Felix")
+        self.assertTrue(mine[0]["answering"])       # answered Lena
+        self.assertFalse(mine[1]["answering"])      # continued himself
+
+    def test_detect_me_needs_more_than_one_chat(self):
+        """One chat cannot identify the common sender, and a profile from a
+        single chat is a caricature of one relationship anyway."""
+        self.assertIsNone(self.vi.detect_me([self.vi.parse_export(self.ANDROID)]))
+        both = [self.vi.parse_export(self.ANDROID), self.vi.parse_export(self.IOS)]
+        self.assertEqual(self.vi.detect_me(both), "Felix")
+
+    def test_redaction_covers_third_party_identifiers(self):
+        out = self.vi.redact(
+            "ruf Lena unter +49 176 1234567 an oder schreib lena@example.com, "
+            "link: https://example.com/x", {"Lena"})
+        self.assertNotIn("Lena", out)
+        self.assertNotIn("lena@example.com", out)
+        self.assertNotIn("1234567", out)
+        self.assertNotIn("https://", out)
+
+    def test_stats_are_computed_from_his_messages_only(self):
+        chats = [self.vi.parse_export(self.ANDROID), self.vi.parse_export(self.IOS)]
+        mine, _ = self.vi.extract_mine(chats, "Felix")
+        stats = self.vi.compute_stats(mine)
+        self.assertEqual(stats["messages"], len(mine))
+        self.assertGreater(stats["lowercase_start_pct"], 50)
+        self.assertGreater(stats["burst_pct"], 0)
+
+    def test_empty_import_degrades_instead_of_crashing(self):
+        self.assertEqual(self.vi.compute_stats([]), {"messages": 0})
+        self.assertIn("No messages", self.vi.render_profile({"messages": 0}, []))
+
+    def test_profile_states_that_voice_never_outranks_honesty(self):
+        """The failure mode worth guarding: a model that mirrors a casual,
+        confident register also mirrors confidence it has not earned. This
+        system already has two logged cases of confidently-wrong output."""
+        chats = [self.vi.parse_export(self.ANDROID), self.vi.parse_export(self.IOS)]
+        mine, others = self.vi.extract_mine(chats, "Felix")
+        stats = self.vi.compute_stats(mine)
+        profile = self.vi.render_profile(
+            stats, self.vi.select_exemplars(mine, stats, others))
+        self.assertIn("not to be agreed with more smoothly", profile)
+        self.assertIn("professional", profile)
+
+    def test_end_to_end_writes_a_profile_and_never_the_other_side(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            a = os.path.join(tmp, "chat_a.txt")
+            b = os.path.join(tmp, "chat_b.txt")
+            with open(a, "w", encoding="utf-8") as f:
+                f.write(self.ANDROID)
+            with open(b, "w", encoding="utf-8") as f:
+                f.write(self.IOS)
+            out = os.path.join(tmp, "voice")
+            rc = self.vi.main([a, b, "--out", out])
+            self.assertEqual(rc, 0)
+            profile = open(os.path.join(out, "Voice_Profile.md"),
+                           encoding="utf-8").read()
+            self.assertIn("Voice Profile", profile)
+            self.assertNotIn("hast du das schon gemacht", profile)
+            self.assertNotIn("Lena", profile)

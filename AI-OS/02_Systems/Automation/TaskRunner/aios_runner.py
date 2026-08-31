@@ -436,15 +436,52 @@ def _load_knowledge_core():
         return ""
 
 
-def _system_prompt_for(agent_name):
+VOICE_PROFILE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "voice", "Voice_Profile.md")
+
+# Only a live conversation with Felix gets his own register. Telegram threads
+# are "tg_<chat_id>" and the web client's are "web_<id>"; every scheduled
+# agent task runs with no thread at all, which is what makes this a structural
+# gate rather than a prompt asking the model to remember when to be casual.
+# Nothing client-facing can reach it: the DMARC letters, Gumroad and Fiverr
+# copy are all produced by threadless scheduled or dispatched tasks.
+VOICE_THREAD_PREFIXES = ("tg_", "web_")
+
+
+def _load_voice_profile(thread_id):
+    """The generated voice profile, but only for Felix's own chat threads.
+
+    Read fresh rather than cached for the same reason Knowledge_Core is:
+    voice_import.py regenerates the file whenever he imports more chats, and
+    a Restart=always service with multi-day uptime would otherwise keep
+    running on the first version of it forever.
+
+    Never raises. No profile (he has not imported anything yet) just means
+    the normal assistant register, which is a perfectly good default - it
+    must never be a new way for every task to fail."""
+    if not thread_id or not thread_id.startswith(VOICE_THREAD_PREFIXES):
+        return ""
+    try:
+        with open(VOICE_PROFILE_PATH, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def _system_prompt_for(agent_name, thread_id=None):
     """Base prompt, plus fresh Knowledge_Core content, plus the selected
-    agent's block - all appended, never substituted, in that order.
+    agent's block - all appended, never substituted, in that order. Plus
+    Felix's voice profile, last, and only in his own chat threads.
 
     Appending rather than substituting matters for the base prompt (it
     carries what is true regardless of role - the vault map, the
     destructive-action guardrail) and for Knowledge_Core (standing context
     for every task, not something an agent selection should be able to
-    silently drop)."""
+    silently drop).
+
+    The voice block goes last on purpose: it is the weakest instruction in
+    the prompt and has to read as a modifier on everything above it, not as
+    a replacement for any of it."""
     prompt = BASE_SYSTEM_PROMPT
     knowledge = _load_knowledge_core()
     if knowledge:
@@ -453,15 +490,30 @@ def _system_prompt_for(agent_name):
             f"## Standing context: who Felix is, what's active right now\n"
             f"{knowledge}"
         )
+    voice = _load_voice_profile(thread_id)
     if not agent_name:
-        return prompt
+        return _with_voice(prompt, voice)
     block = agents.load_prompt(agent_name)
     if not block:
+        return _with_voice(prompt, voice)
+    return _with_voice(
+        f"{prompt}\n\n"
+        f"## Your role for this task: {agent_name.replace('_', ' ')}\n"
+        f"{block}",
+        voice,
+    )
+
+
+def _with_voice(prompt, voice):
+    if not voice:
         return prompt
     return (
         f"{prompt}\n\n"
-        f"## Your role for this task: {agent_name.replace('_', ' ')}\n"
-        f"{block}"
+        f"## How to talk in this conversation\n"
+        f"You are talking to Felix directly, in his own chat. Use the voice "
+        f"described below. It governs tone and shape only - it never makes "
+        f"something more certain than it is, and it never replaces anything "
+        f"above.\n\n{voice}"
     )
 
 def format_interpreter_output(messages):
@@ -803,7 +855,7 @@ def _run_task(task_path, filename):
         agent_name = _route(instruction)
         routed = bool(agent_name)
 
-    system_prompt = _system_prompt_for(agent_name)
+    system_prompt = _system_prompt_for(agent_name, thread_id)
     history = memory.as_messages(thread_id) if thread_id else None
 
     if not instruction:
