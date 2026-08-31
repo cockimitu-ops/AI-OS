@@ -51,3 +51,7 @@ AI-OS/02_Systems/Automation/TaskRunner/voice/*
 # private data. Same reasoning as voice/.
 AI-OS/02_Systems/Automation/TaskRunner/uploads/*
 !AI-OS/02_Systems/Automation/TaskRunner/uploads/.gitkeep
+
+# Study ingestion runtime state: which notes have been processed already.
+AI-OS/02_Systems/Automation/TaskRunner/study/*
+!AI-OS/02_Systems/Automation/TaskRunner/study/.gitkeep
