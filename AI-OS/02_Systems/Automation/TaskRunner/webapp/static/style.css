@@ -87,6 +87,9 @@ body { display: flex; flex-direction: column; }
 .card-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .card-euros { font-weight: 700; color: var(--good); font-size: 1.1rem; white-space: nowrap; }
 .card-minutes { color: var(--text-dim); font-size: 0.8rem; }
+/* A gating row earns 0 EUR itself but blocks the rows under it - it sorts to
+   the top, so it must not read as the least valuable card on the board. */
+.card-gate { color: var(--accent); }
 .card-action { margin: 6px 0 4px; }
 .card-note { color: var(--text-dim); font-size: 0.85rem; }
 .download-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }

@@ -30,6 +30,9 @@ TASK_RUNNER_DIR = os.path.dirname(SCRIPT_DIR)
 
 # Each item: (who, action, euros_soon, human_minutes, note)
 # who: "felix" = only Felix can do it; "ai" = the worker can; "done" = shipped.
+#      "felix-first" = Felix, AND it gates the rows under it. Sorts to the top
+#      regardless of euros: a legally-required step that earns 0 EUR by itself
+#      still has to be read before the step whose money it unblocks.
 # euros_soon is a rough "money reachable if this is done and it works", used
 # only to sort - it is not a forecast. Ordered by the audit's own findings.
 #
@@ -37,11 +40,14 @@ TASK_RUNNER_DIR = os.path.dirname(SCRIPT_DIR)
 # "done" with a date rather than deleting it - same record-the-change
 # convention the rest of the vault follows.
 BOARD = [
-    ("felix", "DMARC outreach: fill OUTREACH_SENDER_* in .env, print a 25-letter batch (scripts/outreach.py), post them", 249, 40,
-     "534 mailable leads ready. First postal batch ~24 EUR. One sale = 249 EUR. The single biggest new revenue lever."),
+    ("felix", "DMARC outreach: print a 25-letter batch (scripts/outreach.py), post them", 249, 40,
+     "OUTREACH_SENDER_* was still unset when this row was written; it is filled in "
+     ".env since 2026-08-31, so the only step left is printing and posting. The "
+     "mailable-lead count is a live signal, not restated here - a hand-typed copy "
+     "of it is exactly what goes stale."),
     ("felix", "Publish the 2 remaining TemplateSales products (Pricing Teardown 29, Retention Engineering 39) on Gumroad", 68, 45,
      "All assets written incl. cover.png. ~20 min each. Moat Blueprint already live."),
-    ("felix", "Gewerbeanmeldung + ELSTER - required BEFORE taking the first EUR from ANY paying customer", 0, 60,
+    ("felix-first", "Gewerbeanmeldung + ELSTER - required BEFORE taking the first EUR from ANY paying customer", 0, 60,
      "Gates both LocalArbitrage AND DMARC outreach revenue - not LocalArbitrage-only, "
      "as an earlier version of this board wrongly scoped it. Registration is legally "
      "due at the START of a commercial activity, not after a first sale. If a DMARC "
@@ -96,29 +102,53 @@ def live_signals():
     contacted = _load(os.path.join(TASK_RUNNER_DIR, "outreach", "contacted.json"))
     signals["letters_sent"] = len(contacted)
     results = _load(os.path.join(TASK_RUNNER_DIR, "prospects", "results.json"))
-    signals["leads_qualified"] = sum(1 for r in results.values() if r.get("score", 0) >= 6)
+    qualified = [d for d, r in results.items() if r.get("score", 0) >= 6]
+    signals["leads_qualified"] = len(qualified)
+    # Qualified is not mailable: the audit scores a domain, the postal address
+    # comes from the OSM record in domains.json, and only the overlap can
+    # actually receive a letter. Reporting the larger number as if it were
+    # the mailable one would overstate the batch by ~125 leads.
+    domains = _load(os.path.join(TASK_RUNNER_DIR, "prospects", "domains.json"))
+    signals["leads_mailable"] = sum(
+        1 for d in qualified if domains.get(d, {}).get("address"))
     signals["flips"] = _flip_stats()
     return signals
 
 
 def felix_actions(board=BOARD):
-    return [i for i in board if i[0] == "felix"]
+    return [i for i in board if i[0].startswith("felix")]
+
+
+def _sort_key(item):
+    return (0 if item[0] == "felix-first" else 1, -item[2])
+
+
+def sorted_actions(board=BOARD, top=None):
+    """The board's one canonical order: gating rows first, then by euros.
+
+    Every caller goes through this. It used to be a `sorted(..., key=-euros)`
+    duplicated in three places, and the copy that was missing it was a real
+    bug - so the ordering rule lives in exactly one function now. Sorting on
+    euros alone had its own honesty problem: the Gewerbeanmeldung is worth
+    0 EUR on its own and sank to the bottom, directly under the DMARC letters
+    whose income it legally gates. Read top-down, the board told Felix to
+    mail first and register afterwards."""
+    actions = sorted(felix_actions(board), key=_sort_key)
+    return actions[:top] if top else actions
 
 
 def render(board=BOARD, top=None):
     signals = live_signals()
-    actions = sorted(felix_actions(board), key=lambda i: -i[2])
-    if top:
-        actions = actions[:top]
-    lines = ["GELD-BOARD — was Felix tun muss (nach Ertrag sortiert):"]
-    for _, action, euros, minutes, _note in actions:
-        tag = f"~{euros} EUR" if euros else "Basis"
+    actions = sorted_actions(board, top=top)
+    lines = ["GELD-BOARD — was Felix tun muss (Pflicht-Schritt zuerst, dann nach Ertrag):"]
+    for who, action, euros, minutes, _note in actions:
+        tag = "ZUERST" if who == "felix-first" else (
+            f"~{euros} EUR" if euros else "Basis")
         lines.append(f"  • [{tag}, {minutes}min] {action}")
-    if signals.get("letters_sent"):
-        lines.append(f"  (DMARC: {signals['letters_sent']} Briefe raus, "
-                     f"{signals['leads_qualified']} Leads im Bestand)")
-    elif signals.get("leads_qualified"):
-        lines.append(f"  (DMARC: 0 Briefe raus, {signals['leads_qualified']} Leads bereit)")
+    if signals.get("leads_qualified"):
+        lines.append(f"  (DMARC: {signals.get('letters_sent', 0)} Briefe raus, "
+                     f"{signals['leads_qualified']} Leads qualifiziert, "
+                     f"{signals.get('leads_mailable', 0)} davon mit Postadresse)")
     flips = signals.get("flips")
     if flips and flips["open"]:
         lines.append(f"  (Flips: {flips['open']} offen, "
@@ -129,12 +159,13 @@ def render(board=BOARD, top=None):
 def brief_section(board=BOARD, top=3):
     """Compact form for the morning brief / status update - the top human
     actions only, since the full board is a lot to read four times a day."""
-    actions = sorted(felix_actions(board), key=lambda i: -i[2])[:top]
+    actions = sorted_actions(board, top=top)
     if not actions:
         return None
     lines = ["Top Geld-Moves:"]
-    for _, action, euros, minutes, _ in actions:
-        tag = f"~{euros}EUR" if euros else "Basis"
+    for who, action, euros, minutes, _ in actions:
+        tag = "ZUERST" if who == "felix-first" else (
+            f"~{euros}EUR" if euros else "Basis")
         short = action if len(action) <= 70 else action[:67] + "..."
         lines.append(f"  • [{tag}/{minutes}min] {short}")
     return "\n".join(lines)

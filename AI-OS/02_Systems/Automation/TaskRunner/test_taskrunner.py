@@ -2787,6 +2787,37 @@ class TestMoneyBoard(unittest.TestCase):
         self.assertLess(out.index("big"), out.index("mid"))
         self.assertLess(out.index("mid"), out.index("small"))
 
+    def test_gating_rows_sort_above_higher_earning_rows(self):
+        """A "felix-first" row gates the rows below it, so euros alone must
+        not order the board. The real case: Gewerbeanmeldung is worth 0 EUR
+        on its own and sorted dead last, directly under the DMARC letters
+        whose income it legally gates - read top-down, the board said mail
+        first, register later."""
+        board = [("felix", "earns-most", 500, 5, ""),
+                 ("felix-first", "legally-required-first", 0, 60, ""),
+                 ("felix", "earns-less", 100, 5, "")]
+        out = self.mb.render(board=board)
+        self.assertLess(out.index("legally-required-first"), out.index("earns-most"))
+        self.assertLess(out.index("earns-most"), out.index("earns-less"))
+        self.assertIn("ZUERST", out)
+
+    def test_brief_section_keeps_the_gate_in_its_top_slots(self):
+        """The brief only shows the top few - a gate that fell off the cut
+        would be invisible in the one view Felix actually reads daily."""
+        board = [("felix", f"action number {i}", 100 - i, 5, "") for i in range(8)]
+        board.append(("felix-first", "register-the-business", 0, 60, ""))
+        section = self.mb.brief_section(board=board, top=3)
+        self.assertIn("register-the-business", section)
+        self.assertIn("ZUERST", section)
+
+    def test_mailable_leads_are_counted_separately_from_qualified(self):
+        """A qualified domain without an OSM postal address cannot be mailed.
+        Reporting qualified as if it were mailable overstated the reachable
+        batch by ~125 leads on the real data."""
+        sig = self.mb.live_signals()
+        self.assertIn("leads_mailable", sig)
+        self.assertLessEqual(sig["leads_mailable"], sig["leads_qualified"])
+
     def test_render_excludes_non_felix_rows(self):
         board = [("felix", "felix-does-this", 100, 5, ""),
                  ("ai", "worker-does-this", 100, 0, ""),
@@ -2813,6 +2844,7 @@ class TestMoneyBoard(unittest.TestCase):
                 sig = self.mb.live_signals()
                 self.assertEqual(sig["letters_sent"], 0)
                 self.assertEqual(sig["leads_qualified"], 0)
+                self.assertEqual(sig["leads_mailable"], 0)
         finally:
             self.mb.TASK_RUNNER_DIR = original
 
@@ -3022,15 +3054,26 @@ class TestWebappApi(unittest.TestCase):
         self.assertIn("signals", payload)
         if payload["actions"]:
             action = payload["actions"][0]
-            self.assertEqual(set(action), {"action", "euros", "minutes", "note"})
+            self.assertEqual(set(action),
+                             {"action", "euros", "minutes", "note", "gates"})
 
-    def test_money_board_actions_are_felix_only_and_euro_sorted(self):
-        """felix_actions() already guarantees this - confirming the API
-        layer doesn't accidentally re-sort or leak "ai"/"done" rows through
-        its own transform."""
+    def test_money_board_actions_match_the_cli_order_exactly(self):
+        """The dashboard and the CLI must never disagree about what comes
+        first. Comparing against money_board.sorted_actions() rather than
+        re-asserting the rule here is deliberate: an earlier version of this
+        test asserted plain euro-descending, so when the ordering rule gained
+        gating rows the test would have failed the *correct* behaviour."""
         _, payload = self.api.get_money_board({})
-        euros = [a["euros"] for a in payload["actions"]]
-        self.assertEqual(euros, sorted(euros, reverse=True))
+        expected = [a[1] for a in self.api.money_board.sorted_actions()]
+        self.assertEqual([a["action"] for a in payload["actions"]], expected)
+
+    def test_money_board_gate_rows_are_flagged_for_the_dashboard(self):
+        """The CLI marks a gating row "ZUERST"; the dashboard needs the same
+        fact as data or it renders a 0-EUR gate as the cheapest card."""
+        _, payload = self.api.get_money_board({})
+        gates = [a for a in payload["actions"] if a["gates"]]
+        self.assertTrue(gates)
+        self.assertIs(payload["actions"][0]["gates"], True)
 
     def test_dmarc_leads_shape(self):
         status, payload = self.api.get_dmarc_leads({})

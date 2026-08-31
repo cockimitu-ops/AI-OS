@@ -34,16 +34,16 @@ CHAT_TIMEOUT_S = 170  # stays under the 180s dispatch_task.py/telegram_bridge.py
 # --- dashboards --------------------------------------------------------
 
 def get_money_board(_body):
-    # felix_actions() only filters to Felix's rows - it does NOT sort. Every
-    # existing caller (render(), brief_section()) applies this exact
-    # `sorted(..., key=lambda i: -i[2])` step itself; missing it here was a
-    # real bug caught by this file's own test - the dashboard would have
-    # shown items in BOARD's declaration order instead of by euros, silently
-    # contradicting the entire point of a "sorted by euros" money board.
-    sorted_actions = sorted(money_board.felix_actions(), key=lambda i: -i[2])
+    # money_board.sorted_actions() owns the ordering - gating rows first,
+    # then euros descending. This handler used to re-implement the sort
+    # (`sorted(felix_actions(), key=-euros)`), which was itself the fix for a
+    # real bug where it did not sort at all; keeping a second copy of the rule
+    # here meant the dashboard silently disagreed with the CLI the moment the
+    # rule changed. One function, three callers.
     actions = [
-        {"action": action, "euros": euros, "minutes": minutes, "note": note}
-        for _who, action, euros, minutes, note in sorted_actions
+        {"action": action, "euros": euros, "minutes": minutes, "note": note,
+         "gates": who == "felix-first"}
+        for who, action, euros, minutes, note in money_board.sorted_actions()
     ]
     return 200, {"actions": actions, "signals": money_board.live_signals()}
 

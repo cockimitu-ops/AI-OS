@@ -209,7 +209,11 @@ async function loadMoneyBoard() {
     const s = data.signals || {};
     const pills = [];
     if (s.letters_sent !== undefined) pills.push(`${s.letters_sent} Briefe raus`);
-    if (s.leads_qualified !== undefined) pills.push(`${s.leads_qualified} Leads bereit`);
+    if (s.leads_qualified !== undefined) pills.push(`${s.leads_qualified} Leads qualifiziert`);
+    // Qualified and mailable are different numbers - only the overlap with an
+    // OSM postal address can receive a letter. Showing the bigger one alone
+    // overstates what a batch can actually reach.
+    if (s.leads_mailable !== undefined) pills.push(`${s.leads_mailable} mit Postadresse`);
     if (s.flips && s.flips.open) pills.push(`${s.flips.open} Flips offen (${s.flips.capital_tied_up.toFixed(0)} EUR gebunden)`);
     signalsEl.innerHTML = pills.map((p) => `<span class="signal-pill">${escapeHtml(p)}</span>`).join("");
 
@@ -220,7 +224,7 @@ async function loadMoneyBoard() {
     cardsEl.innerHTML = data.actions.map((a) => `
       <div class="card">
         <div class="card-top">
-          <span class="card-euros">${a.euros ? "~" + a.euros + " EUR" : "Basis"}</span>
+          <span class="card-euros${a.gates ? " card-gate" : ""}">${a.gates ? "ZUERST" : a.euros ? "~" + a.euros + " EUR" : "Basis"}</span>
           <span class="card-minutes">${a.minutes} min</span>
         </div>
         <div class="card-action">${escapeHtml(a.action)}</div>
