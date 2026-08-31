@@ -77,6 +77,38 @@ def get_flip_log(_body):
     return 200, {"rows": rows}
 
 
+DOWNLOADS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "static", "downloads")
+
+
+def get_downloads(_body):
+    """Files the worker generated for Felix to pull down - PDFs from a chat
+    request most commonly, per how this was actually asked for ("let the
+    workers pull data and create pdfs i can download"). Served by
+    server.py's existing static-file path (already path-traversal-tested)
+    at /downloads/<name> - this endpoint only lists what's there, it does
+    not serve the bytes itself."""
+    try:
+        names = [n for n in os.listdir(DOWNLOADS_DIR) if not n.startswith(".")]
+    except OSError:
+        names = []
+    files = []
+    for name in names:
+        full = os.path.join(DOWNLOADS_DIR, name)
+        try:
+            stat = os.stat(full)
+        except OSError:
+            continue
+        files.append({
+            "name": name,
+            "size": stat.st_size,
+            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+            "url": f"/downloads/{name}",
+        })
+    files.sort(key=lambda f: f["modified"], reverse=True)
+    return 200, {"files": files}
+
+
 # --- chat ----------------------------------------------------------------
 
 def post_chat(body):

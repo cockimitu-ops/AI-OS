@@ -78,6 +78,7 @@ body { display: flex; flex-direction: column; }
   background: var(--surface-2); border-radius: 999px; padding: 6px 12px;
   font-size: 0.8rem; color: var(--text-dim);
 }
+.hint { color: var(--text-dim); font-size: 0.85rem; margin: 0 0 14px; }
 .cards { display: flex; flex-direction: column; gap: 10px; }
 .card {
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
@@ -88,6 +89,13 @@ body { display: flex; flex-direction: column; }
 .card-minutes { color: var(--text-dim); font-size: 0.8rem; }
 .card-action { margin: 6px 0 4px; }
 .card-note { color: var(--text-dim); font-size: 0.85rem; }
+.download-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.download-meta { color: var(--text-dim); font-size: 0.8rem; margin-top: 2px; }
+.download-btn {
+  padding: 8px 14px; border-radius: 8px; border: none; flex-shrink: 0;
+  background: var(--accent); color: #0a1420; font-weight: 600; font-size: 0.85rem;
+}
+.download-btn:disabled { opacity: 0.5; }
 
 /* --- tables (dmarc, flips) --- */
 .table-wrap { overflow-x: auto; }

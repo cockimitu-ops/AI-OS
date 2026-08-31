@@ -49,6 +49,7 @@ API_ROUTES = {
     ("GET", "/api/money-board"): api.get_money_board,
     ("GET", "/api/dmarc-leads"): api.get_dmarc_leads,
     ("GET", "/api/flip-log"): api.get_flip_log,
+    ("GET", "/api/downloads"): api.get_downloads,
     ("POST", "/api/chat"): api.post_chat,
 }
 
@@ -134,6 +135,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(500, {"error": "internal error"})
                 return
             self._send_json(status, payload)
+            return
+        if method == "GET" and parsed.path.startswith("/downloads/"):
+            # Unlike the rest of static/ (app code, no secrets), a generated
+            # file here can be a real report - a DMARC lead list with names,
+            # phone numbers, addresses. Gated like the API, not left open
+            # like app.js/style.css. The frontend fetches these with the
+            # Authorization header and saves the result as a blob, rather
+            # than linking to them directly, precisely so this check has
+            # something to check.
+            if not self._authorized():
+                self.send_error(401, "unauthorized")
+                return
+            self._serve_static(parsed.path)
             return
         if method == "GET" and not parsed.path.startswith("/api/"):
             self._serve_static(parsed.path)

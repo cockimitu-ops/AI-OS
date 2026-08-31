@@ -69,6 +69,7 @@ const SCREEN_LOADERS = {
   "screen-money": loadMoneyBoard,
   "screen-dmarc": loadDmarcLeads,
   "screen-flips": loadFlipLog,
+  "screen-downloads": loadDownloads,
 };
 
 function loadActiveScreen() {
@@ -251,6 +252,75 @@ async function loadFlipLog() {
   } catch (err) {
     setConnDot("err");
     tableEl.innerHTML = `<div class="empty-state">Fehler beim Laden: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+// --- downloads ---------------------------------------------------------
+
+function formatBytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+async function downloadFile(url, name, btn) {
+  // Fetched as a blob with the auth header, not linked to directly - the
+  // token never appears in a URL or browser history this way, and
+  // server.py gates /downloads/* on exactly this header (see server.py).
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = "...";
+  try {
+    const res = await fetch(url, {
+      headers: { "Authorization": `Bearer ${getToken()}` },
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(blobUrl);
+  } catch (err) {
+    alert(`Download fehlgeschlagen: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
+async function loadDownloads() {
+  const listEl = document.getElementById("downloads-list");
+  try {
+    const data = await api("/api/downloads");
+    setConnDot("ok");
+    if (!data.files.length) {
+      listEl.innerHTML = `<div class="empty-state">Noch keine Dateien. Bitte den Bot im Chat, dir etwas zu erstellen.</div>`;
+      return;
+    }
+    listEl.innerHTML = data.files.map((f) => `
+      <div class="card">
+        <div class="download-row">
+          <div>
+            <div class="card-action">${escapeHtml(f.name)}</div>
+            <div class="download-meta">${formatBytes(f.size)} · ${escapeHtml(f.modified.replace("T", " "))}</div>
+          </div>
+          <button class="download-btn" data-url="${escapeHtml(f.url)}" data-name="${escapeHtml(f.name)}">
+            Herunterladen
+          </button>
+        </div>
+      </div>
+    `).join("");
+    listEl.querySelectorAll(".download-btn").forEach((btn) => {
+      btn.addEventListener("click", () =>
+        downloadFile(btn.dataset.url, btn.dataset.name, btn));
+    });
+  } catch (err) {
+    setConnDot("err");
+    listEl.innerHTML = `<div class="empty-state">Fehler beim Laden: ${escapeHtml(err.message)}</div>`;
   }
 }
 

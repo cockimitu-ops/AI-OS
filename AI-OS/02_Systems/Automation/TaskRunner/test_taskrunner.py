@@ -3080,6 +3080,61 @@ class TestWebappApi(unittest.TestCase):
         import agents
         self.assertIsNone(agents.resolve("@notarealagent"))
 
+    def test_downloads_lists_files_with_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            open(os.path.join(tmp, "report.pdf"), "wb").write(b"%PDF-1.3 fake")
+            original = self.api.DOWNLOADS_DIR
+            self.api.DOWNLOADS_DIR = tmp
+            try:
+                status, payload = self.api.get_downloads({})
+            finally:
+                self.api.DOWNLOADS_DIR = original
+        self.assertEqual(status, 200)
+        self.assertEqual(len(payload["files"]), 1)
+        f = payload["files"][0]
+        self.assertEqual(f["name"], "report.pdf")
+        self.assertEqual(f["size"], len(b"%PDF-1.3 fake"))
+        self.assertEqual(f["url"], "/downloads/report.pdf")
+
+    def test_downloads_skips_dotfiles_like_gitkeep(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            open(os.path.join(tmp, ".gitkeep"), "w").close()
+            open(os.path.join(tmp, "real.pdf"), "wb").write(b"x")
+            original = self.api.DOWNLOADS_DIR
+            self.api.DOWNLOADS_DIR = tmp
+            try:
+                _, payload = self.api.get_downloads({})
+            finally:
+                self.api.DOWNLOADS_DIR = original
+        names = [f["name"] for f in payload["files"]]
+        self.assertEqual(names, ["real.pdf"])
+
+    def test_downloads_missing_directory_returns_empty_not_a_crash(self):
+        original = self.api.DOWNLOADS_DIR
+        self.api.DOWNLOADS_DIR = "/nonexistent/downloads/dir"
+        try:
+            status, payload = self.api.get_downloads({})
+        finally:
+            self.api.DOWNLOADS_DIR = original
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["files"], [])
+
+    def test_downloads_newest_file_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old_path = os.path.join(tmp, "old.pdf")
+            new_path = os.path.join(tmp, "new.pdf")
+            open(old_path, "w").close()
+            os.utime(old_path, (1000000000, 1000000000))
+            open(new_path, "w").close()
+            os.utime(new_path, (2000000000, 2000000000))
+            original = self.api.DOWNLOADS_DIR
+            self.api.DOWNLOADS_DIR = tmp
+            try:
+                _, payload = self.api.get_downloads({})
+            finally:
+                self.api.DOWNLOADS_DIR = original
+        self.assertEqual([f["name"] for f in payload["files"]], ["new.pdf", "old.pdf"])
+
     def test_chat_web_thread_namespace_never_collides_with_telegram(self):
         """web_ vs tg_ prefixes must stay visually and structurally distinct
         - this is what stops a web chat and a Telegram chat from ever
