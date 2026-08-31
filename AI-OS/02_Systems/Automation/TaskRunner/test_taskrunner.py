@@ -2057,6 +2057,24 @@ class TestDmarcProspector(unittest.TestCase):
         kept = self.dp.drop_platform_subdomains(found)
         self.assertEqual(set(kept), {"metzgerei-mueller.de"})
 
+    def test_public_bodies_are_dropped(self):
+        """Government offices, town halls, churches - not 249-EUR-fix
+        customers, and cold-pitching a Landratsamt reads badly.
+        landkreis-zwickau.de surfaced as a lead 2026-08-31; this filter is
+        the fix."""
+        payload = {"elements": [
+            {"tags": {"office": "government", "name": "Landratsamt",
+                      "website": "https://landkreis-zwickau.de"}},
+            {"tags": {"amenity": "place_of_worship", "name": "Kirche",
+                      "website": "https://kirche.de"}},
+            {"tags": {"shop": "bakery", "name": "Bäcker",
+                      "website": "https://baecker.de"}},
+        ]}
+        kept = self.dp.parse_overpass(payload)
+        self.assertIn("baecker.de", kept)
+        self.assertNotIn("landkreis-zwickau.de", kept)
+        self.assertNotIn("kirche.de", kept)
+
     def test_chains_are_dropped_by_location_count(self):
         payload = {"elements": [
             {"tags": {"shop": "supermarket", "name": "Globus",
@@ -2273,6 +2291,23 @@ class TestStatusUpdate(unittest.TestCase):
 
     def test_missing_stats_do_not_crash_the_update(self):
         self.assertIn("keine Läufe", self.su.format_sniper_section(None))
+
+    def test_money_board_section_leads_the_substantive_sections(self):
+        """The system's point is money in - the money board must appear before
+        the todo list and leads in the morning digest."""
+        spec = importlib.util.spec_from_file_location(
+            "morning_brief", os.path.join(HERE, "scripts", "morning_brief.py"))
+        # morning_brief imports several sibling modules; ensure scripts/ is importable
+        scripts_dir = os.path.join(HERE, "scripts")
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        mbrief = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mbrief)
+        digest = mbrief.build_digest(
+            {"x": (True, "ok")}, todos=[{"text": "a todo"}],
+            leads="DMARC-Leads (1 neu):", money="Top Geld-Moves:\n  • test")
+        self.assertLess(digest.index("Geld-Moves"), digest.index("a todo"))
+        self.assertLess(digest.index("a todo"), digest.index("DMARC-Leads"))
 
     def test_spend_section_absent_when_paid_tier_is_off(self):
         os.environ.pop("OPENROUTER_PAID_ENABLED", None)
@@ -2703,6 +2738,67 @@ class TestOutreach(unittest.TestCase):
             finally:
                 self.o.CONTACTED_PATH = original
             self.assertEqual(set(contacted), {"a.de", "b.de"})
+
+
+class TestMoneyBoard(unittest.TestCase):
+    """The deterministic money board (added 2026-08-31). It replaces the
+    nightly LLM re-derivation of the known blocked-on-human list - so the
+    tests guard that it stays a real, sorted, honest list and folds in live
+    state without ever raising."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "money_board", os.path.join(HERE, "scripts", "money_board.py"))
+        cls.mb = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mb)
+
+    def test_board_has_felix_actions(self):
+        self.assertTrue(self.mb.felix_actions())
+
+    def test_render_sorts_by_euros_descending(self):
+        board = [("felix", "small", 10, 5, ""), ("felix", "big", 500, 5, ""),
+                 ("felix", "mid", 100, 5, "")]
+        out = self.mb.render(board=board)
+        self.assertLess(out.index("big"), out.index("mid"))
+        self.assertLess(out.index("mid"), out.index("small"))
+
+    def test_render_excludes_non_felix_rows(self):
+        board = [("felix", "felix-does-this", 100, 5, ""),
+                 ("ai", "worker-does-this", 100, 0, ""),
+                 ("done", "already-shipped", 100, 0, "")]
+        out = self.mb.render(board=board)
+        self.assertIn("felix-does-this", out)
+        self.assertNotIn("worker-does-this", out)
+        self.assertNotIn("already-shipped", out)
+
+    def test_brief_section_is_compact_and_capped(self):
+        board = [("felix", f"action number {i}", 100 - i, 5, "") for i in range(8)]
+        section = self.mb.brief_section(board=board, top=3)
+        self.assertEqual(section.count("•"), 3)
+
+    def test_brief_section_none_when_no_felix_actions(self):
+        self.assertIsNone(self.mb.brief_section(board=[("ai", "x", 0, 0, "")]))
+
+    def test_live_signals_never_raise_on_missing_files(self):
+        # Points at a temp dir with no state files - must degrade, not crash.
+        original = self.mb.TASK_RUNNER_DIR
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                self.mb.TASK_RUNNER_DIR = tmp
+                sig = self.mb.live_signals()
+                self.assertEqual(sig["letters_sent"], 0)
+                self.assertEqual(sig["leads_qualified"], 0)
+        finally:
+            self.mb.TASK_RUNNER_DIR = original
+
+    def test_the_real_board_has_no_obvious_stale_done_items_leaking_as_todo(self):
+        """The Moat Blueprint and Fiverr gig went live 2026-08-27 - neither
+        should appear as a Felix TODO. This catches the exact class of stale
+        item the audit found littered across the vault."""
+        felix_text = " ".join(a[1].lower() for a in self.mb.felix_actions())
+        self.assertNotIn("publish the moat", felix_text)
+        self.assertNotIn("post the fiverr gig", felix_text)
 
 
 if __name__ == "__main__":

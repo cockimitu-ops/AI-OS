@@ -19,6 +19,7 @@ sys.path.insert(0, SCRIPT_DIR)
 sys.path.insert(0, os.path.dirname(SCRIPT_DIR))
 import dmarc_prospector  # noqa: E402
 import health_check  # noqa: E402  (needs sys.path set first)
+import money_board  # noqa: E402
 import proposals  # noqa: E402
 
 NOTIFIER = os.path.join(SCRIPT_DIR, "send_telegram_notification.py")
@@ -49,10 +50,14 @@ def format_todo_section(todos):
     return "\n".join(lines)
 
 
-def build_digest(current_checks, todos=None, now=None, leads=None):
+def build_digest(current_checks, todos=None, now=None, leads=None, money=None):
     now = now or time.localtime()
     date_str = time.strftime("%A, %d %B %Y", now)
     parts = [f"Good morning - {date_str}", "", format_status_section(current_checks)]
+    # Money board first among the substantive sections: the whole system's
+    # point is money in, and the top human actions are what actually move it.
+    if money:
+        parts += ["", money]
     todo_section = format_todo_section(todos)
     if todo_section:
         parts += ["", todo_section]
@@ -63,7 +68,8 @@ def build_digest(current_checks, todos=None, now=None, leads=None):
 
 def main():
     leads, shown = dmarc_prospector.morning_section()
-    digest = build_digest(health_check.run_checks(), proposals.load_todos(), leads=leads)
+    digest = build_digest(health_check.run_checks(), proposals.load_todos(),
+                          leads=leads, money=money_board.brief_section())
     print(digest)
     result = subprocess.run([sys.executable, NOTIFIER, digest], timeout=30, check=False)
     # Only mark leads as seen once the message actually went out. Marking them

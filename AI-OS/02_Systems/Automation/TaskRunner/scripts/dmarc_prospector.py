@@ -88,6 +88,18 @@ DIRECTIVE_RE = re.compile(r"^\s*<!--\s*([a-z_]+)\s*:\s*(.+?)\s*-->\s*$", re.I | 
 # lands on bus stops, churches, and recycling containers.
 BUSINESS_KEYS = ("shop", "craft", "office", "healthcare")
 
+# Categories to drop even when they carry a website: public authorities,
+# political parties, religious/charity bodies. They are not 249-EUR-fix
+# customers, and cold-pitching a Landratsamt or a Kirchgemeinde reads badly.
+# Matched against the office= tag value and against the government/religion
+# top-level keys. (landkreis-zwickau.de surfaced as a lead 2026-08-31 - a
+# county administration is exactly what this filter is for.)
+EXCLUDE_OFFICE_VALUES = frozenset({
+    "government", "administrative", "diplomatic", "political_party",
+    "religion", "quango", "register",
+})
+EXCLUDE_KEYS = ("government", "office:government")
+
 
 # --- discovery: OpenStreetMap ------------------------------------------------
 
@@ -191,6 +203,12 @@ def parse_overpass(payload):
         tags = element.get("tags", {})
         domain = domain_from_url(tags.get("website") or tags.get("contact:website"))
         if not domain:
+            continue
+        if tags.get("office") in EXCLUDE_OFFICE_VALUES or tags.get("government"):
+            continue
+        # amenity values that are civic, not commercial
+        if tags.get("amenity") in ("townhall", "public_building", "courthouse",
+                                    "place_of_worship"):
             continue
         category = next((tags[k] for k in BUSINESS_KEYS if tags.get(k)), "?")
         entry = found.setdefault(domain, {
