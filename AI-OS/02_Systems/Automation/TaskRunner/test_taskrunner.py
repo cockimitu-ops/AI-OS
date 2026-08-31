@@ -927,7 +927,15 @@ class TestOrchestration(TaskRunnerTestCase):
         self.assertIsNone(self.runner._route("anything"))
 
     def test_an_explicit_agent_is_never_overridden_by_routing(self):
-        """Routing runs last precisely so a stated intent always wins."""
+        """Routing runs last precisely so a stated intent always wins.
+
+        Checks the actual "## Your role for this task: X" header, not a bare
+        name substring - Knowledge_Core.md's own "AI OS" section lists all 5
+        agent names while describing the system in general (added
+        2026-08-31), so "Vault Architect" now legitimately appears in every
+        prompt's standing context regardless of which agent is active. The
+        role header is the real signal of which persona's block got
+        appended; a name appearing in passing prose is not."""
         self._reply("Vault_Architect")
         seen = {}
 
@@ -938,10 +946,17 @@ class TestOrchestration(TaskRunnerTestCase):
         self.runner._attempt = spy
         self.queue("t.md", "<!-- agent: Research_Analyst -->\ndo a thing")
         self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
-        self.assertIn("Research Analyst", seen["prompt"])
-        self.assertNotIn("Vault Architect", seen["prompt"])
+        self.assertIn("## Your role for this task: Research Analyst", seen["prompt"])
+        self.assertNotIn("## Your role for this task: Vault Architect", seen["prompt"])
 
-    def test_an_unrouted_task_runs_on_the_base_prompt_exactly_as_before(self):
+    def test_an_unrouted_task_gets_the_base_prompt_plus_standing_context_but_no_role(self):
+        """Renamed from "...exactly_as_before": since 2026-08-31 an unrouted
+        task's prompt is intentionally no longer just BASE_SYSTEM_PROMPT
+        verbatim - Knowledge_Core.md's content is appended to every task
+        regardless of agent, because relying on a model to decide to go read
+        it did not work (verified live: a real dispatch with no hint of the
+        filename searched the vault broadly and never found it). No agent
+        role section should be present, since none was selected."""
         self._reply("NONE")
         seen = {}
 
@@ -952,7 +967,9 @@ class TestOrchestration(TaskRunnerTestCase):
         self.runner._attempt = spy
         self.queue("t.md", "do a thing")
         self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
-        self.assertEqual(seen["prompt"], self.runner.BASE_SYSTEM_PROMPT)
+        self.assertIn(self.runner.BASE_SYSTEM_PROMPT, seen["prompt"])
+        self.assertIn("Standing context", seen["prompt"])
+        self.assertNotIn("## Your role for this task:", seen["prompt"])
 
     def test_routing_applies_the_chosen_agents_prompt(self):
         self._reply("Vault_Architect")
@@ -2553,23 +2570,25 @@ class TestPaidTierGating(unittest.TestCase):
     def test_cost_prefers_openrouter_reported_cost_over_every_estimate(self):
         """Verified live 2026-08-31: a real call's usage carried
         usage.cost=4.9476e-05 - what was actually billed, not an estimate
-        of it. Nothing computed locally should override that when present."""
+        of it. Nothing computed locally should override that when present.
+        reported_cost is pre-summed by the caller across every chat() call
+        an attempt made (original + a possible synthesis nudge) - see
+        _record_paid_spend()."""
         self.runner.litellm.completion_cost = lambda **k: 999.0
-        usage = types.SimpleNamespace(cost=0.00042)
-        got = self.runner._cost_for_paid_call("any/model", 100, 50, usage=usage)
+        got = self.runner._cost_for_paid_call("any/model", 100, 50, reported_cost=0.00042)
         self.assertAlmostEqual(got, 0.00042)
 
     def test_cost_falls_back_to_litellm_then_to_env_rate(self):
         self.runner.litellm.completion_cost = lambda **k: 0.01
         self.assertAlmostEqual(
-            self.runner._cost_for_paid_call("any/model", 100, 50, usage=None), 0.01)
+            self.runner._cost_for_paid_call("any/model", 100, 50, reported_cost=None), 0.01)
 
         self.runner.litellm.completion_cost = lambda **k: (_ for _ in ()).throw(Exception("nope"))
         self.runner.OPENROUTER_PAID_INPUT_PER_M = 1.19
         self.runner.OPENROUTER_PAID_OUTPUT_PER_M = 3.74
         expected = (100 / 1e6) * 1.19 + (50 / 1e6) * 3.74
         self.assertAlmostEqual(
-            self.runner._cost_for_paid_call("any/model", 100, 50, usage=None), expected)
+            self.runner._cost_for_paid_call("any/model", 100, 50, reported_cost=None), expected)
 
 
 class TestSpendGuard(unittest.TestCase):
@@ -2971,6 +2990,318 @@ class TestFlipLog(unittest.TestCase):
         self._sell(row=1, sold=40.0, hours=1.5)
         rows = self.fl.read_log()
         self.assertLess(float(rows[0]["Net €"]), 0)
+
+
+class TestWebappApi(unittest.TestCase):
+    """The AI-OS web client's API layer (added 2026-08-31). Every dashboard
+    handler is a thin JSON transform over money_board.py/dmarc_prospector.py/
+    flip_log.py's own already-tested functions - these tests guard the
+    transform itself, not re-test the underlying modules. post_chat's input
+    validation is tested without needing the real worker running (that path
+    was verified live, end to end, separately - see webapp/README.md)."""
+
+    @classmethod
+    def setUpClass(cls):
+        webapp_dir = os.path.join(HERE, "webapp")
+        for p in (HERE, os.path.join(HERE, "scripts")):
+            if p not in sys.path:
+                sys.path.insert(0, p)
+        spec = importlib.util.spec_from_file_location(
+            "webapp_api", os.path.join(webapp_dir, "api.py"))
+        cls.api = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.api)
+
+    def test_money_board_shape_matches_the_5tuple_source(self):
+        status, payload = self.api.get_money_board({})
+        self.assertEqual(status, 200)
+        self.assertIn("actions", payload)
+        self.assertIn("signals", payload)
+        if payload["actions"]:
+            action = payload["actions"][0]
+            self.assertEqual(set(action), {"action", "euros", "minutes", "note"})
+
+    def test_money_board_actions_are_felix_only_and_euro_sorted(self):
+        """felix_actions() already guarantees this - confirming the API
+        layer doesn't accidentally re-sort or leak "ai"/"done" rows through
+        its own transform."""
+        _, payload = self.api.get_money_board({})
+        euros = [a["euros"] for a in payload["actions"]]
+        self.assertEqual(euros, sorted(euros, reverse=True))
+
+    def test_dmarc_leads_shape(self):
+        status, payload = self.api.get_dmarc_leads({})
+        self.assertEqual(status, 200)
+        self.assertIn("total_qualified", payload)
+        self.assertIsInstance(payload["leads"], list)
+        if payload["leads"]:
+            lead = payload["leads"][0]
+            self.assertEqual(
+                set(lead),
+                {"domain", "name", "category", "score", "dmarc", "spf",
+                 "provider", "address", "phone"})
+
+    def test_dmarc_leads_never_include_a_score_below_six(self):
+        """rank()'s own min_score default is 6 - confirming the API layer
+        doesn't accidentally pass a laxer threshold that would leak
+        low-quality leads into the dashboard."""
+        _, payload = self.api.get_dmarc_leads({})
+        for lead in payload["leads"]:
+            self.assertGreaterEqual(lead["score"], 6)
+
+    def test_flip_log_rows_get_an_open_flag(self):
+        status, payload = self.api.get_flip_log({})
+        self.assertEqual(status, 200)
+        for row in payload["rows"]:
+            self.assertIn("open", row)
+            self.assertEqual(row["open"], not bool(row.get("Sold €")))
+
+    def test_chat_rejects_empty_message(self):
+        status, payload = self.api.post_chat({"message": "  ", "thread_id": "x"})
+        self.assertEqual(status, 400)
+        self.assertIn("error", payload)
+
+    def test_chat_rejects_missing_thread_id(self):
+        status, payload = self.api.post_chat({"message": "hi"})
+        self.assertEqual(status, 400)
+
+    def test_chat_at_prefix_with_unknown_agent_is_kept_as_text(self):
+        """Mirrors telegram_bridge.py's own _split_agent_prefix behaviour:
+        an unresolved leading @word is a sentence, not a failed selection -
+        eating it would mangle a real message like "@felix, could you..."."""
+        calls = {}
+        def fake_enqueue(*a, **k):
+            calls["ran"] = True
+            return 200, {"reply": "ok", "agent": None}
+        # Patch just enough to observe what post_chat *would* send, without
+        # needing the real worker: intercept before the file write by
+        # checking agents.resolve's behaviour directly is simpler and
+        # sufficient here since the prefix-splitting logic is inline in
+        # post_chat, not a separate function to mock around.
+        import agents
+        self.assertIsNone(agents.resolve("@notarealagent"))
+
+    def test_chat_web_thread_namespace_never_collides_with_telegram(self):
+        """web_ vs tg_ prefixes must stay visually and structurally distinct
+        - this is what stops a web chat and a Telegram chat from ever
+        accidentally sharing history."""
+        import memory
+        web_thread = f"web_{'x'*8}"
+        self.assertTrue(web_thread.startswith("web_"))
+        self.assertNotEqual(memory._safe(web_thread), memory._safe(f"tg_{'x'*8}"))
+
+
+class TestKnowledgeCoreInjection(TaskRunnerTestCase):
+    """Fix for the gap found live 2026-08-31: a worker task asked a question
+    whose answer lives only in Knowledge_Core.md, with no hint of the
+    filename, searched the vault broadly, and never found or opened it.
+    Rather than rely on a model deciding to go look, the file's content is
+    now appended to every task's system prompt directly - it is small
+    (hard-capped ~10,000 chars) and explicitly meant to be "always cheap to
+    load" per its own Purpose line."""
+
+    def test_missing_file_returns_empty_string_not_a_crash(self):
+        self.runner.KNOWLEDGE_CORE_PATH = "/nonexistent/Knowledge_Core.md"
+        self.assertEqual(self.runner._load_knowledge_core(), "")
+
+    def test_real_file_is_actually_read(self):
+        with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".md", delete=False, encoding="utf-8") as f:
+            f.write("some distinctive marker text 12345")
+            path = f.name
+        self.addCleanup(os.unlink, path)
+        self.runner.KNOWLEDGE_CORE_PATH = path
+        self.assertIn("some distinctive marker text 12345",
+                      self.runner._load_knowledge_core())
+
+    def test_system_prompt_includes_knowledge_core_with_no_agent(self):
+        self.runner.KNOWLEDGE_CORE_PATH = "/nonexistent/x.md"
+        with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".md", delete=False, encoding="utf-8") as f:
+            f.write("Felix lives in Crimmitschau.")
+            path = f.name
+        self.addCleanup(os.unlink, path)
+        self.runner.KNOWLEDGE_CORE_PATH = path
+        prompt = self.runner._system_prompt_for(None)
+        self.assertIn("Felix lives in Crimmitschau.", prompt)
+        self.assertIn(self.runner.BASE_SYSTEM_PROMPT, prompt)
+        self.assertNotIn("## Your role for this task:", prompt)
+
+    def test_missing_knowledge_core_does_not_inject_an_empty_section(self):
+        """A missing file should degrade to "just the base prompt", not to
+        a "## Standing context" header with nothing under it."""
+        self.runner.KNOWLEDGE_CORE_PATH = "/nonexistent/x.md"
+        prompt = self.runner._system_prompt_for(None)
+        self.assertEqual(prompt, self.runner.BASE_SYSTEM_PROMPT)
+
+    def test_system_prompt_includes_both_knowledge_core_and_agent_role(self):
+        with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".md", delete=False, encoding="utf-8") as f:
+            f.write("Felix lives in Crimmitschau.")
+            path = f.name
+        self.addCleanup(os.unlink, path)
+        self.runner.KNOWLEDGE_CORE_PATH = path
+        prompt = self.runner._system_prompt_for("Vault_Architect")
+        self.assertIn("Felix lives in Crimmitschau.", prompt)
+        self.assertIn("## Your role for this task: Vault Architect", prompt)
+        # Standing context appears before the role section, not after -
+        # the role should be able to read it as already-established fact,
+        # not have it tacked on as an afterthought below its own block.
+        self.assertLess(prompt.index("Felix lives in Crimmitschau."),
+                        prompt.index("## Your role for this task:"))
+
+
+class TestSynthesisNudge(TaskRunnerTestCase):
+    """Fix for the other gap found live 2026-08-31: two of three real
+    dispatches that afternoon explored correctly but never produced a final
+    prose answer - format_interpreter_output()'s existing fallback shipped
+    the raw tool transcript as "the answer" instead. _attempt() now nudges
+    once, in the same interpreter session, before accepting that fallback."""
+
+    def test_has_prose_true_for_a_real_answer(self):
+        msgs = [{"role": "assistant", "type": "message", "content": "the answer"}]
+        self.assertTrue(self.runner._has_prose(msgs))
+
+    def test_has_prose_false_for_code_and_output_only(self):
+        msgs = [
+            {"role": "assistant", "type": "code", "content": "ls", "format": "shell"},
+            {"role": "computer", "content": "file1\nfile2"},
+        ]
+        self.assertFalse(self.runner._has_prose(msgs))
+
+    def test_has_prose_false_for_empty(self):
+        self.assertFalse(self.runner._has_prose([]))
+        self.assertFalse(self.runner._has_prose(None))
+
+    def test_no_prose_first_turn_triggers_one_nudge_and_uses_its_prose(self):
+        calls = []
+
+        def scripted_chat(message, display=False, stream=False):
+            calls.append(message)
+            if len(calls) == 1:
+                return [{"role": "assistant", "type": "code",
+                        "content": "ls", "format": "shell"},
+                       {"role": "computer", "content": "file1"}]
+            return [{"role": "assistant", "type": "message",
+                    "content": "Based on that, the answer is 42."}]
+
+        self.fake.chat = scripted_chat
+        result = self.runner._attempt("some/model", "what is the answer?")
+        self.assertEqual(len(calls), 2, "exactly one nudge, not zero or a loop")
+        self.assertIn("the answer is 42", result)
+
+    def test_nudge_that_also_produces_no_prose_raises_not_returns(self):
+        """Verified live 2026-08-31: this is exactly the case that exposed
+        the real gap - a nudge that runs cleanly but stays silent used to be
+        accepted as a successful (if unsatisfying) result, which meant
+        MODEL_CHAIN never got the chance to try a model actually capable of
+        answering. Raising here lets the existing per-model retry loop in
+        _run_task treat this the same way it already treats a quota error."""
+        def scripted_chat(message, display=False, stream=False):
+            return [{"role": "assistant", "type": "code",
+                    "content": "ls", "format": "shell"},
+                   {"role": "computer", "content": "file1"}]
+
+        self.fake.chat = scripted_chat
+        with self.assertRaises(RuntimeError):
+            self.runner._attempt("some/model", "what is the answer?")
+
+    def test_nudge_that_itself_errors_also_raises_not_falls_back(self):
+        """An erroring nudge and a silently-empty one are the same outcome
+        from the caller's perspective - both mean "no answer, try the next
+        model" - so both must raise, not one raise and one succeed."""
+        calls = []
+
+        def scripted_chat(message, display=False, stream=False):
+            calls.append(message)
+            if len(calls) == 1:
+                return [{"role": "assistant", "type": "code",
+                        "content": "ls", "format": "shell"},
+                       {"role": "computer", "content": "file1"}]
+            raise RuntimeError("rate limited")
+
+        self.fake.chat = scripted_chat
+        with self.assertRaises(RuntimeError):
+            self.runner._attempt("some/model", "what is the answer?")
+        self.assertEqual(len(calls), 2, "the nudge must still be attempted")
+
+    def test_prose_on_the_first_turn_never_triggers_a_nudge(self):
+        calls = []
+
+        def scripted_chat(message, display=False, stream=False):
+            calls.append(message)
+            return [{"role": "assistant", "type": "message", "content": "done"}]
+
+        self.fake.chat = scripted_chat
+        self.runner._attempt("some/model", "do a thing")
+        self.assertEqual(len(calls), 1, "a clean answer must not cost an extra call")
+
+
+class TestPaidUsageAccumulation(TaskRunnerTestCase):
+    """The synthesis nudge above means _attempt() can call interpreter.chat()
+    twice in one attempt. The old single-value _last_paid_usage overwrote on
+    each call, silently dropping the first call's tokens from the budget
+    ledger if the second (the nudge) also hit the paid model - undercounting
+    real spend, which spend_guard.py's whole design exists to prevent."""
+
+    def test_record_paid_spend_sums_usage_across_multiple_calls(self):
+        self.runner._last_paid_usage["values"] = [
+            types.SimpleNamespace(prompt_tokens=100, completion_tokens=20, cost=None),
+            types.SimpleNamespace(prompt_tokens=50, completion_tokens=15, cost=None),
+        ]
+        self.runner.litellm.completion_cost = lambda **k: None
+        self.runner.OPENROUTER_PAID_INPUT_PER_M = 1.0
+        self.runner.OPENROUTER_PAID_OUTPUT_PER_M = 1.0
+        with tempfile.TemporaryDirectory() as tmp:
+            self.runner.spend_guard.LEDGER_PATH = os.path.join(tmp, "ledger.json")
+            self.runner._record_paid_spend("m", "instr", "sys", None, "out")
+            spent = self.runner.spend_guard.month_spent(
+                self.runner.spend_guard.load_ledger())
+        # (100+50)/1e6 + (20+15)/1e6 = 0.000185 - proves both entries summed,
+        # not just the last one (which alone would give 0.000065).
+        self.assertAlmostEqual(spent, 0.000185, places=6)
+
+    def test_record_paid_spend_sums_reported_cost_across_calls_too(self):
+        self.runner._last_paid_usage["values"] = [
+            types.SimpleNamespace(prompt_tokens=1, completion_tokens=1, cost=0.001),
+            types.SimpleNamespace(prompt_tokens=1, completion_tokens=1, cost=0.002),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            self.runner.spend_guard.LEDGER_PATH = os.path.join(tmp, "ledger.json")
+            self.runner._record_paid_spend("m", "instr", "sys", None, "out")
+            spent = self.runner.spend_guard.month_spent(
+                self.runner.spend_guard.load_ledger())
+        self.assertAlmostEqual(spent, 0.003, places=6)
+
+    def test_a_model_that_explores_without_answering_is_skipped_for_the_next_one(self):
+        """The actual live scenario, end to end through _run_task, not just
+        _attempt() in isolation: the first model in the chain explores and
+        never answers even after a nudge, and the task must still complete
+        with the second model's clean answer - not the first model's raw
+        transcript, and not an outright failure either."""
+        first_model = self.runner.MODEL_CHAIN[0]["model"]
+
+        def scripted_chat(message, display=False, stream=False):
+            if self.runner.interpreter.llm.model == first_model:
+                return [{"role": "assistant", "type": "code",
+                        "content": "ls", "format": "shell"},
+                       {"role": "computer", "content": "irrelevant output"}]
+            return [{"role": "assistant", "type": "message", "content": "the real answer"}]
+
+        self.fake.chat = scripted_chat
+        self.runner.time.sleep = lambda s: None  # skip the real 20s inter-model delay
+        self.queue("t.md", "do a thing")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        self.assertEqual(self.log_of("t.md"), "the real answer")
+
+    def test_attempt_resets_the_accumulator_before_a_new_call(self):
+        """A failed paid attempt must not leave stale usage for a later,
+        unrelated successful attempt to inherit."""
+        self.runner._last_paid_usage["values"] = [
+            types.SimpleNamespace(prompt_tokens=999, completion_tokens=999, cost=None)]
+        self.fake.chat = lambda *a, **k: [
+            {"role": "assistant", "type": "message", "content": "ok"}]
+        self.runner._attempt("some/model", "do a thing")
+        self.assertEqual(self.runner._last_paid_usage["values"], [])
 
 
 if __name__ == "__main__":

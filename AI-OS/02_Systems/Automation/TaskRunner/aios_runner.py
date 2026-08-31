@@ -284,7 +284,7 @@ def _load_system_prompt():
 # usage" rather than crashing worker startup - _attempt() falls back to
 # litellm.token_counter() for the budget ledger either way, so this patch
 # failing to apply costs accuracy, not correctness.
-_last_paid_usage = {"value": None}
+_last_paid_usage = {"values": []}
 
 if hasattr(interpreter.llm, "completions"):
     _original_completions = interpreter.llm.completions
@@ -301,7 +301,13 @@ if hasattr(interpreter.llm, "completions"):
                 if usage is None and isinstance(chunk, dict):
                     usage = chunk.get("usage")
                 if usage:
-                    _last_paid_usage["value"] = usage
+                    # Appended, not overwritten: _attempt() may call
+                    # interpreter.chat() twice on the same model (the
+                    # original turn, then a synthesis nudge if the first
+                    # produced no prose - see _attempt()). Overwriting would
+                    # silently drop the first call's tokens from the budget
+                    # ledger, undercounting real spend.
+                    _last_paid_usage["values"].append(usage)
             yield chunk
 
     interpreter.llm.completions = _completions_with_paid_tier_support
@@ -314,7 +320,7 @@ def _usage_field(usage, name):
     return value or 0
 
 
-def _cost_for_paid_call(model, prompt_tokens, completion_tokens, usage=None):
+def _cost_for_paid_call(model, prompt_tokens, completion_tokens, reported_cost=None):
     """USD for one call, in order of trust:
 
     1. OpenRouter reports the actual billed cost directly on usage.cost -
@@ -326,7 +332,10 @@ def _cost_for_paid_call(model, prompt_tokens, completion_tokens, usage=None):
        one _attempt() actually uses) on an otherwise-identical call - so in
        practice tier 3 below is what prices most real calls today, not this
        one. Kept as the first check anyway since it costs nothing to try and
-       will simply start winning if that gap closes upstream.
+       will simply start winning if that gap closes upstream. `reported_cost`
+       is pre-summed by the caller across every chat() call this attempt
+       made (original turn + a possible synthesis nudge), not a single raw
+       usage object - see _record_paid_spend().
     2. litellm.completion_cost() - its own maintained, provider-aware
        pricing database. Confirmed live the same day that it does NOT yet
        know this model ("This model isn't mapped yet") - kept as the middle
@@ -340,10 +349,8 @@ def _cost_for_paid_call(model, prompt_tokens, completion_tokens, usage=None):
        this whole tier is proof that OpenRouter's real-time pricing must
        never be trusted from a search result once options 1 or 2 exist.
     """
-    if usage is not None:
-        reported = _usage_field(usage, "cost")
-        if reported:
-            return reported
+    if reported_cost:
+        return reported_cost
     try:
         cost = litellm.completion_cost(
             model=model, prompt_tokens=prompt_tokens,
@@ -357,22 +364,26 @@ def _cost_for_paid_call(model, prompt_tokens, completion_tokens, usage=None):
 
 
 def _record_paid_spend(model, instruction, system_prompt, history, output):
-    """Called once, right after a successful paid-tier attempt. Prefers the
-    usage captured off the real stream; falls back to counting the text that
-    was actually sent/received if that capture ever comes back empty - a
-    budget cap that silently records $0 on a bug is worse than one that
-    slightly over-counts, since the entire point is to fail closed."""
-    usage = _last_paid_usage["value"]
-    _last_paid_usage["value"] = None
-    if usage:
-        prompt_tok = _usage_field(usage, "prompt_tokens")
-        completion_tok = _usage_field(usage, "completion_tokens")
+    """Called once, right after a successful paid-tier attempt. Sums usage
+    across every chat() call this attempt made - the original turn, plus a
+    synthesis nudge if one happened (see _attempt()) - since both are real
+    billed calls on the same model. Falls back to counting the text that was
+    actually sent/received if no usage was captured at all - a budget cap
+    that silently records $0 on a bug is worse than one that slightly
+    over-counts, since the entire point is to fail closed."""
+    usages = _last_paid_usage["values"]
+    _last_paid_usage["values"] = []
+    if usages:
+        prompt_tok = sum(_usage_field(u, "prompt_tokens") for u in usages)
+        completion_tok = sum(_usage_field(u, "completion_tokens") for u in usages)
+        reported_cost = sum(c for c in (_usage_field(u, "cost") for u in usages) if c) or None
     else:
+        reported_cost = None
         sent = (system_prompt or "") + "\n" + (instruction or "") + "\n" + \
             "\n".join(str(turn.get("content", "")) for turn in (history or []))
         prompt_tok = litellm.token_counter(model=model, text=sent)
         completion_tok = litellm.token_counter(model=model, text=output or "")
-    usd = _cost_for_paid_call(model, prompt_tok, completion_tok, usage=usage)
+    usd = _cost_for_paid_call(model, prompt_tok, completion_tok, reported_cost=reported_cost)
     total = spend_guard.record_spend(usd)
     print(f"[$] {model}: ~${usd:.4f} this call (~{prompt_tok}+{completion_tok} tok), "
           f"${total:.2f} of ${OPENROUTER_MONTHLY_BUDGET_USD:.2f} this month")
@@ -392,20 +403,63 @@ BASE_SYSTEM_PROMPT = _load_system_prompt()
 interpreter.system_message = BASE_SYSTEM_PROMPT
 
 
-def _system_prompt_for(agent_name):
-    """Base prompt, plus the selected agent's block appended.
+KNOWLEDGE_CORE_PATH = os.path.join(agents.VAULT, "07_Context", "Knowledge_Core.md")
 
-    Appended rather than substituted: the base prompt carries what is true
-    regardless of role - the vault map, the destructive-action guardrail, the
-    code-language constraint - and selecting an agent should narrow the
-    worker's focus, never strip its safety rules."""
+
+def _load_knowledge_core():
+    """Read fresh on every task, deliberately NOT cached like
+    BASE_SYSTEM_PROMPT. Knowledge_Core.md's own header declares it
+    `Stability: Dynamic` and gets edited by AI sessions "whenever a
+    conversation surfaces something genuinely durable" - baking it into the
+    one-time startup prompt would let a Restart=always service with
+    multi-day uptime run for days on facts already corrected. An audit of
+    this vault already flagged exactly that staleness as its single
+    highest-impact bug, in this exact file.
+
+    This exists because relying on the model to *decide* to go read this
+    file did not work: dispatched live 2026-08-31, given a question whose
+    answer lives only in Knowledge_Core.md and no hint of the filename, the
+    worker searched the vault broadly, found adjacent-but-wrong sources, and
+    never found or opened this file at all. The fix is to stop asking the
+    model to discover it and just always hand it over - the file exists
+    specifically to be small (hard-capped ~10,000 chars) and cheap to load
+    unconditionally, per its own Purpose line ("always cheap to load").
+
+    Never raises: a missing/renamed file must not become a new way for
+    every single task in the system to fail. Logs and continues with no
+    standing context instead."""
+    try:
+        with open(KNOWLEDGE_CORE_PATH, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError as e:
+        print(f"[!] Could not read Knowledge_Core.md: {e}", file=sys.stderr)
+        return ""
+
+
+def _system_prompt_for(agent_name):
+    """Base prompt, plus fresh Knowledge_Core content, plus the selected
+    agent's block - all appended, never substituted, in that order.
+
+    Appending rather than substituting matters for the base prompt (it
+    carries what is true regardless of role - the vault map, the
+    destructive-action guardrail) and for Knowledge_Core (standing context
+    for every task, not something an agent selection should be able to
+    silently drop)."""
+    prompt = BASE_SYSTEM_PROMPT
+    knowledge = _load_knowledge_core()
+    if knowledge:
+        prompt = (
+            f"{prompt}\n\n"
+            f"## Standing context: who Felix is, what's active right now\n"
+            f"{knowledge}"
+        )
     if not agent_name:
-        return BASE_SYSTEM_PROMPT
+        return prompt
     block = agents.load_prompt(agent_name)
     if not block:
-        return BASE_SYSTEM_PROMPT
+        return prompt
     return (
-        f"{BASE_SYSTEM_PROMPT}\n\n"
+        f"{prompt}\n\n"
         f"## Your role for this task: {agent_name.replace('_', ' ')}\n"
         f"{block}"
     )
@@ -456,6 +510,28 @@ def format_interpreter_output(messages):
         return "\n\n".join(transcript)
     return "Task completed."
 
+# One retry, not a loop: if the model still won't synthesize after being
+# told plainly to stop exploring and answer, a second nudge is very unlikely
+# to succeed where the first didn't, and every retry is a real extra call
+# against a model's rate limit (or real money, on the paid tier).
+SYNTHESIS_NUDGE = ("Based only on what you already found above, answer the "
+                   "original question directly now, in plain prose. Do not "
+                   "run any more commands.")
+
+
+def _has_prose(messages):
+    """True if any assistant message in this turn is prose, not just a tool
+    call. Mirrors format_interpreter_output()'s own "prefer prose" check -
+    kept as a separate, smaller function because _attempt() needs the yes/no
+    answer before it has a final string to inspect, not the formatted text
+    itself."""
+    for msg in (messages or []):
+        if (isinstance(msg, dict) and msg.get("role") == "assistant"
+                and msg.get("type") == "message" and msg.get("content")):
+            return True
+    return False
+
+
 def _attempt(model, instruction, system_prompt=None, history=None,
              api_base=None, api_key=None, context_window=None, max_tokens=None):
     """Run one chat turn on `model`. Raises on failure (including the
@@ -480,9 +556,47 @@ def _attempt(model, instruction, system_prompt=None, history=None,
     interpreter.llm.max_tokens = max_tokens
     if system_prompt is not None:
         interpreter.system_message = system_prompt
+    # Reset here, not just after a successful _record_paid_spend(): a paid
+    # attempt that raises leaves this un-cleared otherwise, and a LATER
+    # successful paid call could silently inherit an earlier failed call's
+    # leftover token counts.
+    _last_paid_usage["values"] = []
     raw_output = interpreter.chat(instruction, display=False, stream=False)
     if not raw_output:
         raise RuntimeError(f"{model} produced no output (likely rate-limited)")
+
+    if not _has_prose(raw_output):
+        # The model ran commands and explored, correctly in some cases, but
+        # never actually answered - verified live 2026-08-31 on two of three
+        # real dispatches in one afternoon on free-tier models, not a rare
+        # edge case. One nudge, same interpreter session so it keeps
+        # everything already explored, asking it to stop and answer.
+        try:
+            nudge_output = interpreter.chat(SYNTHESIS_NUDGE, display=False, stream=False)
+        except Exception as e:  # noqa: BLE001 - a nudge that errors is the
+            # same "still no answer" outcome as one that runs and stays
+            # silent - both fall through to the raise below, which is what
+            # lets MODEL_CHAIN try a different model instead of accepting
+            # this one's failure as if it were a real answer.
+            print(f"[!] {model}: synthesis nudge itself failed ({e})")
+            nudge_output = []
+
+        if _has_prose(nudge_output):
+            raw_output = raw_output + nudge_output
+        else:
+            # Verified live 2026-08-31: this is exactly the case that first
+            # exposed the gap - the nudge ran, produced no exception and no
+            # prose either, and the old code accepted the raw transcript as
+            # a successful result. That meant a model already struggling
+            # (quota-exhausted, in the live case) got to "answer" with a
+            # dump of its own shell commands instead of MODEL_CHAIN moving
+            # on to a model actually capable of synthesizing one. Raising
+            # here makes this participate in the exact same retry-the-next-
+            # model logic a quota error already does - an honest "all
+            # models failed" beats a confident-looking transcript dump.
+            raise RuntimeError(
+                f"{model} explored but produced no final answer, even after "
+                f"a synthesis nudge")
     return format_interpreter_output(raw_output)
 
 # Orchestration: pick the right agent when Felix didn't name one.
