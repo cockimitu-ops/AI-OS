@@ -1902,6 +1902,30 @@ class TestKleinanzeigenSniper(unittest.TestCase):
 
     # --- watch parsing -------------------------------------------------------
 
+    def test_readme_in_the_watches_folder_is_not_a_watch(self):
+        """Live 2026-08-31: watches/README.md has no search directive, so every
+        run counted it as a broken watch and sent "Sniper-Problem: README.md"
+        to Telegram every 3 minutes for hours. The folder's own documentation
+        became a permanent failure."""
+        self.assertFalse(self.ks.is_watch_file("README.md", "# Watches\n\nProse."))
+        self.assertTrue(self.ks.is_watch_file(
+            "monitore.md", "<!-- search: monitor -->"))
+
+    def test_prose_file_without_directives_is_treated_as_docs(self):
+        self.assertFalse(self.ks.is_watch_file("NOTES.md", "just some notes"))
+
+    def test_file_with_directives_but_no_search_is_still_a_real_error(self):
+        """A typo must still report - only prose gets skipped silently."""
+        self.assertTrue(self.ks.is_watch_file("typo.md", "<!-- radius: 30 -->"))
+        cfg, err = self.ks.parse_watch("<!-- radius: 30 -->")
+        self.assertIsNone(cfg)
+        self.assertIn("search", err)
+
+    def test_failure_realert_interval_is_hours_not_minutes(self):
+        """Even a genuine broken watch must not ping every 3 minutes; the
+        timer fires 320 times a day."""
+        self.assertGreaterEqual(self.ks.FAILURE_REALERT_SECONDS, 3600)
+
     def test_watch_without_a_search_is_an_error_not_a_crash(self):
         cfg, err = self.ks.parse_watch("just some prose, no directives")
         self.assertIsNone(cfg)

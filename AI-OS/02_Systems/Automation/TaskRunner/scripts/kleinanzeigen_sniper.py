@@ -61,6 +61,10 @@ HTTP_TIMEOUT = 20
 SEEN_RETENTION_DAYS = 14
 MAX_ALERTS_PER_RUN = 10
 
+# A broken watch must not ping every 3 minutes. Same interval health_check
+# uses for an unresolved failure: say it once, then stay quiet for 6 hours.
+FAILURE_REALERT_SECONDS = 6 * 3600
+
 DIRECTIVE_RE = re.compile(r"^\s*<!--\s*([a-z_]+)\s*:\s*(.+?)\s*-->\s*$", re.I | re.M)
 
 ARTICLE_RE = re.compile(
@@ -150,6 +154,19 @@ def parse_watch(text):
     if not cfg["search"] and not cfg["url"]:
         return None, "needs a <!-- search: ... --> or <!-- url: ... --> directive"
     return cfg, None
+
+
+def is_watch_file(name, text):
+    """README.md lives in this folder and is documentation, not a broken watch.
+
+    Treating it as one made the sniper alert "Sniper-Problem: README.md" every
+    3 minutes for hours - the folder's own docs became a permanent failure.
+    A file with no directives at all is prose; a file with directives but no
+    search/url is a real mistake and still reports.
+    """
+    if name.lower() == "readme.md":
+        return False
+    return bool(DIRECTIVE_RE.search(text))
 
 
 def build_url(cfg):
@@ -245,6 +262,7 @@ def load_state():
     # from the outside a working sniper on a quiet morning and a broken one
     # look identical, which is what made the first live day unreadable.
     state.setdefault("stats", {"runs": 0, "listings": 0, "new_ads": 0, "alerts": 0})
+    state.setdefault("alerted", {})
     return state
 
 
@@ -287,7 +305,13 @@ def run(dry_run=False, only=None, reseed=False):
         print(f"No watches dir at {WATCHES_DIR}", file=sys.stderr)
         return 1
 
-    files = sorted(f for f in os.listdir(WATCHES_DIR) if f.endswith(".md"))
+    files = []
+    for name in sorted(os.listdir(WATCHES_DIR)):
+        if not name.endswith(".md"):
+            continue
+        with open(os.path.join(WATCHES_DIR, name), encoding="utf-8") as f:
+            if is_watch_file(name, f.read()):
+                files.append(name)
     if only:
         files = [f for f in files if f == only or f == only + ".md"]
     if not files:
@@ -366,6 +390,13 @@ def run(dry_run=False, only=None, reseed=False):
             print(f"FAIL {f}", file=sys.stderr)
         return 0
 
+    # Print failures in every mode, not just --dry-run. They were previously
+    # sent to Telegram and never logged, so the journal showed five healthy
+    # watches while the phone buzzed every 3 minutes - the one view that would
+    # have explained it was the one that stayed silent.
+    for failure in failures:
+        print(f"FAIL {failure}", file=sys.stderr)
+
     for alert in alerts[:MAX_ALERTS_PER_RUN]:
         send_telegram(alert)
     if len(alerts) > MAX_ALERTS_PER_RUN:
@@ -376,7 +407,22 @@ def run(dry_run=False, only=None, reseed=False):
     # markup, every watch returns 0 listings and this reports "nothing new"
     # forever. Surface that as an alert instead of as silence.
     if failures and not first:
-        send_telegram("Sniper-Problem:\n" + "\n".join(failures[:5]))
+        signature = "|".join(sorted(failures))
+        last = state.get("alerted", {}).get(signature)
+        due = True
+        if last:
+            try:
+                age = (datetime.now(timezone.utc)
+                       - datetime.fromisoformat(last)).total_seconds()
+                due = age > FAILURE_REALERT_SECONDS
+            except ValueError:
+                due = True
+        if due:
+            send_telegram("Sniper-Problem:\n" + "\n".join(failures[:5]))
+            state.setdefault("alerted", {})[signature] = \
+                datetime.now(timezone.utc).isoformat()
+    elif not failures:
+        state["alerted"] = {}
 
     save_state(state)
     return 0

@@ -56,6 +56,11 @@ Both were found by running this against the real site on 2026-08-31, not by reas
 - **A bare `icloud` exclude drops the good ads.** "iPhone 13 Bastler — iCloud **frei**" advertises exactly the case worth buying. Substring excludes on one ambiguous word cut both ways; the watch excludes phrases (`icloud sperre`, `aktivierungssperre`) instead.
 - **Kleinanzeigen pads results past the requested radius.** A 35km search returned seven ads at 196–200km. The distance filter in `matches()` drops those, with 5km slack because the site rounds ("ca. 30 km"). On a car-based flip a 200km round trip eats the entire margin.
 
+## This file is not a watch
+`kleinanzeigen_sniper.py` skips `README.md`, and skips any `.md` here containing no `<!-- ... -->` directives at all, treating it as prose. That rule exists because this very file caused the sniper to send "Sniper-Problem: README.md" to Telegram **every 3 minutes for several hours** on 2026-08-31 — the folder's own documentation counted as a permanently broken watch.
+
+A file that *does* have directives but is missing `search:`/`url:` is still reported as an error, since that is a typo rather than prose. Genuine failures now re-alert at most every 6 hours instead of every run, and are printed to the journal as well as sent — previously they were sent to Telegram and never logged, so the journal showed five healthy watches while the phone buzzed.
+
 ## Silence is reported, not implied
 These searches are thinner than they look — page 1 of `handys_defekt` reaches back several days — so a genuinely quiet morning with zero alerts is normal, not a fault. Because that is indistinguishable from a dead timer, the sniper keeps activity counters in `state.json` (`runs`, `new_ads`, `alerts`) which `scripts/status_update.py` reads and resets at 10/14/18/22. Silence arrives as a number instead of as nothing.
 
