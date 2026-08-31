@@ -19,6 +19,26 @@ Most people doing this are laptop-only and can't collect. A car turns "too far t
 5. **Improve** — clean, test, identify exact model, photograph properly, write a real listing
 6. **Sell & log** — every transaction into [[Transaction_Log]]
 
+## Logging a flip (added 2026-08-31)
+`02_Systems/Automation/TaskRunner/scripts/flip_log.py` reads and writes [[Transaction_Log]]'s own table directly - there is no second, machine-readable copy of this data that could drift from what a human reads. That was a deliberate choice: an earlier audit of this vault found the exact failure mode of two files describing the same thing and quietly disagreeing, repeatedly.
+
+```bash
+# When you buy something:
+python3 flip_log.py buy --item "Bosch GSR 18V" --category Werkzeug \
+  --buy 30 --distance 22 --repair 5 --list-price 90 \
+  --url "<the Kleinanzeigen ad>" --notes "aus Werkzeug-Watch"
+
+# When it sells:
+python3 flip_log.py sell --row 1 --sold 80 --hours 3
+
+# Anytime:
+python3 flip_log.py report
+```
+
+`sell` computes Net €, €/hour, and ROI% automatically and writes them straight into the table - the same schema [[Transaction_Log]] already defined. Per [[Valuation_Method]]'s own stated priority ("If €/hour comes out below what your time is otherwise worth, it's a NO regardless of the margin looking nice in percentage terms"), `report` leads with €/hour and cumulative ROI, and flags open items sitting more than 21 days - "days-to-sell is a cost, not a footnote" per [[Transaction_Log]]. Losses are never hidden: recording only wins is explicitly against this project's own rule.
+
+Fuel is estimated as round-trip distance × €0.25/km (adjust with `--fuel-per-km` if that's off for your car) - the logged distance is one-way, the way Kleinanzeigen itself shows it.
+
 ## Search Signals
 `muss weg` · `dringend` · `keine Ahnung` · `Haushaltsauflösung` · `Umzug` · `zu verschenken` · `Wohnungsauflösung` · `Nachlass` · `VB` · badly-photographed lots · misspelled brand names (these don't show up in other buyers' searches)
 

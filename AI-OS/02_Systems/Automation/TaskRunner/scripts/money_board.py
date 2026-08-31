@@ -41,8 +41,11 @@ BOARD = [
      "534 mailable leads ready. First postal batch ~24 EUR. One sale = 249 EUR. The single biggest new revenue lever."),
     ("felix", "Publish the 2 remaining TemplateSales products (Pricing Teardown 29, Retention Engineering 39) on Gumroad", 68, 45,
      "All assets written incl. cover.png. ~20 min each. Moat Blueprint already live."),
-    ("felix", "Gewerbeanmeldung + ELSTER (required before buy-to-resell earns legally)", 0, 60,
-     "Gates LocalArbitrage revenue. 22-112 EUR fee. Blocks nothing else."),
+    ("felix", "Gewerbeanmeldung + ELSTER - required BEFORE taking the first EUR from ANY paying customer", 0, 60,
+     "Gates both LocalArbitrage AND DMARC outreach revenue - not LocalArbitrage-only, "
+     "as an earlier version of this board wrongly scoped it. Registration is legally "
+     "due at the START of a commercial activity, not after a first sale. If a DMARC "
+     "letter gets a yes before this is done, wait to invoice until it is. 22-112 EUR fee."),
     ("felix", "Attach the finished Omni Shield sample PDF to the live Fiverr gig", 30, 10,
      "Gig live since 2026-08-27, no order yet. Sample exists in QuickTurnaroundGigs/_infra/."),
     ("felix", "Act on Kleinanzeigen sniper Telegram alerts: inspect, buy, flip", 50, 0,
@@ -68,6 +71,24 @@ def _load(path):
         return {}
 
 
+def _flip_stats():
+    """Reads Transaction_Log.md's own table via flip_log.py - no separate
+    copy of that data kept here. Returns None if flip_log can't be imported
+    or the file can't be read, so a LocalArbitrage-unrelated board render
+    never breaks because of it."""
+    try:
+        sys.path.insert(0, SCRIPT_DIR)
+        import flip_log
+        rows = flip_log.read_log()
+    except Exception:  # noqa: BLE001 - this signal is optional, never fatal
+        return None
+    open_rows = [r for r in rows if not r.get("Sold €")]
+    capital_tied_up = sum(
+        (flip_log.parse_num(r["Buy €"]) or 0) + (flip_log.parse_num(r["Repair €"]) or 0)
+        for r in open_rows)
+    return {"open": len(open_rows), "capital_tied_up": round(capital_tied_up, 2)}
+
+
 def live_signals():
     """Cheap, real state folded onto the board. Never raises - a missing file
     just means that signal is unknown, not that the board is broken."""
@@ -76,6 +97,7 @@ def live_signals():
     signals["letters_sent"] = len(contacted)
     results = _load(os.path.join(TASK_RUNNER_DIR, "prospects", "results.json"))
     signals["leads_qualified"] = sum(1 for r in results.values() if r.get("score", 0) >= 6)
+    signals["flips"] = _flip_stats()
     return signals
 
 
@@ -97,6 +119,10 @@ def render(board=BOARD, top=None):
                      f"{signals['leads_qualified']} Leads im Bestand)")
     elif signals.get("leads_qualified"):
         lines.append(f"  (DMARC: 0 Briefe raus, {signals['leads_qualified']} Leads bereit)")
+    flips = signals.get("flips")
+    if flips and flips["open"]:
+        lines.append(f"  (Flips: {flips['open']} offen, "
+                     f"{flips['capital_tied_up']:.0f} EUR Kapital gebunden)")
     return "\n".join(lines)
 
 

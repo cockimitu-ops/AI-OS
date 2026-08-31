@@ -18,6 +18,7 @@ temporary directory before aios_runner is imported, and the heavy
 open-interpreter import is stubbed out, so the whole file runs in well under a
 second under /usr/bin/python3.
 """
+import argparse
 import importlib
 import importlib.util
 import json
@@ -2799,6 +2800,177 @@ class TestMoneyBoard(unittest.TestCase):
         felix_text = " ".join(a[1].lower() for a in self.mb.felix_actions())
         self.assertNotIn("publish the moat", felix_text)
         self.assertNotIn("post the fiverr gig", felix_text)
+
+
+class TestFlipLog(unittest.TestCase):
+    """LocalArbitrage flip logging (added 2026-08-31). Reads and writes
+    Transaction_Log.md's own Markdown table directly - no shadow JSON state
+    that could drift from it, the exact bug class an earlier audit of this
+    vault found repeatedly. Every test here runs against a throwaway copy;
+    none ever touch the real vault file."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "flip_log", os.path.join(HERE, "scripts", "flip_log.py"))
+        cls.fl = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.fl)
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = os.path.join(self.tmp.name, "Transaction_Log.md")
+        # A minimal but structurally real copy of the actual file: the
+        # schema table (empty, placeholder row) followed by a prose
+        # paragraph with no heading of its own before the next section -
+        # exactly the shape that broke the first version of this tool.
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write(
+                "# Transaction Log\n\nPurpose: test fixture.\n\n---\n\n"
+                "## Schema\n"
+                "| # | Date | Item | Category | Buy € | Distance km | "
+                "Repair € | List € | Sold € | Days to sell | Hours | "
+                "Net € | €/hour | Notes |\n"
+                "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+                "| *(none yet)* | | | | | | | | | | | | | |\n"
+                "\nRecord **failed** buys too - a log of only wins teaches "
+                "nothing.\n\n"
+                "## What to Look For (after ~20 entries)\nSome more prose.\n"
+            )
+        self._orig_log_path = self.fl.LOG_PATH
+        self.fl.LOG_PATH = self.path
+        self.addCleanup(setattr, self.fl, "LOG_PATH", self._orig_log_path)
+
+    def _buy(self, item="Bosch GSR 18V", category="Werkzeug", buy=30.0,
+             distance=22.0, repair=5.0, list_price=90.0, date="2026-08-31",
+             url=None, notes=None, hours=None):
+        return self.fl.cmd_buy(argparse.Namespace(
+            item=item, category=category, buy=buy, distance=distance,
+            repair=repair, list_price=list_price, hours=hours, date=date,
+            url=url, notes=notes))
+
+    def _sell(self, row=1, item=None, sold=80.0, hours=3.0,
+              sold_date="2026-09-05", fuel_per_km=0.25, notes=None):
+        return self.fl.cmd_sell(argparse.Namespace(
+            row=row, item=item, sold=sold, hours=hours, sold_date=sold_date,
+            fuel_per_km=fuel_per_km, notes=notes))
+
+    def _prose_lines(self, path=None):
+        with open(path or self.path, encoding="utf-8") as f:
+            return [ln for ln in f.read().splitlines() if not ln.startswith("|")]
+
+    # --- the bug that was actually caught ------------------------------
+
+    def test_prose_after_the_table_survives_one_write(self):
+        before = self._prose_lines()
+        self._buy()
+        self.assertEqual(self._prose_lines(), before)
+
+    def test_prose_survives_many_successive_writes(self):
+        """The real bug: each write silently ate one more newline than the
+        last, so a single buy looked fine and a buy-then-sell glued the row
+        directly onto the prose paragraph with zero separation. Only a
+        multi-write test catches this - a single round trip does not."""
+        before = self._prose_lines()
+        self._buy()
+        self._buy(item="Second Item")
+        self._sell(row=1)
+        self._sell(row=2, sold=45.0, hours=1.0)
+        self.assertEqual(self._prose_lines(), before)
+        with open(self.path, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("|\n\nRecord **failed**", text,
+                      "row and the following prose must stay on separate "
+                      "lines with the original blank line between them")
+
+    def test_row_never_runs_into_the_prose_on_the_same_line(self):
+        self._buy()
+        self._sell()
+        with open(self.path, encoding="utf-8") as f:
+            text = f.read()
+        self.assertNotIn("|Record", text)
+
+    # --- table mechanics -------------------------------------------------
+
+    def test_buy_appends_a_row_and_leaves_it_open(self):
+        self._buy()
+        rows = self.fl.read_log()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["Item"], "Bosch GSR 18V")
+        self.assertEqual(rows[0]["Sold €"], "")
+
+    def test_sell_by_row_number(self):
+        self._buy()
+        self._sell(row=1, sold=80.0, hours=3.0)
+        rows = self.fl.read_log()
+        self.assertEqual(rows[0]["Sold €"], "80")
+
+    def test_sell_by_item_name_when_unambiguous(self):
+        self._buy(item="Bosch GSR 18V")
+        self._sell(row=None, item="bosch", sold=80.0)
+        rows = self.fl.read_log()
+        self.assertEqual(rows[0]["Sold €"], "80")
+
+    def test_sell_refuses_to_guess_with_multiple_open_flips(self):
+        self._buy(item="A")
+        self._buy(item="B")
+        rc = self._sell(row=None, item=None, sold=50.0)
+        self.assertEqual(rc, 1)
+        rows = self.fl.read_log()
+        self.assertEqual(rows[0]["Sold €"], "")
+        self.assertEqual(rows[1]["Sold €"], "")
+
+    def test_url_and_notes_are_recorded_for_provenance(self):
+        self._buy(url="https://kleinanzeigen.de/x/1", notes="aus Werkzeug-Watch")
+        rows = self.fl.read_log()
+        self.assertIn("kleinanzeigen.de/x/1", rows[0]["Notes"])
+        self.assertIn("aus Werkzeug-Watch", rows[0]["Notes"])
+
+    # --- the arithmetic --------------------------------------------------
+
+    def test_net_and_per_hour_and_roi(self):
+        # buy 30 + repair 5 = 35 capital; fuel = 22km one-way * 2 * 0.25 = 11
+        # net = 80 - 35 - 11 = 34; /3h = 11.33; roi = 34/35*100 = 97.1%
+        net, per_hour, roi = self.fl.compute_close(30.0, 5.0, 80.0, 22.0, 3.0, 0.25)
+        self.assertAlmostEqual(net, 34.0)
+        self.assertAlmostEqual(per_hour, 11.33, places=2)
+        self.assertAlmostEqual(roi, 97.1, places=1)
+
+    def test_a_loss_computes_a_negative_net_not_a_crash(self):
+        net, per_hour, roi = self.fl.compute_close(60.0, 0, 40.0, 15.0, 1.5, 0.25)
+        self.assertLess(net, 0)
+        self.assertLess(per_hour, 0)
+
+    def test_missing_sold_price_is_an_open_flip_not_a_zero(self):
+        """An open flip must show as unresolved, never as a EUR0 loss that
+        looks like real, if bad, data."""
+        net, per_hour, roi = self.fl.compute_close(30.0, 5.0, None, 22.0, 3.0, 0.25)
+        self.assertIsNone(net)
+        self.assertIsNone(per_hour)
+        self.assertIsNone(roi)
+
+    def test_fuel_cost_is_round_trip_not_one_way(self):
+        self.assertAlmostEqual(self.fl.fuel_cost(22.0, 0.25), 11.0)
+
+    def test_label_thresholds_match_the_projects_own_stated_range(self):
+        """LocalArbitrage/README.md states ~15-25 EUR/hour as the realistic
+        range for this work - the label bands are anchored to that, not
+        invented independently."""
+        self.assertEqual(self.fl.label_for(25.0), "GUT")
+        self.assertEqual(self.fl.label_for(15.0), "OK")
+        self.assertEqual(self.fl.label_for(5.0), "SCHWACH")
+        self.assertEqual(self.fl.label_for(-10.0), "SCHWACH")
+        self.assertEqual(self.fl.label_for(None), "OFFEN")
+
+    # --- report ------------------------------------------------------------
+
+    def test_report_surfaces_losses_rather_than_hiding_them(self):
+        """Transaction_Log.md's own rule: 'a log of only wins teaches
+        nothing and quietly inflates your confidence.'"""
+        self._buy(item="Loser", buy=60.0, repair=0, distance=15.0)
+        self._sell(row=1, sold=40.0, hours=1.5)
+        rows = self.fl.read_log()
+        self.assertLess(float(rows[0]["Net €"]), 0)
 
 
 if __name__ == "__main__":
