@@ -240,7 +240,22 @@ def load_state():
         state = {}
     state.setdefault("seen", {})
     state.setdefault("seeded", [])
+    # Activity counters since the last status update read them. They exist so
+    # that "no alerts" can be reported as a number rather than as silence -
+    # from the outside a working sniper on a quiet morning and a broken one
+    # look identical, which is what made the first live day unreadable.
+    state.setdefault("stats", {"runs": 0, "listings": 0, "new_ads": 0, "alerts": 0})
     return state
+
+
+def take_stats():
+    """Read and reset the activity counters. Called by the status update, which
+    reports the window since it last ran."""
+    state = load_state()
+    stats = dict(state["stats"])
+    state["stats"] = {"runs": 0, "listings": 0, "new_ads": 0, "alerts": 0}
+    save_state(state)
+    return stats
 
 
 def save_state(state):
@@ -280,8 +295,10 @@ def run(dry_run=False, only=None, reseed=False):
         return 1
 
     state = load_state()
+    stats = state["stats"]
     now_iso = datetime.now(timezone.utc).isoformat()
     alerts, failures, first = [], [], False
+    scanned = new_ads = 0
 
     for i, fname in enumerate(files):
         path = os.path.join(WATCHES_DIR, fname)
@@ -316,10 +333,12 @@ def run(dry_run=False, only=None, reseed=False):
         watch_name = os.path.splitext(fname)[0]
         hits = 0
 
+        scanned += len(listings)
         for listing in listings:
             if listing["id"] in state["seen"]:
                 continue
             state["seen"][listing["id"]] = now_iso
+            new_ads += 1
             if seeding or not matches(listing, cfg):
                 continue
             alerts.append(format_alert(listing, watch_name))
@@ -332,6 +351,12 @@ def run(dry_run=False, only=None, reseed=False):
             print(f"{fname}: seeded {len(listings)} existing listings (no alerts)")
         else:
             print(f"{fname}: {len(listings)} listings, {hits} new match(es)")
+
+    if not first:
+        stats["runs"] += 1
+        stats["listings"] += scanned
+        stats["new_ads"] += new_ads
+        stats["alerts"] += len(alerts)
 
     if dry_run:
         print("\n--- DRY RUN, nothing sent, state not written ---")

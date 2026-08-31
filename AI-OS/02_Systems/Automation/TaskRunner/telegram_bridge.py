@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 import time
@@ -6,6 +7,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.constants import ParseMode
+from telegram.error import BadRequest, NetworkError, TimedOut
 import html
 import re
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
@@ -249,10 +251,46 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.HTML,
     )
 
+class TransientNetworkFilter(logging.Filter):
+    """Collapse Telegram's transient API blips to one line instead of a
+    40-line traceback.
+
+    Telegram's API returns the occasional 502; python-telegram-bot retries and
+    carries on, but logs the full stack every time. Five of those in 20 hours
+    buried everything else in the journal.
+
+    The trap this deliberately avoids: BadRequest is a *subclass* of
+    NetworkError in PTB, and BadRequest means a genuinely malformed message -
+    exactly the bug worth keeping a traceback for. So the match is on the exact
+    NetworkError type plus TimedOut, never on isinstance(NetworkError).
+
+    Attached to the root handler rather than a logger, because a filter on a
+    logger does not see records that propagate up from its children - and these
+    come from telegram.ext.Updater.
+    """
+
+    def filter(self, record):
+        exc = record.exc_info[1] if record.exc_info else None
+        if exc is None or isinstance(exc, BadRequest):
+            return True
+        if type(exc) is NetworkError or isinstance(exc, TimedOut):
+            record.exc_info = None
+            record.exc_text = None
+            record.msg = f"transient Telegram network blip, retrying: {exc}"
+            record.args = ()
+        return True
+
+
 def main():
     if not BOT_TOKEN or not ALLOWED_USER:
         print("FEHLER: TELEGRAM_BOT_TOKEN oder TELEGRAM_ALLOWED_USER_ID fehlen in .env!")
         return
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    for handler in logging.getLogger().handlers:
+        handler.addFilter(TransientNetworkFilter())
 
     print("🤖 Telegram Bridge aktiv. Warte auf Nachrichten...")
     app = ApplicationBuilder().token(BOT_TOKEN).build()

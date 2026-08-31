@@ -2,7 +2,7 @@
 
 Purpose: The live automation loop that lets Felix hand AI-OS a task from anywhere (shell or Telegram) and get it executed headlessly on the server. Moved here from the repo root on 2026-08-26 so the vault's own README reflects what's actually running, instead of the automation living as loose scripts beside it.
 Last Updated: 2026-08-31
-Status: Active — two continuous services plus eight timers; agents plan unattended daily and act only on Felix's 20:00 approval as of 2026-08-30; Kleinanzeigen sniper and DMARC prospector both live 2026-08-31
+Status: Active — two continuous services plus nine timers; agents plan unattended daily and act only on Felix's 20:00 approval as of 2026-08-30; Kleinanzeigen sniper and DMARC prospector both live 2026-08-31
 Related Documents: [[02_Systems/Automation/README|Automation]], [[Future_Integration]]
 
 ---
@@ -22,6 +22,7 @@ Related Documents: [[02_Systems/Automation/README|Automation]], [[Future_Integra
 | `scripts/evening_review.py` | 20:00 sharp — sends the day's proposals to Telegram, grouped into AI work and work only Felix can do. |
 | `scripts/morning_brief.py` | Daily good-morning digest over Telegram (added 2026-08-30) — see below. |
 | `scripts/send_telegram_notification.py` | One-off outbound Telegram message, reusing the same bot token — for things other than task results. Wired into `cloud_backup.py`'s failure path and `health_check.py`'s alerts. Stdlib-only on purpose: systemd runs both under `/usr/bin/python3`, which has no `python-dotenv`, so a notifier importing it would have failed exactly when it was needed. |
+| `scripts/status_update.py` | The 10/14/18/22 status update (added 2026-08-31). Sniper activity, new DMARC leads, and health problems only. Unlike the morning brief it sends **even when there is nothing to report** — see below. |
 | `scripts/dmarc_prospector.py` | The DMARC lead finder (added 2026-08-31) — discovers local business domains from OpenStreetMap, audits their published SPF/DMARC/MX records via `dig`, and ranks them as sales leads. Strictly passive: open data plus public DNS, never a scan. Feeds the top 3 new leads into the morning brief. See `prospects/README.md`. |
 | `scripts/kleinanzeigen_sniper.py` | The arbitrage sniper (added 2026-08-31) — polls the saved searches in `watches/` and Telegram-pings genuinely new ads. Serves [[10_Projects/LocalArbitrage/README|LocalArbitrage]], whose whole edge is messaging an urgency seller first. See `watches/README.md` for the directive grammar and the two live findings behind its filters. |
 | `agents.py` | Agent selection. Resolves aliases (`@research` → `Research_Analyst`), loads each agent's Executable Prompt block from [[04_Agents/README|04_Agents]]. Shared by all three entry points so they can't disagree about what an alias means. |
@@ -35,7 +36,7 @@ Related Documents: [[02_Systems/Automation/README|Automation]], [[Future_Integra
 
 ## How it's wired to the server
 
-Eleven systemd units, all under `/etc/systemd/system/`, `WorkingDirectory` and `ExecStart` pointing into this folder — two continuous services and eight timers:
+Twelve systemd units, all under `/etc/systemd/system/`, `WorkingDirectory` and `ExecStart` pointing into this folder — two continuous services and nine timers:
 
 - `aios-worker.service` — runs `aios_runner.py`, `Restart=always`
 - `aios-telegram.service` — runs `telegram_bridge.py`, `Restart=always`, starts `After=aios-worker.service`
@@ -44,6 +45,7 @@ Eleven systemd units, all under `/etc/systemd/system/`, `WorkingDirectory` and `
 - `aios-scheduler.service` (`Type=oneshot`) + `aios-scheduler.timer` — runs `scripts/run_schedules.py` every 10 minutes
 - `aios-review.service` (`Type=oneshot`) + `aios-review.timer` — runs `scripts/evening_review.py` at 20:00 Europe/Berlin, `AccuracySec=1s` (systemd defaults to a 1-minute window and would otherwise batch the wakeup; Felix asked for 20:00 sharp)
 - `aios-sniper.service` (`Type=oneshot`) + `aios-sniper.timer` — runs `scripts/kleinanzeigen_sniper.py` every 3 minutes between 07:00 and 22:59 Europe/Berlin. Waking hours only on purpose: ads posted overnight are still unclaimed at 07:00, so polling at 04:00 buys nothing and triples the daily request count. `Persistent=false`, unlike the backup timer — after downtime this should resume polling now, not replay every missed slot in a burst.
+- `aios-status.service` (`Type=oneshot`) + `aios-status.timer` — runs `scripts/status_update.py` at 10:00, 14:00, 18:00 and 22:00 Europe/Berlin, `AccuracySec=1s` for the same reason the 20:00 review has it.
 - `aios-prospector.service` (`Type=oneshot`) + `aios-prospector.timer` — runs `scripts/dmarc_prospector.py --audit` nightly at 01:30 Europe/Berlin. Placed after midnight and before the 03:00 backup, so its results are hours old by the time `morning_brief.py` reads them at 07:00.
 - `aios-prospector-discover.service` (`Type=oneshot`) + `aios-prospector-discover.timer` — runs `--discover` monthly on the 1st. Monthly, not weekly: Overpass is free volunteer infrastructure and new businesses appear in OSM slowly.
 - `aios-morning.service` (`Type=oneshot`) + `aios-morning.timer` — runs `scripts/morning_brief.py` daily at 07:00 Europe/Berlin (the timer unit's `OnCalendar` carries the timezone directly, so it tracks DST — the server itself stays on UTC)
@@ -274,3 +276,13 @@ Moved from repo root into this vault path; systemd units, `.env`, and both scrip
 Groq's per-minute bucket and Gemini's free-tier daily cap (20 requests/day on `gemini-3.6-flash`) both failed live during the move's own verification test — not hypothetical, it just happened. Built `_attempt_claude()` as a **third tier**, only firing after both Groq and its retry and Gemini have already failed — same mechanism as AI-Bridge's `askClaude()` (`claude -p --model sonnet`, prompt via stdin) but called directly via `subprocess` instead of through `bridge.mjs`/Node, so it inherits the worker's own cwd. Installed Node.js + the `claude` CLI, generated a long-lived OAuth token via `claude setup-token` (postmortem on a `400` error during that: not clock skew, not SSH/port-forwarding — the flow redirects to a hosted callback page, `platform.claude.com/oauth/code/callback`, not `localhost`; a fresh retry on a clean URL/code fixed it). Verified working end-to-end, including through the actual `_attempt_claude()` function with the token loaded.
 
 **Then disabled, same day, before ever running in anger.** A prior session's handoff (`~/HANDOFF-1.md`, 2026-08-24) had already flagged this exact pattern — routing Claude Code through Pro-subscription auth instead of a metered API key — in AI-Bridge's `askClaude()`, calling it "likely a real ToS problem... parked until rebuilt with an actual API key." This session's build reintroduced the identical pattern without that context, then found the handoff note while verifying AI-Bridge separately. `CLAUDE_ESCALATION_ENABLED = False` in `aios_runner.py` now gates the whole tier off — see the comment there for the full reasoning. `-p` mode is genuinely Anthropic's own documented CI/scripting feature, so this isn't a clear-cut violation either way; it's unresolved, not dismissed. The `CLAUDE_CODE_OAUTH_TOKEN` stays in `.env` (harmless while the flag is off) so flipping this back on — or switching to a real `ANTHROPIC_API_KEY` instead — is a small change, not a rebuild, once Felix actually decides.
+
+## Why the status update sends even when nothing happened (2026-08-31)
+
+The sniper's first live day: it ran roughly 80 times between 07:00 and 11:00, correctly decided nothing was worth driving to, and sent nothing at all. From the phone that is indistinguishable from a service that died at 07:00 — and the only way to tell was to SSH in and read the journal, which defeats the point of having it push to Telegram.
+
+So this message inverts the morning brief's rule. The brief omits sections it has nothing to say about; the status update **always renders the sniper line**, because "3 Läufe · 0 neue Anzeigen · nichts passendes" and no message at all mean very different things and only one of them is trustworthy. A quiet update is a heartbeat. A *missing* update is the actual signal that something broke.
+
+Health is the exception and stays silent-unless-broken: the morning brief already gives the all-clear once a day, and repeating it four more times is how you train someone to skim past the one that matters.
+
+One number is deliberately not reported. The sniper's cumulative listing count is runs × page-size — after 80 runs it reads "2000 Anzeigen geprüft" when it is really 25 ads looked at 80 times. It looks like throughput and is actually just the clock, so the update reports runs and genuinely-new ads instead.

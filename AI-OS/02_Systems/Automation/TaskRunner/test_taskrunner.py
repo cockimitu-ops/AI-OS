@@ -2199,5 +2199,131 @@ class TestDmarcProspector(unittest.TestCase):
         self.assertFalse(hc.evaluate_prospector(30.0)[0])
 
 
+class TestStatusUpdate(unittest.TestCase):
+    """The 10/14/18/22 status update (added 2026-08-31).
+
+    Exists because the sniper's first live day ran 80 times, correctly found
+    nothing worth driving to, and said nothing - which from the phone is
+    indistinguishable from a service that died at 07:00. These tests pin the
+    one property that makes it worth sending: it reports the numbers behind
+    the silence instead of omitting the section."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.modules.setdefault("send_telegram_notification",
+                               types.ModuleType("send_telegram_notification"))
+        sys.modules["send_telegram_notification"].send = lambda *a, **k: True
+        spec = importlib.util.spec_from_file_location(
+            "status_update", os.path.join(HERE, "scripts", "status_update.py"))
+        cls.su = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.su)
+
+    def test_quiet_period_still_reports_numbers(self):
+        """The whole point: 0 alerts must read as '120 geprüft, 0 passend',
+        never as an absent section."""
+        line = self.su.format_sniper_section(
+            {"runs": 80, "listings": 2000, "new_ads": 18, "alerts": 0})
+        self.assertIn("80", line)
+        self.assertIn("18", line)
+        self.assertIn("nichts passendes", line)
+
+    def test_cumulative_listing_count_is_not_reported_as_throughput(self):
+        """Each run re-reads the same page 1, so 80 runs x 25 ads is 2000
+        sightings of 25 ads - a number that looks like work and is really just
+        the clock ticking."""
+        line = self.su.format_sniper_section(
+            {"runs": 80, "listings": 2000, "new_ads": 18, "alerts": 0})
+        self.assertNotIn("2000", line)
+
+    def test_weekday_is_german_like_the_rest_of_the_message(self):
+        monday = time.struct_time((2026, 8, 31, 14, 0, 0, 0, 243, -1))
+        msg = self.su.build_update({"runs": 1, "listings": 1, "new_ads": 0,
+                                    "alerts": 0}, None, {}, now=monday)
+        self.assertIn("Montag", msg)
+        self.assertNotIn("Monday", msg)
+
+    def test_no_runs_at_all_is_called_out_as_suspicious(self):
+        line = self.su.format_sniper_section({"runs": 0, "listings": 0,
+                                              "new_ads": 0, "alerts": 0})
+        self.assertIn("keine Läufe", line)
+
+    def test_missing_stats_do_not_crash_the_update(self):
+        self.assertIn("keine Läufe", self.su.format_sniper_section(None))
+
+    def test_health_section_is_silent_when_everything_is_fine(self):
+        """The morning brief already gives the all-clear once a day; four more
+        would train you to skim past the one that matters."""
+        self.assertIsNone(self.su.format_health_section({"a": (True, "ok")}))
+
+    def test_health_section_speaks_up_on_failure(self):
+        section = self.su.format_health_section(
+            {"a": (True, "ok"), "prospector": (False, "last audit 30h ago")})
+        self.assertIn("prospector", section)
+        self.assertNotIn("a: ok", section)
+
+    def test_update_always_has_a_sniper_line_even_with_no_leads(self):
+        msg = self.su.build_update({"runs": 5, "listings": 100, "new_ads": 2,
+                                    "alerts": 0}, None, {})
+        self.assertIn("Sniper:", msg)
+        self.assertTrue(msg.startswith("Status "))
+
+    def test_update_includes_leads_and_warnings_when_present(self):
+        msg = self.su.build_update(
+            {"runs": 5, "listings": 100, "new_ads": 2, "alerts": 0},
+            "DMARC-Leads (1 neu):\n\nBäcker\n  baecker.de\n  kein DMARC",
+            {"queue": (False, "stuck 90min")})
+        self.assertIn("baecker.de", msg)
+        self.assertIn("Achtung", msg)
+        self.assertIn("stuck 90min", msg)
+
+
+class TestSniperStats(unittest.TestCase):
+    """Activity counters feeding the status update."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.modules.setdefault("send_telegram_notification",
+                               types.ModuleType("send_telegram_notification"))
+        sys.modules["send_telegram_notification"].send = lambda *a, **k: True
+        spec = importlib.util.spec_from_file_location(
+            "kleinanzeigen_sniper",
+            os.path.join(HERE, "scripts", "kleinanzeigen_sniper.py"))
+        cls.ks = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.ks)
+
+    def test_state_always_has_stats_even_from_an_old_file(self):
+        """load_state must upgrade a state.json written before stats existed,
+        rather than KeyError-ing the next sniper run after a deploy."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "state.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"seen": {}, "seeded": []}, f)
+            original = self.ks.STATE_PATH
+            try:
+                self.ks.STATE_PATH = path
+                state = self.ks.load_state()
+                self.assertEqual(state["stats"]["runs"], 0)
+                self.assertIn("alerts", state["stats"])
+            finally:
+                self.ks.STATE_PATH = original
+
+    def test_take_stats_resets_the_window(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "state.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"seen": {}, "seeded": [],
+                           "stats": {"runs": 9, "listings": 90,
+                                     "new_ads": 4, "alerts": 1}}, f)
+            original_state, original_dir = self.ks.STATE_PATH, self.ks.WATCHES_DIR
+            try:
+                self.ks.STATE_PATH, self.ks.WATCHES_DIR = path, tmp
+                first = self.ks.take_stats()
+                self.assertEqual(first["runs"], 9)
+                self.assertEqual(self.ks.take_stats()["runs"], 0,
+                                 "a second read must not re-report the same window")
+            finally:
+                self.ks.STATE_PATH, self.ks.WATCHES_DIR = original_state, original_dir
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

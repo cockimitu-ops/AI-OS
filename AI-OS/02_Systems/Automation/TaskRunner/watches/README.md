@@ -56,6 +56,9 @@ Both were found by running this against the real site on 2026-08-31, not by reas
 - **A bare `icloud` exclude drops the good ads.** "iPhone 13 Bastler — iCloud **frei**" advertises exactly the case worth buying. Substring excludes on one ambiguous word cut both ways; the watch excludes phrases (`icloud sperre`, `aktivierungssperre`) instead.
 - **Kleinanzeigen pads results past the requested radius.** A 35km search returned seven ads at 196–200km. The distance filter in `matches()` drops those, with 5km slack because the site rounds ("ca. 30 km"). On a car-based flip a 200km round trip eats the entire margin.
 
+## Silence is reported, not implied
+These searches are thinner than they look — page 1 of `handys_defekt` reaches back several days — so a genuinely quiet morning with zero alerts is normal, not a fault. Because that is indistinguishable from a dead timer, the sniper keeps activity counters in `state.json` (`runs`, `new_ads`, `alerts`) which `scripts/status_update.py` reads and resets at 10/14/18/22. Silence arrives as a number instead of as nothing.
+
 ## Tuning
 Start with `aufloesung.md` — it is the noisiest by design and the most likely to produce one large win. Add to `exclude:` as junk arrives rather than tightening `price:`, which is what removes the good finds.
 

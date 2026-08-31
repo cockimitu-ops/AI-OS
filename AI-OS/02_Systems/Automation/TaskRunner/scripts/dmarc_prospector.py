@@ -345,9 +345,14 @@ def describe(result):
 
 
 def format_prospect(result, entry):
+    """Three lines: who, where, what.
+
+    The domain sits alone on the middle line so Telegram auto-links it and it
+    is one tap from the phone - the first version put it in parentheses after a
+    long business name, where it wrapped and stopped being tappable.
+    """
     name = (entry or {}).get("name", result["domain"])
-    bits = [f"{name} ({result['domain']})", f"  {describe(result)}"]
-    detail = []
+    detail = [describe(result)]
     if result["spf"] is None:
         detail.append("kein SPF")
     elif result["spf"] in ("+all", "?all", "none"):
@@ -356,9 +361,7 @@ def format_prospect(result, entry):
         detail.append(result["provider"])
     elif result["provider"] == "no MX":
         detail.append("kein MX")
-    if detail:
-        bits.append("  " + " · ".join(detail))
-    return "\n".join(bits)
+    return "\n".join([name, f"  {result['domain']}", "  " + " · ".join(detail)])
 
 
 def rank(results, domains, limit=5, min_score=6):
@@ -387,12 +390,14 @@ def build_brief_section(results, domains, reported, limit=3):
             return None
         return f"DMARC-Leads: keine neuen. {total} offene im Bestand."
     remaining = sum(1 for r in fresh.values() if r.get("score", 0) >= 6) - len(top)
-    lines = [f"DMARC-Leads ({len(top)} neu):"]
-    for result, entry in top:
-        lines.append(format_prospect(result, entry))
-    if remaining > 0:
-        lines.append(f"  (+{remaining} weitere neue)")
-    return "\n".join(lines)
+    # Blank lines between entries, not just newlines. Three leads rendered as
+    # nine consecutive lines is a wall on a phone screen; the reader cannot see
+    # where one business ends and the next begins.
+    blocks = [format_prospect(result, entry) for result, entry in top]
+    body = "\n\n".join(blocks)
+    header = f"DMARC-Leads ({len(top)} neu):"
+    footer = f"\n\n  (+{remaining} weitere)" if remaining > 0 else ""
+    return f"{header}\n\n{body}{footer}"
 
 
 # --- state -------------------------------------------------------------------
