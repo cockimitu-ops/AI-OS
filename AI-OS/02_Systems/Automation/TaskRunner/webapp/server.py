@@ -46,6 +46,7 @@ TOKEN = os.environ.get("AIOS_WEB_TOKEN", "")
 # Every route the frontend actually calls. A plain dict, not a framework -
 # a handful of entries is well inside what a manual table can hold clearly.
 API_ROUTES = {
+    ("GET", "/api/today"): api.get_today,
     ("GET", "/api/money-board"): api.get_money_board,
     ("GET", "/api/dmarc-leads"): api.get_dmarc_leads,
     ("GET", "/api/flip-log"): api.get_flip_log,

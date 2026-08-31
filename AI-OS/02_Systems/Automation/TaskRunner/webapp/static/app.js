@@ -148,6 +148,7 @@ const SCREEN_LOADERS = {
   "screen-dmarc": loadDmarcLeads,
   "screen-flips": loadFlipLog,
   "screen-downloads": loadFilesScreen,
+  "screen-today": loadToday,
 };
 
 function loadActiveScreen() {
@@ -220,6 +221,79 @@ document.getElementById("new-conversation").addEventListener("click", () => {
   newThreadId();
   chatLog.innerHTML = "";
 });
+
+// --- today -----------------------------------------------------------------
+
+function greeting() {
+  const h = new Date().getHours();
+  if (h < 5) return "Noch wach";
+  if (h < 11) return "Morgen";
+  if (h < 18) return "Nachmittag";
+  return "Abend";
+}
+
+function switchTo(screenId) {
+  document.querySelector(`.tab[data-screen="${screenId}"]`)?.click();
+}
+
+async function loadToday() {
+  const greetEl = document.getElementById("today-greeting");
+  const heroEl = document.getElementById("today-hero");
+  const rowsEl = document.getElementById("today-rows");
+  const quietEl = document.getElementById("today-quiet");
+  greetEl.textContent = `${greeting()}, Felix`;
+  try {
+    const d = await api("/api/today");
+    setConnDot("ok");
+    const s = d.signals || {};
+
+    // Exactly one bright thing on this screen. The reference artwork is a
+    // single lit subject in a large dark field; three glowing cards would be
+    // the opposite of it, and would also stop telling him what matters most.
+    const a = d.next_action;
+    heroEl.innerHTML = !a ? `<div class="hero"><div class="hero-label">Nichts offen</div>
+        <div class="hero-action">Alles erledigt.</div></div>` : `
+      <div class="hero">
+        <div class="hero-label">${a.gates ? "Zuerst — blockiert den Rest" : "Als Nächstes"}</div>
+        <div class="hero-action">${escapeHtml(a.action)}</div>
+        <div class="hero-meta">
+          ${a.euros ? `<span class="euros">~${a.euros} EUR</span>` : ""}
+          <span>${a.minutes} min</span>
+          <span>${d.open_actions} offen insgesamt</span>
+        </div>
+        <div class="hero-note">${escapeHtml(a.note || "")}</div>
+      </div>`;
+
+    // Quiet rows below: a number, a label, and where tapping goes. A zero is
+    // rendered dim rather than hidden - "0 Briefe raus" is the single most
+    // important fact on this screen and hiding it would be flattering.
+    const rows = [
+      { val: s.letters_sent ?? 0, lbl: "Briefe raus", to: "screen-dmarc",
+        warn: (s.letters_sent ?? 0) === 0 },
+      { val: s.leads_mailable ?? 0, lbl: "Leads mit Postadresse", to: "screen-dmarc" },
+      { val: d.proposals_pending ?? 0, lbl: "Vorschläge warten auf dich", to: "screen-chat" },
+      { val: d.study_pending ?? 0, lbl: "Study-Notizen unverarbeitet", to: "screen-downloads" },
+      { val: s.flips?.open ?? 0, lbl: "Flips offen", to: "screen-flips" },
+    ];
+    rowsEl.innerHTML = rows.map((r) => `
+      <div class="today-row" data-to="${r.to}">
+        <span class="val ${r.val === 0 ? "zero" : ""} ${r.warn ? "warn" : ""}">${r.val}</span>
+        <span class="lbl">${escapeHtml(r.lbl)}</span>
+        <span class="chev">›</span>
+      </div>`).join("");
+    rowsEl.querySelectorAll(".today-row").forEach((el) => {
+      el.addEventListener("click", () => switchTo(el.dataset.to));
+    });
+
+    const last = d.sniper?.last_run;
+    quietEl.textContent = last
+      ? `Sniper zuletzt ${new Date(last).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })} · ${d.sniper.alerted} Funde insgesamt`
+      : "Sniper hat noch nicht gelaufen";
+  } catch (err) {
+    setConnDot("err");
+    heroEl.innerHTML = `<div class="hero"><div class="hero-action">Fehler: ${escapeHtml(err.message)}</div></div>`;
+  }
+}
 
 // --- money board -----------------------------------------------------------
 

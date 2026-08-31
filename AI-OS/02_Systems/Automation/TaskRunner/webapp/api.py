@@ -15,6 +15,7 @@ The chat handler builds a task file the exact same way dispatch_task.py does
 same way - single user, one message in flight, no reason for anything
 fancier.
 """
+import json
 import os
 import re
 import subprocess
@@ -27,6 +28,8 @@ import memory
 import money_board
 import dmarc_prospector
 import flip_log
+import proposals
+import study_agent
 
 TASK_RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INBOX = os.path.join(TASK_RUNNER_DIR, "tasks", "inbox")
@@ -54,6 +57,70 @@ ALLOWED_UPLOAD_EXT = (".txt", ".zip", ".csv", ".json", ".md",
                       # on his phone, he photographs slides and boards).
                       ".jpg", ".jpeg", ".png", ".heic", ".webp", ".pdf")
 UNSAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._ ()\u00c0-\u024f-]")
+
+
+# --- today ---------------------------------------------------------------
+
+def _load_json(path):
+    """Never raises: a missing or half-written state file means that one
+    signal is unknown, not that the home screen fails to render."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _sniper_state():
+    """Last sniper run and how many ads it has ever flagged. Never raises -
+    a missing state file means the sniper has not run, not that the home
+    screen is broken."""
+    state = _load_json(os.path.join(TASK_RUNNER_DIR, "watches", "state.json"))
+    alerted = state.get("alerted") or {}
+    return {
+        "last_run": state.get("last_run"),
+        "alerted": len(alerted) if isinstance(alerted, (dict, list)) else 0,
+    }
+
+
+def get_today(_body):
+    """Everything the home screen shows, in one request.
+
+    One endpoint rather than five: this is the first screen on a phone, and
+    five round trips over a tailnet is the difference between "instant" and
+    "loading". Every field is a live read through the same modules the CLI
+    uses - nothing here keeps its own copy of anything.
+
+    Every section degrades on its own. A broken flip log must not blank the
+    money board next to it, because the home screen is the one view that has
+    to be trustworthy at a glance."""
+    signals = money_board.live_signals()
+    actions = money_board.sorted_actions()
+    top = actions[0] if actions else None
+
+    try:
+        review = proposals.load_review() or {}
+        pending_proposals = len(review.get("items") or [])
+    except Exception:  # noqa: BLE001 - optional signal, never fatal
+        pending_proposals = 0
+
+    try:
+        study_pending = study_agent.pending_count()
+    except Exception:  # noqa: BLE001
+        study_pending = 0
+
+    return 200, {
+        "next_action": None if not top else {
+            "action": top[1], "euros": top[2], "minutes": top[3],
+            "note": top[4], "gates": top[0] == "felix-first",
+        },
+        "open_actions": len(actions),
+        "signals": signals,
+        "proposals_pending": pending_proposals,
+        "study_pending": study_pending,
+        "sniper": _sniper_state(),
+    }
 
 
 # --- dashboards --------------------------------------------------------

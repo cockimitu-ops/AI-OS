@@ -20,7 +20,16 @@
 
 <main id="screens">
 
-  <section id="screen-chat" class="screen active">
+  <section id="screen-today" class="screen active">
+    <div class="today-scroll">
+      <div id="today-greeting" class="today-greeting"></div>
+      <div id="today-hero"></div>
+      <div id="today-rows" class="today-rows"></div>
+      <div id="today-quiet" class="today-quiet"></div>
+    </div>
+  </section>
+
+  <section id="screen-chat" class="screen">
     <div id="chat-log" class="chat-log"></div>
     <form id="chat-form" class="chat-form">
       <input id="chat-input" type="text" placeholder="Nachricht..." autocomplete="off">
@@ -79,11 +88,30 @@
 </main>
 
 <nav class="tabbar">
-  <button class="tab active" data-screen="screen-chat">Chat</button>
-  <button class="tab" data-screen="screen-money">Geld</button>
-  <button class="tab" data-screen="screen-dmarc">DMARC</button>
-  <button class="tab" data-screen="screen-flips">Flips</button>
-  <button class="tab" data-screen="screen-downloads">Dateien</button>
+  <button class="tab active" data-screen="screen-today">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>
+    Heute
+  </button>
+  <button class="tab" data-screen="screen-chat">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a3 3 0 0 1-3 3H8l-5 3V6a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3z"/></svg>
+    Chat
+  </button>
+  <button class="tab" data-screen="screen-money">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+    Geld
+  </button>
+  <button class="tab" data-screen="screen-dmarc">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
+    DMARC
+  </button>
+  <button class="tab" data-screen="screen-flips">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h14l-3-3"/><path d="M21 16H7l3 3"/></svg>
+    Flips
+  </button>
+  <button class="tab" data-screen="screen-downloads">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h6l2 3h8v13H4z"/></svg>
+    Dateien
+  </button>
 </nav>
 
 <div id="token-modal" class="modal hidden">

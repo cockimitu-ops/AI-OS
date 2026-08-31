@@ -3344,6 +3344,60 @@ class TestWebappApi(unittest.TestCase):
         self.assertEqual(status, 200, payload)
         self.assertEqual(payload["files"], 2)
 
+    def test_today_gives_the_home_screen_everything_in_one_request(self):
+        """One endpoint rather than five: this is the first screen on a
+        phone, and five round trips over a tailnet is the difference between
+        'instant' and 'loading'."""
+        status, payload = self.api.get_today({})
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            set(payload),
+            {"next_action", "open_actions", "signals", "proposals_pending",
+             "study_pending", "sniper"})
+
+    def test_today_next_action_is_the_boards_own_first_row(self):
+        """The home screen must not disagree with the money board about what
+        comes first - so it reads the same ordering function rather than
+        picking a row itself."""
+        _, payload = self.api.get_today({})
+        expected = self.api.money_board.sorted_actions()[0]
+        self.assertEqual(payload["next_action"]["action"], expected[1])
+        self.assertEqual(payload["next_action"]["gates"], expected[0] == "felix-first")
+
+    def test_today_survives_every_optional_signal_being_broken(self):
+        """The home screen is the one view that has to be trustworthy at a
+        glance, so a broken flip log must not blank the money board beside
+        it."""
+        originals = {}
+        for name in ("proposals", "study_agent"):
+            originals[name] = getattr(self.api, name)
+
+        class Boom:
+            def __getattr__(self, _):
+                raise RuntimeError("state file is garbage")
+
+        try:
+            self.api.proposals = Boom()
+            self.api.study_agent = Boom()
+            status, payload = self.api.get_today({})
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["proposals_pending"], 0)
+            self.assertEqual(payload["study_pending"], 0)
+            self.assertIsNotNone(payload["signals"])
+        finally:
+            for name, value in originals.items():
+                setattr(self.api, name, value)
+
+    def test_sniper_state_missing_file_is_not_a_crash(self):
+        original = self.api.TASK_RUNNER_DIR
+        with tempfile.TemporaryDirectory() as tmp:
+            self.api.TASK_RUNNER_DIR = tmp
+            try:
+                self.assertEqual(self.api._sniper_state(),
+                                 {"last_run": None, "alerted": 0})
+            finally:
+                self.api.TASK_RUNNER_DIR = original
+
     def test_dmarc_leads_shape(self):
         status, payload = self.api.get_dmarc_leads({})
         self.assertEqual(status, 200)

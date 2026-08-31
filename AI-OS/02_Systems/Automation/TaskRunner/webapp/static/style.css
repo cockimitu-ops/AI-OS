@@ -1,13 +1,27 @@
+/* Palette taken from "Can You Grasp Time" (Dogan Ural), the reference Felix
+   sent: a true-black field, a subject made of cool white-blue filaments and
+   starlight, and rare iridescent specks - gold, violet - never as fills, only
+   as points. The design rule that follows from it: content is light emerging
+   from darkness, not boxes sitting on a background. So almost no borders, no
+   grey card fills; a focal element glows and everything else recedes.
+
+   True black rather than the old #0f1115 is also the practical choice on an
+   OLED phone: those pixels are genuinely off, which is both deeper contrast
+   and less battery. */
 :root {
-  --bg: #0f1115;
-  --surface: #181b22;
-  --surface-2: #21252f;
-  --border: #2b303b;
-  --text: #e8eaed;
-  --text-dim: #9aa1ac;
-  --accent: #7cc4ff;
-  --good: #6fd08c;
-  --bad: #ef8686;
+  --bg: #000000;
+  --surface: #06070a;        /* barely there - a breath above black */
+  --surface-2: #0c0e13;
+  --border: rgba(207, 227, 255, 0.07);   /* hairline, never a frame */
+  --text: #eef3fa;
+  --text-dim: #7c8797;
+  --text-faint: #4a5260;
+  --accent: #cfe3ff;         /* the filament white-blue */
+  --accent-glow: rgba(207, 227, 255, 0.16);
+  --gold: #e8c98a;           /* the rare warm speck */
+  --violet: #b9a0ff;
+  --good: #8fe3b0;
+  --bad: #ff9a9a;
 }
 
 * { box-sizing: border-box; }
@@ -17,7 +31,18 @@ html, body {
   background: var(--bg); color: var(--text);
   font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
   overscroll-behavior: none;
+  /* Starfield: two tiled radial gradients, no image and no canvas. A
+     particle animation would look closer to the reference and would also
+     run a repaint loop on a phone all day for decoration - this costs
+     nothing and reads the same at arm's length. */
+  background-image:
+    radial-gradient(1px 1px at 20% 30%, rgba(255,255,255,0.16), transparent 100%),
+    radial-gradient(1px 1px at 70% 65%, rgba(255,255,255,0.10), transparent 100%),
+    radial-gradient(1.5px 1.5px at 45% 85%, rgba(232,201,138,0.10), transparent 100%);
+  background-size: 180px 180px, 240px 240px, 320px 320px;
 }
+
+
 
 body { display: flex; flex-direction: column; }
 
@@ -166,3 +191,81 @@ tr.win td.net { color: var(--good); }
   border: 1px solid var(--accent); border-radius: 999px; background: transparent;
   color: var(--accent); font-size: 0.78rem; cursor: pointer; }
 .install-btn.hidden { display: none; }
+
+/* ---------- Today: the home screen ---------------------------------------
+   The reference is one luminous subject in a large empty field. So this
+   screen has exactly one bright thing - the next action - and everything
+   else is dim and small. If three things glow, nothing does. */
+
+#screen-today { padding: 0; }
+.today-scroll { flex: 1; overflow-y: auto; padding: 8px 20px 24px; }
+
+.today-greeting {
+  color: var(--text-faint); font-size: 0.8rem; letter-spacing: 0.14em;
+  text-transform: uppercase; margin: 18px 0 28px;
+}
+
+/* The hero. A radial glow behind it rather than a card fill, so it reads as
+   lit from within instead of as a box on a page. */
+.hero {
+  position: relative; padding: 26px 22px 24px; border-radius: 20px;
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgba(207,227,255,0.10), transparent 70%),
+    var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 0 60px -20px var(--accent-glow);
+}
+.hero-label {
+  color: var(--accent); font-size: 0.7rem; letter-spacing: 0.18em;
+  text-transform: uppercase; opacity: 0.85;
+}
+.hero-action {
+  font-size: 1.35rem; line-height: 1.3; margin: 12px 0 14px;
+  font-weight: 500; letter-spacing: -0.01em;
+}
+.hero-meta { display: flex; gap: 18px; color: var(--text-dim); font-size: 0.85rem; }
+.hero-meta .euros { color: var(--gold); }
+.hero-note {
+  margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border);
+  color: var(--text-dim); font-size: 0.84rem; line-height: 1.5;
+}
+
+/* Everything below the hero: quiet rows, no boxes, hairline separators. */
+.today-rows { margin-top: 26px; }
+.today-row {
+  display: flex; align-items: baseline; gap: 12px; padding: 15px 2px;
+  border-bottom: 1px solid var(--border); cursor: pointer;
+}
+.today-row:last-child { border-bottom: 0; }
+.today-row .val {
+  font-size: 1.15rem; font-variant-numeric: tabular-nums; min-width: 3.2ch;
+  color: var(--text);
+}
+.today-row .val.zero { color: var(--text-faint); }
+.today-row .lbl { color: var(--text-dim); font-size: 0.9rem; flex: 1; }
+.today-row .chev { color: var(--text-faint); font-size: 0.9rem; }
+.today-row .val.warn { color: var(--gold); }
+
+.today-quiet {
+  margin-top: 30px; color: var(--text-faint); font-size: 0.78rem;
+  line-height: 1.6; letter-spacing: 0.03em; text-align: center;
+}
+
+/* ---------- tab bar: icons, bigger targets ------------------------------ */
+.tabbar { background: rgba(0,0,0,0.86); backdrop-filter: blur(12px); }
+.tab {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 9px 0 7px; font-size: 0.62rem; letter-spacing: 0.04em;
+  min-height: 52px;              /* a real thumb target, not a text link */
+}
+.tab svg { width: 21px; height: 21px; stroke-width: 1.6; }
+.tab.active svg { filter: drop-shadow(0 0 6px var(--accent-glow)); }
+
+/* The notch and the home bar. Deliberately last in the file: an earlier
+   version put these near the top, above the .topbar/.tabbar blocks that set
+   padding wholesale, so they were silently overridden and did nothing -
+   which on a phone looks like the design simply ignoring the cutout.
+   Without them the top row hides under the camera and the tab bar sits under
+   the gesture pill, the most obvious "this is a website" tell there is. */
+.topbar { padding-top: calc(12px + env(safe-area-inset-top)); }
+.tabbar { padding-bottom: calc(6px + env(safe-area-inset-bottom)); }
