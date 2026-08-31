@@ -4002,6 +4002,46 @@ A: Gegen Rainbow Tables."""
 
     # --- discovery -------------------------------------------------------
 
+    def test_photos_are_discovered_and_hashed_by_bytes(self):
+        """Photos are hashed unread: turning one into text costs an OCR run
+        and possibly a model call, and doing that during discovery would
+        spend it on every photo on every pass, already-processed ones
+        included."""
+        png = (b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+        with open(os.path.join(self.inbox, "tafel.png"), "wb") as f:
+            f.write(png)
+        found = self.sa.discover(self.inbox, {})
+        self.assertEqual(len(found), 1)
+        path, text, digest = found[0]
+        self.assertTrue(path.endswith("tafel.png"))
+        self.assertEqual(text, "")
+        self.assertTrue(digest)
+        # Unchanged bytes must not be re-read on the next pass.
+        self.assertEqual(self.sa.discover(self.inbox, {"tafel.png": {"digest": digest}}), [])
+
+    def test_a_photo_with_no_readable_text_is_not_marked_processed(self):
+        """So a better photo of the same board - or a raised vision cap -
+        gets another go instead of being skipped forever."""
+        with open(os.path.join(self.inbox, "leer.png"), "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+        status, _ = self.sa.process_note(
+            os.path.join(self.inbox, "leer.png"), "", "d1", "08_Research")
+        self.assertEqual(status, "no-text")
+
+    def test_study_log_records_how_the_text_was_read(self):
+        """A note built from a vision pass on a blurry board deserves more
+        scepticism than one typed by hand, and months later nothing else
+        would say which it was."""
+        path = os.path.join(self.tmp.name, "Study_Log.md")
+        line = self.sa.append_study_log(
+            "tafel.png", os.path.join(self.sa.VAULT, "x", "N.md"), 3, 4,
+            when="2026-09-23 10:00", path=path, read_by="vision")
+        self.assertIn("Vision-Modell", line)
+        plain = self.sa.append_study_log(
+            "notiz.md", os.path.join(self.sa.VAULT, "x", "N.md"), 1, 1,
+            when="2026-09-23 10:01", path=path, read_by="text")
+        self.assertNotIn("gelesen", plain)
+
     def test_readme_and_folder_furniture_are_not_study_notes(self):
         """Every vault folder carries a README by convention. The first dry
         run of the real inbox tried to turn its own instructions into
@@ -4333,3 +4373,94 @@ meisten bringen und am wenigsten Aufwand sind insgesamt."""
 
     def test_missing_stats_file_is_not_an_error(self):
         self.assertEqual(self.vs.load_stats("/nonexistent/stats.json"), {})
+
+
+class TestPhotoNotes(unittest.TestCase):
+    """Photo-to-text for study material (added 2026-08-31). Felix does not
+    type notes on his phone - he photographs slides and boards - and asked
+    for it to be token-efficient. Two stages: tesseract locally, a vision
+    model only when that plainly failed. No test here makes a model call."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "photo_notes", os.path.join(HERE, "scripts", "photo_notes.py"))
+        cls.pn = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.pn)
+
+    def test_recognises_image_files_and_ignores_text_ones(self):
+        for name in ("foto.jpg", "SCAN.PNG", "tafel.heic", "seite.webp"):
+            self.assertTrue(self.pn.is_image(name), name)
+        for name in ("notiz.md", "export.txt", "daten.json"):
+            self.assertFalse(self.pn.is_image(name), name)
+
+    def test_env_file_path_actually_resolves(self):
+        """The first version counted the levels wrong and landed on
+        /home/nost/.env, which does not exist - so a hand-run would have gone
+        to the vision model unauthenticated and reported "API key not valid",
+        which reads like a broken key rather than an unloaded one."""
+        self.assertTrue(os.path.exists(self.pn.ENV_PATH), self.pn.ENV_PATH)
+
+    def test_env_loading_never_overwrites_what_is_already_set(self):
+        key = "AIOS_TEST_ENV_KEY_XYZ"
+        os.environ[key] = "from-systemd"
+        self.addCleanup(os.environ.pop, key, None)
+        self.pn.load_env_file()
+        self.assertEqual(os.environ[key], "from-systemd")
+
+    def test_garbage_ocr_output_is_recognised_as_unusable(self):
+        """Tesseract does not fail on handwriting - it returns confident
+        debris. So the test is not "did it error" but "does this look like
+        language"."""
+        for junk in ("", "   ", "a b c", "|| ~ ,, .. -- 1l I|",
+                     "Ae4 f0 |I 3m z" * 3):
+            self.assertTrue(self.pn.looks_unusable(junk), repr(junk))
+
+    def test_real_prose_is_not_flagged_as_unusable(self):
+        real = ("Firewalls Grundlagen\n"
+                "Stateless prueft einzelne Pakete ohne Kontext\n"
+                "Stateful nutzt eine Verbindungstabelle und verfolgt Zustaende\n"
+                "DMZ liegt zwischen externem und internem Netz")
+        self.assertFalse(self.pn.looks_unusable(real))
+
+    def test_german_umlauts_survive_the_word_heuristic(self):
+        self.assertFalse(self.pn.looks_unusable(
+            "Diese Vorlesung behandelt Hashfunktionen und ihre "
+            "Eigenschaften ausfuehrlich, insbesondere Kollisionen"))
+
+    def test_ocr_of_a_missing_file_returns_empty_not_an_exception(self):
+        self.assertEqual(self.pn.ocr("/nonexistent/nope.png"), "")
+
+    def test_vision_is_skipped_once_the_daily_cap_is_reached(self):
+        """Free is not unlimited: the same Gemini key is a MODEL_CHAIN
+        fallback tier, so a morning of photographing a whole lecture must not
+        eat the quota the worker needs that evening."""
+        original = self.pn.VISION_STATE_PATH
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "vision_usage.json")
+            self.pn.VISION_STATE_PATH = path
+            try:
+                from datetime import date
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump({date.today().isoformat(): self.pn.VISION_DAILY_MAX}, f)
+                self.assertEqual(self.pn.vision_used_today(), self.pn.VISION_DAILY_MAX)
+                # Must return without importing litellm or opening the file.
+                self.assertEqual(self.pn.vision("/nonexistent/x.png"), "")
+            finally:
+                self.pn.VISION_STATE_PATH = original
+
+    def test_a_corrupt_usage_file_does_not_block_everything(self):
+        original = self.pn.VISION_STATE_PATH
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "vision_usage.json")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("{not json")
+            self.pn.VISION_STATE_PATH = path
+            try:
+                self.assertEqual(self.pn.vision_used_today(), 0)
+            finally:
+                self.pn.VISION_STATE_PATH = original
+
+    def test_no_vision_mode_never_reaches_the_model(self):
+        text, how = self.pn.text_from_image("/nonexistent/x.png", allow_vision=False)
+        self.assertEqual((text, how), ("", "failed"))

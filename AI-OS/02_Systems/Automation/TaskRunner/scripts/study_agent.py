@@ -61,6 +61,7 @@ TASK_RUNNER_DIR = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, TASK_RUNNER_DIR)
 
 import agents        # noqa: E402  (needs sys.path set first)
+import photo_notes   # noqa: E402
 import vault_write   # noqa: E402
 
 VAULT = vault_write.VAULT
@@ -189,22 +190,39 @@ def discover(source, state, force=None, verbose=False):
     for name in sorted(os.listdir(source)):
         if name.startswith((".", "_")) or name.lower() in SKIP_NAMES:
             continue
-        if not name.lower().endswith((".md", ".txt")):
-            continue
         path = os.path.join(source, name)
         if not os.path.isfile(path):
             continue
-        try:
-            with open(path, encoding="utf-8", errors="replace") as f:
-                text = f.read()
-        except OSError as e:
-            print(f"[!] cannot read {name}: {e}", file=sys.stderr)
+        is_photo = photo_notes.is_image(name)
+        if not is_photo and not name.lower().endswith((".md", ".txt")):
             continue
-        if not text.strip():
-            if verbose:
-                print(f"[i] {name} is empty - skipped")
-            continue
-        digest = _digest(text)
+        if is_photo:
+            # Hashed as bytes and left unread: turning the photo into text
+            # costs an OCR run and possibly a model call, and doing that
+            # during discovery would spend it on every photo on every pass,
+            # including the ones already processed. It happens once, at
+            # processing time.
+            try:
+                with open(path, "rb") as f:
+                    raw = f.read()
+            except OSError as e:
+                print(f"[!] cannot read {name}: {e}", file=sys.stderr)
+                continue
+            if not raw:
+                continue
+            text, digest = "", hashlib.sha256(raw).hexdigest()[:16]
+        else:
+            try:
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    text = f.read()
+            except OSError as e:
+                print(f"[!] cannot read {name}: {e}", file=sys.stderr)
+                continue
+            if not text.strip():
+                if verbose:
+                    print(f"[i] {name} is empty - skipped")
+                continue
+            digest = _digest(text)
         known = state.get(name)
         if known and known.get("digest") == digest and name not in (force or ()):
             if verbose:
@@ -385,7 +403,7 @@ LOG_HEADING = "## Ingested Notes"
 
 
 def append_study_log(source_name, note_path, concepts, cards, when=None,
-                     path=None):
+                     path=None, read_by="text"):
     """Append one line per ingested note. Append-only and never rewrites an
     existing line - the same rule vault_write.py holds itself to.
 
@@ -395,8 +413,12 @@ def append_study_log(source_name, note_path, concepts, cards, when=None,
     path = path or STUDY_LOG
     when = when or datetime.now().strftime("%Y-%m-%d %H:%M")
     rel = os.path.relpath(note_path, VAULT)
+    # How the text was obtained is worth recording: a note built from a
+    # vision pass on a blurry board photo deserves more scepticism than one
+    # typed by hand, and months later nothing else would say which it was.
+    how = {"ocr": ", per OCR gelesen", "vision": ", per Vision-Modell gelesen"}.get(read_by, "")
     line = (f"- {when} — `{source_name}` → [[{rel[:-3]}|{os.path.basename(note_path)[:-3]}]] "
-            f"({concepts} Konzepte, {cards} Karten)")
+            f"({concepts} Konzepte, {cards} Karten{how})")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if not os.path.exists(path):
         header = (
@@ -439,7 +461,20 @@ def process_note(path, text, digest, dest, timeout_s=DEFAULT_TIMEOUT_S,
     retry it by hand."""
     name = os.path.basename(path)
     if dry_run:
-        return "dry-run", f"would process {name} ({len(text)} chars)"
+        what = "photo" if photo_notes.is_image(name) else f"{len(text)} chars"
+        return "dry-run", f"would process {name} ({what})"
+
+    read_by = "text"
+    if photo_notes.is_image(name):
+        # Local OCR first, a vision model only if that plainly failed - see
+        # photo_notes.py. Both stages are free today; the daily cap there
+        # exists because the vision model shares a key with MODEL_CHAIN.
+        text, read_by = photo_notes.text_from_image(path, verbose=verbose)
+        if not text.strip():
+            # Not recorded as processed, so a better photo of the same board
+            # or a raised cap gets another go rather than being skipped
+            # forever.
+            return "no-text", "OCR und Vision haben keinen Text gefunden"
     try:
         output = run_through_worker(build_task(name, text), timeout_s=timeout_s)
     except RuntimeError as e:
@@ -477,7 +512,7 @@ def process_note(path, text, digest, dest, timeout_s=DEFAULT_TIMEOUT_S,
     cards = sum(sections.get("FLASHCARDS", "").upper().count(p)
                 for p in CARD_PREFIXES)
     try:
-        append_study_log(name, note_path, concepts, cards)
+        append_study_log(name, note_path, concepts, cards, read_by=read_by)
     except OSError as e:
         # The note itself is written and is the thing that matters; a failed
         # log line is worth reporting, not worth discarding the note over.
