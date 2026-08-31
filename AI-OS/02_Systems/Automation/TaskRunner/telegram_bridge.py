@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import asyncio
+import functools
 from datetime import datetime
 from dotenv import load_dotenv
 from telegram import Update
@@ -26,6 +27,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import agents
 import memory
 import proposals
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts"))
+import study_agent  # noqa: E402  (capture path for /lernen)
 
 
 def _split_agent_prefix(text):
@@ -176,6 +179,66 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             _md_lite_to_telegram_html(
                 error or ("✅ Done: " + "; ".join(d.get("text", "") for d in done))),
+            parse_mode=ParseMode.HTML)
+        return
+
+    # Capture-only, no model call: in a lecture the one thing that matters
+    # is that the text lands somewhere safe in under a second. Waiting on a
+    # worker round trip - or failing because the free tier is rate limited
+    # right then - would mean the note is simply lost. study_agent.py does
+    # the thinking later, on its nightly run or on demand.
+    head = command.split(maxsplit=1)[0] if command else ""
+    if head in ("lernen", "study", "notiz", "note", "vl"):
+        raw = instruction.strip().lstrip("/")
+        body = raw[len(raw.split(maxsplit=1)[0]):].strip()
+        if not body:
+            waiting = study_agent.pending_count()
+            await update.message.reply_text(
+                _md_lite_to_telegram_html(
+                    f"📚 **Study-Inbox**: {waiting} Notiz(en) warten auf "
+                    "Verarbeitung.\n\nSo speicherst du eine: "
+                    "`/lernen VL3 Netzwerke\nOSI Modell, 7 Schichten...`\n\n"
+                    "Alles nach dem Befehl wird 1:1 gespeichert - Stichworte, "
+                    "Fragmente, egal. Verarbeitet wird nachts um 21:30."),
+                parse_mode=ParseMode.HTML)
+            return
+        try:
+            path = study_agent.capture_note(body)
+        except (OSError, ValueError) as e:
+            await update.message.reply_text(
+                _md_lite_to_telegram_html(f"⚠️ Konnte nicht speichern: {e}"),
+                parse_mode=ParseMode.HTML)
+            return
+        await update.message.reply_text(
+            _md_lite_to_telegram_html(
+                f"📝 Gespeichert als `{os.path.basename(path)}` "
+                f"({len(body)} Zeichen). Wird nachts verarbeitet - "
+                "oder jetzt mit `/lernenjetzt`."),
+            parse_mode=ParseMode.HTML)
+        return
+
+    if head in ("lernenjetzt", "studynow", "verarbeiten"):
+        waiting = study_agent.pending_count()
+        if not waiting:
+            await update.message.reply_text(
+                _md_lite_to_telegram_html("Nichts zu verarbeiten."),
+                parse_mode=ParseMode.HTML)
+            return
+        await update.message.reply_text(
+            _md_lite_to_telegram_html(
+                f"⏳ Verarbeite {waiting} Notiz(en) - das dauert ~30s pro Notiz."),
+            parse_mode=ParseMode.HTML)
+        # Runs in a thread: study_agent blocks waiting on the worker, and
+        # blocking the bot's event loop would freeze every other chat command
+        # for minutes.
+        loop = asyncio.get_running_loop()
+        rc = await loop.run_in_executor(
+            None, functools.partial(study_agent.run, verbose=False))
+        await update.message.reply_text(
+            _md_lite_to_telegram_html(
+                "✅ Fertig." if rc == 0 else
+                "⚠️ Durchlauf beendet, aber nichts konnte verarbeitet werden - "
+                "siehe journalctl."),
             parse_mode=ParseMode.HTML)
         return
 

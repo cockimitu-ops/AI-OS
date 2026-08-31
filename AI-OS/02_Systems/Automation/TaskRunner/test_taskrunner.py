@@ -4035,6 +4035,40 @@ A: Gegen Rainbow Tables."""
         self.assertEqual(rc, 0)
         self.assertEqual(os.path.exists(self.sa.STATE_PATH), state_before)
 
+    # --- capture (the /lernen path) --------------------------------------
+
+    def test_capture_writes_the_text_verbatim(self):
+        path = self.sa.capture_note("VL3 Netzwerke\nOSI Modell, 7 Schichten",
+                                    source=self.inbox)
+        self.assertEqual(open(path, encoding="utf-8").read().strip(),
+                         "VL3 Netzwerke\nOSI Modell, 7 Schichten")
+
+    def test_capture_names_the_file_after_the_first_line(self):
+        path = self.sa.capture_note("VL3 Netzwerke\nblah", source=self.inbox)
+        self.assertIn("vl3_netzwerke", os.path.basename(path))
+
+    def test_two_captures_in_the_same_minute_do_not_overwrite(self):
+        """Two notes fired off during the same lecture minute is the normal
+        case, and the second one vanishing looks exactly like it was saved."""
+        when = datetime(2026, 9, 1, 10, 15)
+        a = self.sa.capture_note("Thema X\neins", source=self.inbox, when=when)
+        b = self.sa.capture_note("Thema X\nzwei", source=self.inbox, when=when)
+        self.assertNotEqual(a, b)
+        self.assertEqual(len(self.sa.discover(self.inbox, {})), 2)
+
+    def test_capture_refuses_empty_text_instead_of_writing_a_blank_file(self):
+        with self.assertRaises(ValueError):
+            self.sa.capture_note("   \n ", source=self.inbox)
+
+    def test_captured_notes_are_picked_up_by_discovery(self):
+        """The whole point of the split: capture is instant and offline,
+        processing happens later."""
+        self.sa.capture_note("VL4 Firewalls\nstateful vs stateless",
+                             source=self.inbox)
+        found = self.sa.discover(self.inbox, {})
+        self.assertEqual(len(found), 1)
+        self.assertIn("stateful", found[0][1])
+
     def test_git_pull_on_a_non_repo_is_a_no_op_not_a_failure(self):
         self.assertFalse(self.sa.git_pull(self.inbox))
 

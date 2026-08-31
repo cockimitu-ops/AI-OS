@@ -195,6 +195,52 @@ def discover(source, state, force=None, verbose=False):
     return out
 
 
+# --- capture -------------------------------------------------------------
+
+_SLUG_RE = None  # set below; re is imported lazily to keep the import list flat
+
+
+def capture_note(text, source=DEFAULT_SOURCE, prefix="notiz", when=None):
+    """Write raw text straight into the study inbox. -> path.
+
+    Capture and processing are deliberately separate. In a lecture the only
+    thing that matters is that the text lands somewhere safe in under a
+    second - waiting on a model round trip, or failing because the free tier
+    is rate limited right then, would mean the note is simply lost. The
+    nightly run (or an on-demand run) does the thinking later.
+
+    Never overwrites: two notes captured in the same minute get distinct
+    files, because the second one being silently swallowed is indistinguishable
+    from it having been saved."""
+    import re
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("empty note")
+    when = when or datetime.now()
+    first = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", first)[:40].strip("_").lower() or prefix
+    base = f"{when.strftime('%Y%m%d_%H%M')}_{slug}"
+    os.makedirs(source, exist_ok=True)
+    name, n = f"{base}.md", 2
+    while os.path.exists(os.path.join(source, name)):
+        name = f"{base}_{n}.md"
+        n += 1
+    path = os.path.join(source, name)
+    tmp = path + ".part"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text.rstrip() + "\n")
+    os.replace(tmp, path)
+    return path
+
+
+def pending_count(source=DEFAULT_SOURCE):
+    """How many captured notes are waiting to be processed."""
+    try:
+        return len(discover(source, load_state()))
+    except OSError:
+        return 0
+
+
 # --- the model call ------------------------------------------------------
 
 def build_task(name, text):
