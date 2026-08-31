@@ -38,3 +38,5 @@ AI-OS/02_Systems/Automation/TaskRunner/outreach/contacted.json
 AI-OS/02_Systems/Automation/TaskRunner/outreach/letters.html
 AI-OS/02_Systems/Automation/TaskRunner/webapp/static/downloads/*
 !AI-OS/02_Systems/Automation/TaskRunner/webapp/static/downloads/.gitkeep
+AI-OS/02_Systems/Automation/TaskRunner/techscout/seen.json
+AI-OS/02_Systems/Automation/TaskRunner/techscout/digest.md

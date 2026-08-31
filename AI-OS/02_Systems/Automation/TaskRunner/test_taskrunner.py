@@ -496,10 +496,14 @@ class TestAgentSelection(TaskRunnerTestCase):
 
     def test_every_agent_on_disk_has_a_usable_prompt_block(self):
         """A file without markers silently degrades to the base prompt, which is
-        correct behaviour but silent - so assert the four real agents are wired,
-        or a broken marker would go unnoticed until someone reads a bad answer."""
+        correct behaviour but silent - so assert every real agent on disk is
+        wired, or a broken marker would go unnoticed until someone reads a bad
+        answer. Checked against a live count of 04_Agents/*.md, not a
+        hardcoded number - a hardcoded "4" already broke once, the day a 5th
+        agent (Tech_Scout) was added, for a reason with nothing to do with
+        this test's actual purpose."""
         found = self.agents.available()
-        self.assertEqual(len(found), 4, found)
+        self.assertGreaterEqual(len(found), 4, found)
         for name in found:
             block = self.agents.load_prompt(name)
             self.assertTrue(block and len(block) > 200,
@@ -3357,6 +3361,99 @@ class TestPaidUsageAccumulation(TaskRunnerTestCase):
             {"role": "assistant", "type": "message", "content": "ok"}]
         self.runner._attempt("some/model", "do a thing")
         self.assertEqual(self.runner._last_paid_usage["values"], [])
+
+
+class TestTechScout(unittest.TestCase):
+    """The daily tech-scout fetcher (added 2026-08-31). Deterministic
+    fetch-and-filter only - no network in these tests, and deliberately no
+    "is this relevant" judgment either. That judgment is the LLM reasoning
+    step's job (Tech_Scout agent, schedules/daily_tech_scout.md); this
+    module's job is producing a small, real, deduplicated candidate list to
+    reason over."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "tech_scout", os.path.join(HERE, "scripts", "tech_scout.py"))
+        cls.ts = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.ts)
+
+    def test_github_queries_use_explicit_or_not_bare_and(self):
+        """Verified live 2026-08-31: GitHub's search treats bare multi-word
+        queries as AND-all-terms, not OR. "DMARC SPF email spoofing" (no
+        OR) matched zero repos because it demanded all four words appear
+        together; "DMARC OR SPF OR email-spoofing" found real results. A
+        query silently returning nothing looks identical to "genuinely
+        nothing new today" from the caller's side, so this has to be
+        enforced structurally, not just fixed once by hand."""
+        for _topic, query in self.ts.TOPICS:
+            if " " in query.replace(" OR ", ""):
+                self.assertIn("OR", query,
+                             f"multi-word query {query!r} needs explicit OR")
+
+    def test_normalize_github_extracts_the_right_fields(self):
+        item = {"full_name": "org/repo", "description": "does a thing",
+               "html_url": "https://github.com/org/repo", "stargazers_count": 42}
+        got = self.ts.normalize_github(item, "agent-runtime")
+        self.assertEqual(got["id"], "gh:org/repo")
+        self.assertEqual(got["score"], 42)
+        self.assertEqual(got["source"], "github")
+
+    def test_normalize_github_handles_missing_description(self):
+        item = {"full_name": "org/repo", "description": None,
+               "html_url": "https://x", "stargazers_count": 1}
+        got = self.ts.normalize_github(item, "t")
+        self.assertEqual(got["description"], "")
+
+    def test_normalize_hn_falls_back_to_hn_link_when_no_external_url(self):
+        """A Show HN / Ask HN post often has no external url field - the
+        digest must still produce something clickable, not a blank link."""
+        hit = {"objectID": "123", "title": "Ask HN: thing", "url": None, "points": 50}
+        got = self.ts.normalize_hn(hit, "t")
+        self.assertEqual(got["url"], "https://news.ycombinator.com/item?id=123")
+
+    def test_filter_hn_by_points_drops_low_signal_posts(self):
+        hits = [{"points": 5}, {"points": 50}, {"points": None}]
+        kept = self.ts.filter_hn_by_points(hits, min_points=15)
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0]["points"], 50)
+
+    def test_digest_is_none_when_there_is_nothing_new(self):
+        """Absent, not an empty-but-present file - the schedule task checks
+        for the file's existence before spending a model call on it, so a
+        quiet day must not silently cost tokens reasoning about nothing."""
+        self.assertIsNone(self.ts.render_digest([]))
+
+    def test_digest_groups_by_topic_and_sorts_by_score(self):
+        candidates = [
+            {"topic": "a", "title": "low", "description": "", "url": "https://x/1",
+            "score": 5, "score_label": "stars"},
+            {"topic": "a", "title": "high", "description": "", "url": "https://x/2",
+            "score": 50, "score_label": "stars"},
+        ]
+        digest = self.ts.render_digest(candidates)
+        self.assertLess(digest.index("high"), digest.index("low"))
+        self.assertIn("## a", digest)
+
+    def test_seen_state_round_trips(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "seen.json")
+            original = self.ts.SEEN_PATH
+            self.ts.SEEN_PATH = path
+            try:
+                self.assertEqual(self.ts.load_seen(), set())
+                self.ts.save_seen({"gh:a/b", "hn:123"})
+                self.assertEqual(self.ts.load_seen(), {"gh:a/b", "hn:123"})
+            finally:
+                self.ts.SEEN_PATH = original
+
+    def test_missing_seen_file_is_empty_not_an_error(self):
+        original = self.ts.SEEN_PATH
+        self.ts.SEEN_PATH = "/nonexistent/seen.json"
+        try:
+            self.assertEqual(self.ts.load_seen(), set())
+        finally:
+            self.ts.SEEN_PATH = original
 
 
 if __name__ == "__main__":
