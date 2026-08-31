@@ -140,10 +140,13 @@ def render_letter(entry, result, sender, today):
              f'kann. Dabei ist mir Folgendes aufgefallen:</p>',
              f'<p class="finding">{e(finding_sentence(result))} '
              f'{e(spf_sentence(result))}</p>',
-             '<p>Praktisch heißt das: Jemand kann E-Mails verschicken, die '
-             'für Ihre Kunden aussehen, als kämen sie von Ihnen - etwa eine '
-             'Rechnung mit geänderter Bankverbindung. Der Schaden trifft '
-             'zuerst Ihre Kunden und dann Ihren Ruf.</p>']
+             '<p>Praktisch heißt das: Ein Betrüger kann im Namen Ihres '
+             'Betriebs eine Rechnung verschicken - mit Ihrem Namen und Ihrer '
+             'Adresse, aber seiner eigenen Bankverbindung. Ihr Kunde zahlt, '
+             'das Geld ist weg, und der Ärger landet zuerst bei Ihnen. Genau '
+             'diese Masche trifft derzeit reihenweise kleine Betriebe, weil '
+             'die Fälschung sich ohne den fehlenden Eintrag nicht automatisch '
+             'abweisen lässt.</p>']
     if provider_line:
         parts.append(f'<p>{provider_line}</p>')
     parts += [
@@ -152,10 +155,10 @@ def render_letter(entry, result, sender, today):
         'dessen, was geändert wurde - 249 € netto.</strong> Dafür ändere ich '
         'ausschließlich DNS-Einträge; an Ihren Rechnern oder Postfächern '
         'wird nichts angefasst.</p>',
-        '<p>Wenn Sie das lieber selbst oder mit Ihrer bisherigen IT-Betreuung '
-        'umsetzen möchten: Der Befund oben ist frei prüfbar, und ich sende '
-        'Ihnen die genauen Werte auf Anfrage gerne kostenlos zu. Mir ist '
-        'wichtiger, dass es gemacht wird, als dass ich es mache.</p>',
+        '<p>Falls Sie bereits eine feste IT-Betreuung haben: Geben Sie ihr '
+        'diesen Brief - sie wird wissen, was zu tun ist. Falls nicht, '
+        'übernehme ich es zum genannten Festpreis. Der Befund oben ist frei '
+        'prüfbar; die genauen Messwerte sende ich Ihnen auf Anfrage zu.</p>',
         '<p>Bei Interesse erreichen Sie mich unter '
         f'{e(sender["phone"])} oder {e(sender["email"])}.</p>',
         '<p class="sig">Mit freundlichen Grüßen<br><br><br>'
