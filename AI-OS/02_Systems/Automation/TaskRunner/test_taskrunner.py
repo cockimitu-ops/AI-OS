@@ -2274,6 +2274,24 @@ class TestStatusUpdate(unittest.TestCase):
     def test_missing_stats_do_not_crash_the_update(self):
         self.assertIn("keine Läufe", self.su.format_sniper_section(None))
 
+    def test_spend_section_absent_when_paid_tier_is_off(self):
+        os.environ.pop("OPENROUTER_PAID_ENABLED", None)
+        self.assertIsNone(self.su.format_spend_section())
+
+    def test_spend_section_present_when_paid_tier_is_on(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["OPENROUTER_PAID_ENABLED"] = "true"
+            self.addCleanup(os.environ.pop, "OPENROUTER_PAID_ENABLED", None)
+            spend_guard_mod = self.su.spend_guard
+            original = spend_guard_mod.LEDGER_PATH
+            spend_guard_mod.LEDGER_PATH = os.path.join(tmp, "ledger.json")
+            try:
+                spend_guard_mod.record_spend(1.23, month="2026-08")
+                line = self.su.format_spend_section()
+            finally:
+                spend_guard_mod.LEDGER_PATH = original
+            self.assertIn("1.23", line)
+
     def test_health_section_is_silent_when_everything_is_fine(self):
         """The morning brief already gives the all-clear once a day; four more
         would train you to skim past the one that matters."""
@@ -2376,6 +2394,175 @@ class TestSniperStats(unittest.TestCase):
                                  "a second read must not re-report the same window")
             finally:
                 self.ks.STATE_PATH, self.ks.WATCHES_DIR = original_state, original_dir
+
+
+class TestPaidTierGating(unittest.TestCase):
+    """The OpenRouter paid tier (added 2026-08-31). Imports aios_runner with
+    the feature explicitly turned on, since it must be a complete no-op
+    otherwise - TestModelChain and every other suite above already prove
+    that with it left off."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        os.environ["AIOS_WORKSPACE"] = self.tmp.name
+        os.environ["OPENROUTER_API_KEY"] = "test-key"
+        os.environ["OPENROUTER_PAID_ENABLED"] = "true"
+        os.environ["OPENROUTER_MONTHLY_BUDGET_USD"] = "1.0"
+        for var in ("OPENROUTER_API_KEY", "OPENROUTER_PAID_ENABLED",
+                    "OPENROUTER_MONTHLY_BUDGET_USD"):
+            self.addCleanup(os.environ.pop, var, None)
+        self.fake = _install_stubs()
+        sys.path.insert(0, HERE)
+        self.addCleanup(lambda: sys.path.remove(HERE))
+        sys.modules.pop("aios_runner", None)
+        sys.modules.pop("spend_guard", None)
+        self.runner = importlib.import_module("aios_runner")
+        self.addCleanup(lambda: sys.modules.pop("aios_runner", None))
+        # Point the ledger at this test's own throwaway directory so runs
+        # never share state with each other or with a real ledger on disk.
+        self.runner.spend_guard.LEDGER_PATH = os.path.join(self.tmp.name, "ledger.json")
+
+    def queue(self, name, text):
+        path = os.path.join(self.runner.INBOX, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return path
+
+    def log_of(self, name):
+        path = os.path.join(self.runner.LOGS, f"{name}.log")
+        return open(path, encoding="utf-8").read() if os.path.exists(path) else None
+
+    def test_enabling_the_flag_appends_exactly_one_paid_entry(self):
+        paid = [e for e in self.runner.MODEL_CHAIN if e["paid"]]
+        self.assertEqual(len(paid), 1)
+        self.assertEqual(paid[0]["model"], self.runner.OPENROUTER_PAID_MODEL)
+
+    def test_every_free_entry_is_explicitly_not_paid(self):
+        """paid must default False, not None/missing - the retry loop does
+        `if entry["paid"]:`, and a missing key there is a KeyError, not a
+        false one, on the very first free model in the chain."""
+        for entry in self.runner.MODEL_CHAIN[:-1]:
+            self.assertIs(entry["paid"], False)
+
+    def test_paid_tier_only_reached_after_every_free_model_fails(self):
+        calls = []
+
+        def track(model, instr, sp=None, history=None, **kwargs):
+            calls.append(model)
+            if model == self.runner.OPENROUTER_PAID_MODEL:
+                return "answered by paid tier"
+            raise RuntimeError("free tier exhausted")
+
+        self.runner._attempt = track
+        self.runner._record_paid_spend = lambda *a, **k: None
+        self.runner.time.sleep = lambda s: None
+        self.queue("t.md", "do a thing")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        self.assertEqual(self.log_of("t.md"), "answered by paid tier")
+        self.assertEqual(calls[-1], self.runner.OPENROUTER_PAID_MODEL)
+        self.assertEqual(len(calls), len(self.runner.MODEL_CHAIN))
+
+    def test_budget_exhausted_skips_the_paid_call_entirely(self):
+        """The cap must prevent the call, not refund it after - record_spend
+        is never reached if can_spend() already said no."""
+        self.runner.spend_guard.record_spend(999.0, path=self.runner.spend_guard.LEDGER_PATH)
+        attempted = []
+
+        def dead_free_only(model, instr, sp=None, history=None, **kwargs):
+            attempted.append(model)
+            raise RuntimeError("free tier exhausted")
+
+        self.runner._attempt = dead_free_only
+        self.runner.time.sleep = lambda s: None
+        self.queue("t.md", "do a thing")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        self.assertNotIn(self.runner.OPENROUTER_PAID_MODEL, attempted,
+                         "a call must never be attempted once the budget is spent")
+        self.assertIn("budget reached", self.log_of("t.md"))
+
+    def test_successful_paid_call_records_spend_via_the_fallback_estimator(self):
+        """No litellm.completion_cost / no captured usage in this stub - the
+        token_counter-based fallback must still produce a positive, recorded
+        cost rather than silently logging $0."""
+        self.runner.litellm.completion_cost = lambda **k: (_ for _ in ()).throw(Exception("unknown model"))
+        self.runner.litellm.token_counter = lambda model, text: max(len((text or "").split()), 1)
+
+        def paid_only(model, instr, sp=None, history=None, **kwargs):
+            if model == self.runner.OPENROUTER_PAID_MODEL:
+                return "a real answer"
+            raise RuntimeError("free tier exhausted")
+
+        self.runner._attempt = paid_only
+        self.runner.time.sleep = lambda s: None
+        self.queue("t.md", "do a thing")
+        self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+        spent = self.runner.spend_guard.month_spent(
+            self.runner.spend_guard.load_ledger(self.runner.spend_guard.LEDGER_PATH))
+        self.assertGreater(spent, 0.0)
+
+
+class TestSpendGuard(unittest.TestCase):
+    """Pure ledger arithmetic - the budget cap that keeps the paid tier from
+    turning a stuck-loop bug into a bill."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "spend_guard", os.path.join(HERE, "scripts", "spend_guard.py"))
+        cls.sg = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.sg)
+
+    def test_fresh_month_has_spent_nothing(self):
+        self.assertEqual(self.sg.month_spent({}, "2026-08"), 0.0)
+
+    def test_can_spend_below_budget(self):
+        self.assertTrue(self.sg.can_spend({"2026-08": 3.0}, budget_usd=6.0, month="2026-08"))
+
+    def test_cannot_spend_at_or_over_budget(self):
+        """At-the-cap must already refuse - the guard is "may I make this
+        call", and letting one more through exactly at the boundary is the
+        off-by-one that turns a hard cap into a soft one."""
+        self.assertFalse(self.sg.can_spend({"2026-08": 6.0}, budget_usd=6.0, month="2026-08"))
+        self.assertFalse(self.sg.can_spend({"2026-08": 9.0}, budget_usd=6.0, month="2026-08"))
+
+    def test_record_spend_is_additive_and_persists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "ledger.json")
+            self.sg.record_spend(1.5, path=path, month="2026-08")
+            total = self.sg.record_spend(0.75, path=path, month="2026-08")
+            self.assertAlmostEqual(total, 2.25)
+            self.assertAlmostEqual(
+                self.sg.month_spent(self.sg.load_ledger(path), "2026-08"), 2.25)
+
+    def test_different_months_do_not_share_a_total(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "ledger.json")
+            self.sg.record_spend(5.0, path=path, month="2026-08")
+            self.sg.record_spend(1.0, path=path, month="2026-09")
+            ledger = self.sg.load_ledger(path)
+            self.assertAlmostEqual(self.sg.month_spent(ledger, "2026-08"), 5.0)
+            self.assertAlmostEqual(self.sg.month_spent(ledger, "2026-09"), 1.0)
+
+    def test_missing_ledger_file_is_treated_as_empty_not_an_error(self):
+        self.assertEqual(self.sg.load_ledger("/nonexistent/path.json"), {})
+
+    def test_negative_cost_cannot_replenish_the_budget(self):
+        """A cost calculation bug that goes negative must not accidentally
+        refund the ledger - additive-only, floor at zero per call."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "ledger.json")
+            self.sg.record_spend(2.0, path=path, month="2026-08")
+            total = self.sg.record_spend(-5.0, path=path, month="2026-08")
+            self.assertEqual(total, 2.0)
+
+    def test_status_line_reports_spent_and_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "ledger.json")
+            self.sg.record_spend(2.5, path=path, month="2026-08")
+            line = self.sg.status_line(6.0, path=path, month="2026-08")
+            self.assertIn("2.50", line)
+            self.assertIn("6.00", line)
 
 
 if __name__ == "__main__":

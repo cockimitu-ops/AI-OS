@@ -25,6 +25,7 @@ Related Documents: [[02_Systems/Automation/README|Automation]], [[Future_Integra
 | `scripts/status_update.py` | The 10/14/18/22 status update (added 2026-08-31). Sniper activity, new DMARC leads, and health problems only. Unlike the morning brief it sends **even when there is nothing to report** — see below. |
 | `scripts/dmarc_prospector.py` | The DMARC lead finder (added 2026-08-31) — discovers local business domains from OpenStreetMap, audits their published SPF/DMARC/MX records via `dig`, and ranks them as sales leads. Strictly passive: open data plus public DNS, never a scan. Feeds the top 3 new leads into the morning brief. See `prospects/README.md`. |
 | `scripts/kleinanzeigen_sniper.py` | The arbitrage sniper (added 2026-08-31) — polls the saved searches in `watches/` and Telegram-pings genuinely new ads. Serves [[10_Projects/LocalArbitrage/README|LocalArbitrage]], whose whole edge is messaging an urgency seller first. See `watches/README.md` for the directive grammar and the two live findings behind its filters. |
+| `scripts/spend_guard.py` | Monthly USD budget cap for the optional OpenRouter paid tier below (added 2026-08-31). Pure ledger arithmetic; fails closed. |
 | `agents.py` | Agent selection. Resolves aliases (`@research` → `Research_Analyst`), loads each agent's Executable Prompt block from [[04_Agents/README|04_Agents]]. Shared by all three entry points so they can't disagree about what an alias means. |
 | `memory.py` | Bounded per-conversation memory. Stores the *conversation* (your message + the worker's prose answer), never Open Interpreter's raw transcript — replaying old command output into a small free model degrades it silently. |
 | `vault_write.py` | Structured write-back. Creates notes and appends Analytics rows, with an allowlist of destinations, correct vault headers, and no code path that overwrites. |
@@ -286,3 +287,36 @@ So this message inverts the morning brief's rule. The brief omits sections it ha
 Health is the exception and stays silent-unless-broken: the morning brief already gives the all-clear once a day, and repeating it four more times is how you train someone to skim past the one that matters.
 
 One number is deliberately not reported. The sniper's cumulative listing count is runs × page-size — after 80 runs it reads "2000 Anzeigen geprüft" when it is really 25 ads looked at 80 times. It looks like throughput and is actually just the clock, so the update reports runs and genuinely-new ads instead.
+
+## Optional paid tier: OpenRouter / GLM 5.2 (added 2026-08-31)
+
+Every model in `MODEL_CHAIN` up to this point is free. This adds one paid model at the very end - tried only after every free tier has already failed - so a normal day never touches it and a bad day (all free quotas exhausted at once, which has happened live) gets a real answer instead of the raw Open Interpreter transcript falling through to a Telegram reply.
+
+**Off by default.** Nothing changes until both are set in `.env`:
+```
+OPENROUTER_PAID_ENABLED=true
+OPENROUTER_API_KEY=...          # already present if the free nemotron entry above is in use
+```
+Optional overrides, all with sane defaults if omitted:
+```
+OPENROUTER_PAID_MODEL=openrouter/z-ai/glm-5.2
+OPENROUTER_MONTHLY_BUDGET_USD=6.0
+OPENROUTER_PAID_INPUT_PER_M=0.4875   # fallback rate, see below
+OPENROUTER_PAID_OUTPUT_PER_M=1.56
+```
+
+### Why a budget cap exists at all
+Every model above this one is free, so this project's one real stuck-call incident (2026-08-30, a single Groq attempt blocked the worker for 101 minutes - see `ATTEMPT_TIMEOUT_S`'s comment in `aios_runner.py`) cost time, not money. A paid tier is a genuinely new risk class in a `Restart=always` service that runs unattended. `spend_guard.py` enforces `OPENROUTER_MONTHLY_BUDGET_USD` and **fails closed**: the check happens before the call, not after, so a month at its cap skips the entry outright rather than going over and refunding later. Checked live against `MODEL_CHAIN`, not just built at import time - this is a long-running process, so "has the budget run out" has to be asked fresh on every task.
+
+### How cost is actually measured
+Prefers real usage captured off the live API response; falls back to counting tokens in what was actually sent/received (`litellm.token_counter`) if that capture ever comes back empty. A budget cap that silently records $0 on a bug is worse than one that slightly over-counts - the whole point is to fail closed, not to be precise.
+
+The dollar figure itself prefers `litellm.completion_cost()` (litellm's own maintained, provider-aware pricing database) and only falls back to the hand-set `OPENROUTER_PAID_INPUT_PER_M`/`OUTPUT_PER_M` env rates if litellm doesn't yet know this model - true for one this new. **Verify current pricing at openrouter.ai/z-ai/glm-5.2 periodically** - the free OpenRouter entry above already documented that OpenRouter's listings move without warning, and a priced model is no different.
+
+### Why a monkey-patch, not a config option
+Open Interpreter's own `Llm.run()` (`interpreter/core/llm/llm.py`) builds a fixed params dict from its own attributes (`api_key`, `api_base`, `max_tokens`, `temperature`) with no passthrough for arbitrary litellm kwargs - so `cache_control_injection_points` (prompt caching) and `stream_options: {"include_usage": True}` (usage capture) can't reach `litellm.completion()` any other way without patching `interpreter.llm.completions` (`== fixed_litellm_completions`) directly. The patch is scoped by an exact model-string check inside the wrapper, never global: Groq/Gemini/Cerebras/the free OpenRouter entry already get their own *automatic* caching for free (see below) and must never see a kwarg meant for a model they aren't.
+
+`hasattr`-guarded, so a future Open Interpreter version without a `.completions` attribute degrades to "no caching, no captured usage" rather than crashing worker startup - the token-counter fallback above means the budget ledger still works either way.
+
+### What you already had for free, and didn't know it
+Groq (your `PRIMARY_MODEL`) and Gemini both do automatic prompt caching with **zero code required** - Groq at 50% off any exact-prefix cache hit (explicitly covers gpt-oss-120b/20b), Gemini's "implicit caching" at ~90% off on any repeated prefix over 1,024 tokens, on free and paid tiers alike. `System_Prompt.md` alone clears that threshold. Nothing to enable there; this section only concerns the one new paid entry.

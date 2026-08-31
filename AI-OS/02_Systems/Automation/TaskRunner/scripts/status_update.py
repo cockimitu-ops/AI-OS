@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(SCRIPT_DIR))
 import dmarc_prospector  # noqa: E402
 import health_check  # noqa: E402
 import kleinanzeigen_sniper  # noqa: E402
+import spend_guard  # noqa: E402
 
 NOTIFIER = os.path.join(SCRIPT_DIR, "send_telegram_notification.py")
 
@@ -57,6 +58,21 @@ def format_sniper_section(stats):
     return " · ".join(parts)
 
 
+def format_spend_section():
+    """Absent, not silent-when-zero, unlike the sniper line: if the paid
+    tier is off (the default) there is nothing meaningful to report, and a
+    permanent "$0.00 of $6.00" line would just be noise four times a day for
+    a feature most days never touches. Reusing OPENROUTER_MONTHLY_BUDGET_USD
+    keeps this consistent with aios_runner.py's own default without
+    duplicating it - importing aios_runner here would pull in Open
+    Interpreter for one float, so the env var is read directly instead."""
+    if os.environ.get("OPENROUTER_PAID_ENABLED", "").lower() != "true":
+        return None
+    budget = float(os.environ.get(
+        "OPENROUTER_MONTHLY_BUDGET_USD", spend_guard.DEFAULT_MONTHLY_BUDGET_USD))
+    return spend_guard.status_line(budget)
+
+
 def format_health_section(checks):
     """Only speaks up when something is wrong. The morning brief already gives
     the all-clear once a day; repeating it four more times trains you to skim."""
@@ -70,6 +86,9 @@ def build_update(stats, leads, checks, now=None):
     now = now or time.localtime()
     parts = [f"Status {time.strftime('%H:%M', now)} - {WEEKDAYS[now.tm_wday]}",
              "", format_sniper_section(stats)]
+    spend = format_spend_section()
+    if spend:
+        parts += ["", spend]
     if leads:
         parts += ["", leads]
     health = format_health_section(checks)

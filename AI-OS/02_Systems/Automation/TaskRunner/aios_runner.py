@@ -15,6 +15,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import agents
 import memory
 import proposals
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts"))
+import spend_guard
 
 # Disable telemetry and interactive terminal hooks before importing interpreter
 os.environ["INTERPRETER_ANONYMOUS_TELEMETRY"] = "false"
@@ -106,7 +108,7 @@ PRIMARY_MODEL = "groq/openai/gpt-oss-120b"
 FALLBACK_MODEL = "gemini/gemini-3.6-flash"
 
 def _chain_entry(model, delay=0, api_base=None, api_key=None,
-                  context_window=None, max_tokens=None):
+                  context_window=None, max_tokens=None, paid=False):
     """One MODEL_CHAIN entry. A factory instead of 7+ hand-written dict
     literals - context_window/max_tokens were added after api_base/api_key
     without touching every existing entry, which is the point of building
@@ -118,6 +120,7 @@ def _chain_entry(model, delay=0, api_base=None, api_key=None,
         "model": model, "delay": delay,
         "api_base": api_base, "api_key": api_key,
         "context_window": context_window, "max_tokens": max_tokens,
+        "paid": paid,
     }
 
 
@@ -188,6 +191,33 @@ if os.environ.get("OPENROUTER_API_KEY"):
         context_window=1_000_000, max_tokens=16_384,
     ))
 
+# Optional paid tier via OpenRouter, appended after every free tier - "only
+# fires when they're exhausted," per Felix's own framing when this was first
+# proposed. Off by default: OPENROUTER_PAID_ENABLED must be explicitly "true"
+# in .env, a separate decision from just having OPENROUTER_API_KEY present
+# (that key already powers the free nemotron entry above and existed before
+# any paid spend was on the table).
+#
+# The 2026-08-30 101-minute-stuck-call incident is why this has a budget cap
+# at all: every model above this line is free, so a stuck loop cost time, not
+# money. spend_guard.py enforces OPENROUTER_MONTHLY_BUDGET_USD and fails
+# closed - once the month's spend hits the cap, this entry is skipped before
+# the call, never billed past it.
+OPENROUTER_PAID_MODEL = os.environ.get("OPENROUTER_PAID_MODEL", "openrouter/z-ai/glm-5.2")
+OPENROUTER_MONTHLY_BUDGET_USD = float(os.environ.get(
+    "OPENROUTER_MONTHLY_BUDGET_USD", spend_guard.DEFAULT_MONTHLY_BUDGET_USD))
+# OpenRouter's own listed rate for OPENROUTER_PAID_MODEL, used only as a
+# fallback if litellm's pricing database doesn't yet know this model (it is
+# new) - see _cost_for_paid_call(). Verify current pricing at
+# openrouter.ai/z-ai/glm-5.2 before trusting this figure for long; the free
+# OpenRouter entry above already documented that OpenRouter's listings move
+# without warning, and a priced model is no different.
+OPENROUTER_PAID_INPUT_PER_M = float(os.environ.get("OPENROUTER_PAID_INPUT_PER_M", "0.4875"))
+OPENROUTER_PAID_OUTPUT_PER_M = float(os.environ.get("OPENROUTER_PAID_OUTPUT_PER_M", "1.56"))
+
+if os.environ.get("OPENROUTER_PAID_ENABLED", "").lower() == "true" and os.environ.get("OPENROUTER_API_KEY"):
+    MODEL_CHAIN.append(_chain_entry(OPENROUTER_PAID_MODEL, paid=True))
+
 # Last-resort escalation via Claude Code headless (`claude -p`), billed against
 # Felix's Pro subscription's 5h/weekly quota rather than a metered API. DISABLED
 # as of 2026-08-26 pending a real answer on whether routing an unattended,
@@ -220,6 +250,95 @@ def _load_system_prompt():
     except ValueError:
         raise RuntimeError(f"{SYSTEM_PROMPT_PATH} is missing {start_marker}/{end_marker} markers")
     return content[start:end].strip()
+
+# 3b. Paid-tier plumbing: cache injection + usage capture for
+# OPENROUTER_PAID_MODEL specifically, never for any other entry in the chain.
+#
+# Open Interpreter's own Llm.run() builds a fixed params dict from its own
+# attributes (api_key, api_base, max_tokens, temperature - see
+# interpreter/core/llm/llm.py) with no passthrough for extra litellm kwargs,
+# so cache_control_injection_points and stream_options can't reach
+# litellm.completion() any other way without patching. Wrapping
+# interpreter.llm.completions (== fixed_litellm_completions) is the smallest
+# change that gets both without touching OI's own source.
+#
+# Scoped by an exact model-string check inside the wrapper, not a global
+# patch - Groq/Gemini/Cerebras/the free OpenRouter entry are already getting
+# their own automatic caching for free (see README) and must never see an
+# unfamiliar kwarg from a change made for a model they aren't.
+#
+# hasattr-guarded: a stubbed or future-Open-Interpreter interpreter.llm
+# without a `completions` attribute degrades to "no caching, no captured
+# usage" rather than crashing worker startup - _attempt() falls back to
+# litellm.token_counter() for the budget ledger either way, so this patch
+# failing to apply costs accuracy, not correctness.
+_last_paid_usage = {"value": None}
+
+if hasattr(interpreter.llm, "completions"):
+    _original_completions = interpreter.llm.completions
+
+    def _completions_with_paid_tier_support(**params):
+        is_paid = params.get("model") == OPENROUTER_PAID_MODEL
+        if is_paid:
+            params.setdefault("cache_control_injection_points",
+                              [{"location": "message", "role": "system"}])
+            params.setdefault("stream_options", {"include_usage": True})
+        for chunk in _original_completions(**params):
+            if is_paid:
+                usage = getattr(chunk, "usage", None)
+                if usage is None and isinstance(chunk, dict):
+                    usage = chunk.get("usage")
+                if usage:
+                    _last_paid_usage["value"] = usage
+            yield chunk
+
+    interpreter.llm.completions = _completions_with_paid_tier_support
+
+
+def _usage_field(usage, name):
+    value = getattr(usage, name, None)
+    if value is None and isinstance(usage, dict):
+        value = usage.get(name)
+    return value or 0
+
+
+def _cost_for_paid_call(model, prompt_tokens, completion_tokens):
+    """USD for one call. Prefers litellm's own pricing database (dynamically
+    maintained, provider-aware) and only falls back to the hand-set env rate
+    if litellm doesn't yet know this model - true for a model this new."""
+    try:
+        cost = litellm.completion_cost(
+            model=model, prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens)
+        if cost:
+            return cost
+    except Exception:
+        pass
+    return ((prompt_tokens / 1e6) * OPENROUTER_PAID_INPUT_PER_M
+            + (completion_tokens / 1e6) * OPENROUTER_PAID_OUTPUT_PER_M)
+
+
+def _record_paid_spend(model, instruction, system_prompt, history, output):
+    """Called once, right after a successful paid-tier attempt. Prefers the
+    usage captured off the real stream; falls back to counting the text that
+    was actually sent/received if that capture ever comes back empty - a
+    budget cap that silently records $0 on a bug is worse than one that
+    slightly over-counts, since the entire point is to fail closed."""
+    usage = _last_paid_usage["value"]
+    _last_paid_usage["value"] = None
+    if usage:
+        prompt_tok = _usage_field(usage, "prompt_tokens")
+        completion_tok = _usage_field(usage, "completion_tokens")
+    else:
+        sent = (system_prompt or "") + "\n" + (instruction or "") + "\n" + \
+            "\n".join(str(turn.get("content", "")) for turn in (history or []))
+        prompt_tok = litellm.token_counter(model=model, text=sent)
+        completion_tok = litellm.token_counter(model=model, text=output or "")
+    usd = _cost_for_paid_call(model, prompt_tok, completion_tok)
+    total = spend_guard.record_spend(usd)
+    print(f"[$] {model}: ~${usd:.4f} this call (~{prompt_tok}+{completion_tok} tok), "
+          f"${total:.2f} of ${OPENROUTER_MONTHLY_BUDGET_USD:.2f} this month")
+
 
 # 4. Open Interpreter Headless Setup
 interpreter.auto_run = True
@@ -557,12 +676,24 @@ def _run_task(task_path, filename):
         model = entry["model"]
         if entry["delay"]:
             time.sleep(entry["delay"])
+        # Live check, not a build-time decision: MODEL_CHAIN is built once at
+        # process start in a Restart=always service that runs for days, so
+        # "has this month's budget run out" has to be asked fresh on every
+        # task, not baked in when the chain was constructed.
+        if entry["paid"]:
+            if not spend_guard.can_spend(spend_guard.load_ledger(), OPENROUTER_MONTHLY_BUDGET_USD):
+                print(f"[!] {model} skipped - monthly budget "
+                      f"(${OPENROUTER_MONTHLY_BUDGET_USD:.2f}) reached")
+                errors.append(f"{model}: skipped, monthly budget reached")
+                continue
         try:
             with _time_limit(ATTEMPT_TIMEOUT_S):
                 output = _attempt(model, instruction, system_prompt, history,
                                   api_base=entry["api_base"], api_key=entry["api_key"],
                                   context_window=entry["context_window"],
                                   max_tokens=entry["max_tokens"])
+            if entry["paid"]:
+                _record_paid_spend(model, instruction, system_prompt, history, output)
             break
         except Exception as e:
             print(f"[!] {model} failed ({e})")

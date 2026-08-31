@@ -30,6 +30,7 @@ AI-OS/02_Systems/Automation/TaskRunner/watches/state.json
 AI-OS/02_Systems/Automation/TaskRunner/prospects/domains.json
 AI-OS/02_Systems/Automation/TaskRunner/prospects/results.json
 AI-OS/02_Systems/Automation/TaskRunner/prospects/reported.json
+AI-OS/02_Systems/Automation/TaskRunner/spend/openrouter_ledger.json
 # Proposals are runtime state: what agents suggested and what Felix decided.
 AI-OS/02_Systems/Automation/TaskRunner/proposals/*.json
 AI-OS/02_Systems/Automation/TaskRunner/proposals/*.jsonl
