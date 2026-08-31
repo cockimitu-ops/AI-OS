@@ -49,7 +49,7 @@ Pricing Teardown (staged for Week 3-4 per `_infra/LAUNCH-ORDER.md`, not yet publ
 Both over Tailscale, both include a rendered `cover.png` — no manual screenshot-export step.
 
 ## Status
-**Blocked on one manual step, not on building.** Every product is finished. Felix has to publish the Notion pages and create the Gumroad listings — roughly 20 minutes per product. Nothing else waits on anything. Covers are SVG and need a manual PNG export (no renderer available in the environment that built them).
+**Blocked on one manual step, not on building.** The Moat Blueprint is LIVE (2026-08-27). The two remaining products are finished — Felix has to publish their Notion pages and create the Gumroad listings, ~20 min each. `cover.png` is already rendered for all three (an earlier note here claimed a manual PNG export was still needed; it is not, the files exist on disk).
 
 ## Next Steps
 1. Publish Micro-SaaS Moat Blueprint first (Notion page + Gumroad listing + PNG cover) — it feeds product 2

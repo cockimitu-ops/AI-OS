@@ -7,9 +7,9 @@ Update the STATUS block when something changes. Keep it under 100 lines.
 -->
 
 ## STATUS
-Phase: built, not launched
-Blocker: Felix must publish Notion page + create Gumroad listing (manual, ~20 min)
-Revenue to date: 0
+Phase: LIVE since 2026-08-27
+Blocker: none — published. (Was "Felix must publish Notion page + Gumroad listing"; done 2026-08-27.)
+Revenue to date: 0 (live, no sale yet)
 
 ## WHAT
 $29 self-serve Notion template. Six-module competitor-research process ending
@@ -40,7 +40,7 @@ gig; gig visitors who bounce on price convert at $29.
 | reddit-launch-posts.md | 3 posts, 3 subs, staggered weekly |
 | funnel-assets.md | X thread + 3 buyer emails + Fiverr cross-sell |
 | launch-checklist.md | Step-by-step launch sequence |
-| cover.svg | Product cover (needs manual PNG export) |
+| cover.svg / cover.png | Product cover — cover.png already rendered, no manual export needed |
 
 ## DECISIONS MADE (don't relitigate without new information)
 - English, not German. Buyer is international indie hackers; matches existing

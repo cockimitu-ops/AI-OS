@@ -1,9 +1,12 @@
 # Changelog
 
 Purpose: Version history of AI OS.
-Last Updated: 2026-08-03
+Last Updated: 2026-08-31
 Status: Active
+Stability: Append-only log
 Related Documents: [[Roadmap]], [[Development_Workflow]]
+
+> **For AI agents (token budget):** this is an append-only log, ~8,000 words — reading it whole blows the 5–10 note context budget on one file. Read only the **last ~40 lines** (newest releases) unless you specifically need old history. Newest entries are at the bottom.
 
 ---
 

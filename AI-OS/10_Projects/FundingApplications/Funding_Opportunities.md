@@ -2,7 +2,7 @@
 
 Purpose: German/Saxony funding and grant programs found in research — the single highest-leverage, most time-sensitive finding from the v2 research pass, independent of which business option gets chosen.
 Last Updated: 2026-08-05
-Status: Active — moved from MoneyMaking into its own project ([[10_Projects/FundingApplications/README|FundingApplications]]); not independently verified by Claude
+Status: CLOSED 2026-08-13 by choice (see [[10_Projects/FundingApplications/README|FundingApplications]]) — this file is retained as reference research only, not an active action list
 Related Documents: [[10_Projects/FundingApplications/README|FundingApplications]], [[10_Projects/MoneyMaking/Candidate_Options|MoneyMaking Candidate Options]]
 
 ---

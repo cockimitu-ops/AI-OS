@@ -1,7 +1,7 @@
 # Knowledge Core
 
 Purpose: A hard-capped (~10,000 characters), self-curating record of what's actually worth remembering about Felix and his situation — a Hermes-style bounded core, not a growing log. Distinct from the vault's project files: this is standing context, always cheap to load.
-Last Updated: 2026-08-26
+Last Updated: 2026-08-31
 Status: Active
 Stability: Dynamic
 Related Documents: [[07_Context/README|07_Context]], [[Knowledge_Promotion]], [[Context_Budget]]
@@ -23,21 +23,20 @@ Capped at ~10,000 characters, hard limit. When something new earns a slot and th
 Direct, efficiency-focused, wants honest critical feedback over reassurance. Token-conscious — prefers lean execution over exhaustive-by-default. Comfortable with technical depth. Casual tone, German/English bilingual, mixes both naturally.
 
 ## The AI OS
-A Notion-synced "second brain" vault, explicitly built for multi-project work and shareable across AI tools, not just Claude. Structural principle: reusable knowledge/capabilities stay central (`02_Systems/`, `03_Capabilities/`); project-specific execution lives in `10_Projects/` (ADR-0005). As of 2026-08-11, `04_Agents/` is populated — 4 scoped roles (Vault Architect, Content Producer, Research Analyst, Business Development), manual/chat-triggered. **The "no automation" line is out of date:** since 2026-08-26 a TaskRunner runs as three systemd services on Felix's Ubuntu server — a headless Open Interpreter worker executing tasks unattended, a Telegram bridge, and a daily rclone backup to Google Drive. That is infrastructure, deliberately outside the `04_Agents/` decision, not a reversal of it. A read-only Notion-backed MCP server lives at `AI-OSmcp/`; its build was verified 2026-08-26, its Notion side has still never been exercised.
+A Notion-synced "second brain" vault, explicitly built for multi-project work and shareable across AI tools, not just Claude. Structural principle: reusable knowledge/capabilities stay central (`02_Systems/`, `03_Capabilities/`); project-specific execution lives in `10_Projects/` (ADR-0005). `04_Agents/` holds 5 scoped roles (Vault Architect, Content Producer, Research Analyst, Business Development, plus routing). **The old "agents are manual/chat-only" line is fully out of date:** as of 2026-08-30 those personas run unattended on systemd timers — routed automatically per task, scheduled, self-proposing a daily plan behind a 20:00 approval gate. The TaskRunner runs ~11 systemd units on Felix's Ubuntu server: the headless Open Interpreter worker, Telegram bridge, daily backup, health check, scheduler, morning brief (07:00), status updates (10/14/18/22), evening review (20:00), the Kleinanzeigen sniper, and the nightly DMARC prospector. A read-only Notion-backed MCP server lives at `AI-OSmcp/`; its Notion side has still never been exercised.
 
 ## Active Projects (10_Projects/)
-- **SocialMediaContent** — Horror archived 2026-08-13 (research showed it doesn't monetize well); AI Video pillar active instead (Glass Crush Loop, Veo 3.1). New higher-CPM story topic planned, not yet chosen.
-- **MoneyMaking** — research project, spawned the three below.
-- **ContentAgency** — productized AI content for German B2B clients, not launched.
-- **QuickTurnaroundGigs** — Fiverr startup-competitor-analysis gig ($30/$80/$180); profile bio, PDF sample, and thumbnail prompt all ready — final step (uploading a generated thumbnail image) in progress as of 2026-08-11.
-- **TemplateSales** — three finished products as of 2026-08-25 (Micro-SaaS Moat Blueprint $29, Pricing Teardown $29, Retention Engineering $39, plus a $45 bundle listing). Not the AI OS itself, despite the earlier plan. Blocked only on Felix publishing Notion pages + Gumroad listings, ~20 min each.
-- **FundingApplications** — **closed 2026-08-13, by choice.** InnoStartBonus/JUGEND GRÜNDET deliberately not pursued. Do not resurface this as a "missed opportunity"; it was a decision.
-- **Personal** — reading list, supplement stack, substance history.
-- **CyberSecurityLearning** — started 2026-08-08, pre-September head start.
-- **GetClean** — started 2026-08-08, reducing cannabis use specifically.
-- **LocalArbitrage** — started 2026-08-13, buying mispriced local goods to resell; car is the moat. Funding stream is €100. Not yet started.
+- **DMARC remediation (leg 2, active)** — the primary revenue push. `TaskRunner/prospects/` holds 3,873 local business domains; a nightly DNS audit ranks them and 659 qualify as leads (no/weak DMARC + real mail flow). 534 have postal addresses. `scripts/outreach.py` renders print-ready German letters (€249 fixed-price fix). Sells via postal mail — the one UWG §7-legal channel. **Blocked only on: Felix filling OUTREACH_SENDER_* in .env, printing a batch, posting it, and answering the calls.**
+- **LocalArbitrage (leg 1, active)** — Kleinanzeigen sniper live since 2026-08-31, polling saved searches every 3 min, alerting via Telegram. €250 allocated. Broken-phone flip sub-loop added. **Blocked on: Felix acting on alerts + Gewerbeanmeldung before buying-to-resell.**
+- **TemplateSales** — 3 products built (Micro-SaaS Moat Blueprint $29 **live since 2026-08-27**; Pricing Teardown $29 and Retention Engineering $39 **still unpublished**, plus a $45 bundle). All launch assets (Gumroad copy, cover.png, emails, Reddit posts) written. **Blocked on: Felix publishing the two remaining Gumroad/Notion listings, ~20 min each.**
+- **QuickTurnaroundGigs** — Fiverr startup-competitor-analysis gig ($30/$80/$180) **live since 2026-08-27**. Omni Shield sample PDF finished. **Blocked on: attaching the sample to the live gig; no order has run yet.**
+- **SocialMediaContent (leg 3, deferred)** — Horror archived 2026-08-13. Planned pivot: German-language security content as lead-gen for leg 2. No topic produced yet.
+- **ContentAgency** — productized AI content for German B2B; no offer defined, not launched.
+- **MoneyMaking** — the research umbrella that spawned the above; not execution.
+- **FundingApplications** — **closed 2026-08-13, by choice.** Do not resurface as a "missed opportunity"; it was a decision.
+- **CyberSecurityLearning / GetClean / Personal** — non-revenue personal projects.
 
 Felix has a car (real competitive advantage for local arbitrage), multiple AI subscriptions, and has declined to pursue grant/free money by choice.
 
 ## Key Open Threads
-Publishing the three TemplateSales products (the only path to first revenue that is already built). Whether running Claude Code headless off the Pro subscription is ToS-acceptable — unresolved, and it currently gates both TaskRunner's escalation tier and the entire AI-Bridge capability. QuickTurnaroundGigs gig not yet posted. AI Video Production pillar status still undecided. No story topic chosen since the Horror archival.
+**The bottleneck is now consistently the same:** every revenue stream is built and automated up to the point where only Felix can act — publishing the last 2 Gumroad listings, posting DMARC letters + answering calls, acting on sniper alerts, doing the Gewerbeanmeldung. The AI side is not the blocker anymore; Felix's time is. The Claude-Code-via-Pro-subscription ToS question is **decided** — a paid OpenRouter tier (GLM 5.2, budget-capped) is now the escalation path, so headless-off-Pro no longer gates anything. AI Video pillar undecided; security-content pivot planned not started.

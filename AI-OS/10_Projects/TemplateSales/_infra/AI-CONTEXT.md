@@ -15,14 +15,16 @@ Keep under 120 lines.
 | Validation Stack (bundle 1+2) | $45 | listing only | no | no | 0 |
 
 Vault sync (2026-08-25): all three products' files copied from `vault-sync.zip`
-into `10_Projects/TemplateSales/` on Felix's home server, real path confirmed
-matches this file's own location. Status otherwise unchanged — project is
-explicitly PAUSED per Felix; this sync did not resume or advance it toward
-launch. Notion pages and Gumroad listings were NOT created (Felix chose to
-keep this local-vault-only for now).
+into `10_Projects/TemplateSales/`, real path confirmed. The 2026-08-25 "PAUSED,
+nothing published" note that used to sit here is superseded: on **2026-08-27 the
+Micro-SaaS Moat Blueprint went live** (see the table above and
+`Micro_SaaS_Moat_Blueprint_Live_2026_08_27.md`). The project is no longer paused.
 
-Blocker on all: Felix must publish Notion pages + create Gumroad listings.
-~20 min per product. Nothing else is waiting on anything.
+Blocker on the two REMAINING products (Pricing Teardown $29, Retention
+Engineering $39): Felix must publish their Notion pages + create Gumroad
+listings, ~20 min each. All launch assets — Gumroad copy, `cover.png` (already
+rendered, not a blocker), lead magnets, buyer emails, Reddit posts — are
+written and waiting. Nothing else is blocked on anything but Felix's time.
 
 ## THE PATTERN (reuse this for product 4+)
 Every product is the same artifact set:

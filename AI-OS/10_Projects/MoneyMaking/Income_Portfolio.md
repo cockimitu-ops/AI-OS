@@ -55,10 +55,11 @@ Highest ceiling of anything here (one client at €500–800/month recurring bea
 
 ---
 
-## Sequence (the part that matters)
-1. **Ship the Fiverr gig.** It's 95% done. Finishing it costs almost nothing and starts the review clock.
-2. **Build ONE template — the AI OS pattern.** Not three. One, shipped, on Gumroad or Payhip.
-3. **Make 3 TikToks/Reels demoing it.** Screen recordings of the template solving a problem. This is the step almost everyone skips, and it's the one that decides whether anything sells.
+## Sequence (SUPERSEDED 2026-08-31 — kept for the record)
+> This original sequence is out of date and is preserved, not deleted, per the vault's "record the reversal" convention. What actually happened: the Fiverr gig went live 2026-08-27; three products were built (not the AI-OS pattern, and three not one); the Moat Blueprint went live 2026-08-27. The current, accurate sequence is the "Sequence revised 2026-08-31" section below — read that one.
+1. ~~**Ship the Fiverr gig.**~~ Done 2026-08-27.
+2. ~~**Build ONE template — the AI OS pattern. Not three.**~~ Reversed: three "Solo-Founder Systems" products were built instead; recorded in [[10_Projects/TemplateSales/README|TemplateSales]].
+3. **Make 3 TikToks/Reels demoing it.** Still not done — remains the highest-leverage unstarted marketing step.
 4. **Only then** add template #2, and repeat.
 
 The failure mode to actively avoid: building five products and marketing none. Given how much of this vault is infrastructure that hasn't shipped yet, that's the realistic risk, not lack of ideas.
@@ -67,7 +68,7 @@ The failure mode to actively avoid: building five products and marketing none. G
 Gumroad (10%), Payhip (5% on free plan), Notion Marketplace (10% + $0.40, best discovery), Etsy (6.5% + $0.20 listing). Common approach: list on Notion Marketplace for discovery, run checkout through Gumroad or Payhip for margin.
 
 ## Status
-Strategy set. Nothing shipped. The next real milestone is a single product live on a single storefront — not another plan.
+Status (2026-08-31): Fiverr gig + Moat Blueprint both LIVE since 2026-08-27. Two TemplateSales products still unpublished. First revenue path is now leg 2 (DMARC outreach) and the two unpublished products — both blocked only on Felix's time, not on more building.
 
 ---
 

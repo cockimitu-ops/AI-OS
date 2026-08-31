@@ -1,7 +1,7 @@
 # Automation
 
 Purpose: Systems that run without a person actively driving each step.
-Last Updated: 2026-08-26
+Last Updated: 2026-08-31
 Status: Active — Task Runner is three live systemd services on the server; MCP Server builds clean, Notion side untested
 Related Documents: [[02_Systems/README|02_Systems]], [[Future_Integration]]
 
@@ -28,7 +28,7 @@ This section used to say "this is retrieval, not automation" and claim the whole
 - **The MCP server is retrieval.** Nothing runs unless a client calls a tool. Inside the boundary.
 - **TaskRunner is automation.** It executes shell commands unattended, on a Telegram message, with `auto_run=True`. That is exactly "actions happening on their own." It is outside the boundary, deliberately.
 
-The standing decision in [[Roadmap]] ("Agents: manual, chat-triggered — no separate infrastructure") is about the four `04_Agents/` personas, and still holds for them. It was never a vault-wide ban on infrastructure, and TaskRunner does not make it false — but the two do have to be read as covering different things, which nothing said until 2026-08-26.
+The old [[Roadmap]] line ("Agents: manual, chat-triggered — no separate infrastructure") described the four `04_Agents/` personas as of mid-August. **It no longer holds:** since 2026-08-30 those personas run scheduled and routed through TaskRunner behind a daily approval gate (see `TaskRunner/README.md`). The decision was superseded by building the infrastructure, deliberately — not contradicted by accident. `04_Agents/README.md` reflects the current state; treat any doc still calling the agents "manual only" as stale.
 
 ## Status
 Two real artifacts (TaskRunner, MCP server) plus one parked capability ([[03_Capabilities/AI-Bridge/README|AI-Bridge]]). n8n-based automation (for QuickTurnaroundGigs fulfillment, or TemplateSales's own product) discussed but not built — `AI-Bridge`'s `docker-compose.yml` already ships an n8n service, unused while that capability is parked.

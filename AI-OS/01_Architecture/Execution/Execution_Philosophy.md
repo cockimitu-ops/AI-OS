@@ -14,8 +14,8 @@ Related Documents: [[01_Architecture/Execution/README|01_Architecture/Execution]
 | Knowledge | What's true | `02_Systems/`, `03_Capabilities/`, `08_Research/` |
 | Context | What to read for a given task | `07_Context/` (Context Engine) |
 | Execution | How a task actually runs | `01_Architecture/Execution/` (this subsystem) |
-| Agents | Who is allowed to run it, and with what scope | `04_Agents/` (not yet built) |
-| Automation | How it runs unattended | `02_Systems/Automation/` (not yet built) |
+| Agents | Who is allowed to run it, and with what scope | `04_Agents/` (built; 5 roles, scheduled since 2026-08-30) |
+| Automation | How it runs unattended | `02_Systems/Automation/` (built; TaskRunner, ~11 systemd units) |
 
 ## Why Separate Them
 Each concern changes at a different rate and belongs to a different kind of decision:
