@@ -287,10 +287,17 @@ def main():
         return
 
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.WARNING,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     for handler in logging.getLogger().handlers:
         handler.addFilter(TransientNetworkFilter())
+    # httpx logs one INFO line per request, and long-polling means a request
+    # every ~10 seconds forever. Worse, that line is the full request URL,
+    # which for the Bot API embeds the bot token - so leaving it at INFO both
+    # drowns the journal and writes a live credential into it. WARNING for the
+    # HTTP layer specifically; the bridge's own errors are unaffected.
+    for noisy in ("httpx", "httpcore", "telegram.request"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
     print("🤖 Telegram Bridge aktiv. Warte auf Nachrichten...")
     app = ApplicationBuilder().token(BOT_TOKEN).build()

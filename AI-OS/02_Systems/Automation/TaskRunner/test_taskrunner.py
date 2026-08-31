@@ -2277,6 +2277,35 @@ class TestStatusUpdate(unittest.TestCase):
         self.assertIn("stuck 90min", msg)
 
 
+class TestBridgeLogging(unittest.TestCase):
+    """Guards the logging config in telegram_bridge.py. Both of these were
+    live regressions on 2026-08-31, introduced by the fix for the traceback
+    noise and caught by reading the journal afterwards."""
+
+    def _source(self):
+        with open(os.path.join(HERE, "telegram_bridge.py"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_http_loggers_are_pinned_below_info(self):
+        """httpx logs one INFO line per request and long-polling makes a
+        request every ~10s forever. That line is the full Bot API URL, which
+        embeds the bot token - so INFO both floods the journal and writes a
+        live credential into it."""
+        src = self._source()
+        self.assertIn("httpx", src)
+        self.assertIn('logging.getLogger(noisy).setLevel(logging.WARNING)', src)
+
+    def test_root_level_is_not_info(self):
+        self.assertIn("level=logging.WARNING", self._source())
+
+    def test_filter_matches_exact_network_error_not_the_subclass(self):
+        """BadRequest subclasses NetworkError and means a malformed message -
+        the one case worth a traceback. isinstance() here would hide it."""
+        src = self._source()
+        self.assertIn("type(exc) is NetworkError", src)
+        self.assertIn("isinstance(exc, BadRequest)", src)
+
+
 class TestSniperStats(unittest.TestCase):
     """Activity counters feeding the status update."""
 
