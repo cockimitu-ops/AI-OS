@@ -12,7 +12,7 @@ Required Notes: [[Reddit_Story_Workflow]], [[AI_Video_Production]]
 Story/video ideation through publishing-checklist completion, for whichever content pillar is active. Currently Reddit_Story_Workflow (secondary, still fully defined) and AI_Video_Production (active, ASMR/oddly-satisfying via Veo). Horror is archived — see [[99_Archive/HorrorProject/README|HorrorProject]].
 
 ## Allowed
-The 14 shared story-production capabilities, plus the 3 AI Video capabilities. All 18 survived the Horror archival unchanged — none were horror-specific in mechanism.
+The 14 shared story-production capabilities, plus the 3 AI Video capabilities. All 17 survived the Horror archival unchanged — none were horror-specific in mechanism.
 
 ## Escalation
 Pricing, packaging, or business decisions are out of scope — hand to [[Business_Development]] via the directive below, not just a note saying it's out of scope. Publishing to a real platform always needs Felix's explicit go-ahead.

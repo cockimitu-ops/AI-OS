@@ -5,8 +5,7 @@ Last Updated: 2026-08-03
 Status: Active — new Sprint 015
 Related Documents: [[03_Capabilities/README|03_Capabilities]], [[99_Archive/HorrorProject/README|HorrorProject (Archived)]]
 Required Notes: [[Story_Ideation]]
-Used By: none currently — Horror_Story_System archived 2026-08-13. Genuinely reusable for any original (non-adapted) content system.
-Used By: [[Story_Validation]]
+Used By: [[Story_Validation]] — its Sprint 015 originality pass calls this. (Horror_Story_System archived 2026-08-13; this capability is otherwise reusable for any original, non-adapted content system.)
 
 ---
 

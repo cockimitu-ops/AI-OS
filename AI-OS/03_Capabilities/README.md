@@ -2,7 +2,7 @@
 
 Purpose: Reusable, named units of work exposed by the systems in `02_Systems/`.
 Last Updated: 2026-08-26
-Status: Active — 18 content capabilities plus one parked infrastructure capability (AI-Bridge)
+Status: Active — 17 content capability specs plus one parked infrastructure capability (AI-Bridge)
 Related Documents: [[Glossary]], [[02_Systems/README|02_Systems]], [[99_Archive/HorrorProject/README|HorrorProject (Archived)]]
 
 ---
@@ -43,4 +43,4 @@ Everything else in this folder is `Kind: Spec` — a Markdown description of a u
 Not a content capability and not a Markdown spec: a real code capability (Node) letting Claude and Gemini call each other, plus an HTTP surface for n8n. **Parked since 2026-08-26** pending the same unresolved Claude-Pro-auth ToS question that gates TaskRunner's escalation tier — see its own README. Listed here because it lives in this folder and was missing from this index entirely until 2026-08-26.
 
 ## Status
-18 content capabilities, all preserved through the Horror archival — none were deleted, since none were horror-specific in mechanism. 3 (Story_Ideation, Story_Validation, Originality_Check) currently have no active consumer, kept because they're genuinely reusable for whatever original-content system gets built next. Their Success Criteria still carry Reddit-specific numeric thresholds, unreconciled — see `Suggestions.md`. No capabilities exist yet for Research, Analytics, Automation, or Architecture systems.
+17 content capability specs, all preserved through the Horror archival — none were deleted, since none were horror-specific in mechanism. 3 (Story_Ideation, Story_Validation, Originality_Check) currently have no active consumer, kept because they're genuinely reusable for whatever original-content system gets built next. Their Success Criteria still carry Reddit-specific numeric thresholds, unreconciled — see `Suggestions.md`. No capabilities exist yet for Research, Analytics, Automation, or Architecture systems.

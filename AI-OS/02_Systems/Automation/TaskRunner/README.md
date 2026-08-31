@@ -37,7 +37,7 @@ Related Documents: [[02_Systems/Automation/README|Automation]], [[Future_Integra
 
 ## How it's wired to the server
 
-Twelve systemd units, all under `/etc/systemd/system/`, `WorkingDirectory` and `ExecStart` pointing into this folder — two continuous services and nine timers:
+Twenty systemd unit files under `/etc/systemd/system/` (two continuous services + nine timer/service pairs), `WorkingDirectory` and `ExecStart` pointing into this folder — two always-on services and nine scheduled jobs:
 
 - `aios-worker.service` — runs `aios_runner.py`, `Restart=always`
 - `aios-telegram.service` — runs `telegram_bridge.py`, `Restart=always`, starts `After=aios-worker.service`

@@ -30,4 +30,4 @@ Does each candidate have a nameable change, conflict, and personal-relevance ang
 Which fear categories and premise types actually produce validated, then successful, stories is an [[Experiment_Tracking]] question over time — there's no data yet to know which categories perform best for this audience.
 
 ## Knowledge Dependencies
-[[Storytelling_Fundamentals]], [[Fear_Of_The_Unknown]].
+[[Storytelling_Fundamentals]]. (Fear_Of_The_Unknown was dropped 2026-08-13 as horror-specific — see the Used By note above; revisit when a new topic is chosen.)

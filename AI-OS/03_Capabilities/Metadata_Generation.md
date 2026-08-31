@@ -4,7 +4,7 @@ Purpose: Capability for producing a story's title, discovery tags, and series/pa
 Last Updated: 2026-08-03
 Status: Active
 Related Documents: [[03_Capabilities/README|03_Capabilities]], [[Reddit_Story_Workflow]]
-Required Notes: [[Reddit_Story_Workflow]]
+Required Notes: [[Reddit_Story_Workflow]], [[Hook_Principles]]
 Related Notes: [[Multi_Platform_Caption_Generation]]
 Used By: [[Reddit_Story_Workflow]], [[Reddit_Story_Production]] — Horror_Story_System/Production archived 2026-08-13, see 99_Archive/HorrorProject/
 

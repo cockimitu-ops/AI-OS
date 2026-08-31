@@ -4,7 +4,7 @@ Purpose: Capability for planning across multiple stories at a channel level, abo
 Last Updated: 2026-08-03
 Status: Active
 Related Documents: [[03_Capabilities/README|03_Capabilities]], [[Reddit_Story_Workflow]]
-Required Notes: [[Reddit_Story_Workflow]]
+Required Notes: [[Reddit_Story_Workflow]], [[Emotional_Engagement]]
 Related Notes: [[Continuous_Improvement_Cycle]]
 Used By: [[Reddit_Story_Workflow]] — Horror_Story_System archived 2026-08-13, see 99_Archive/HorrorProject/
 

@@ -4,7 +4,7 @@ Purpose: Capability for turning a validated idea into a structured multi-part ou
 Last Updated: 2026-08-03
 Status: Active
 Related Documents: [[03_Capabilities/README|03_Capabilities]], [[Reddit_Story_Workflow]]
-Required Notes: [[Narrative_Structure]], [[Reddit_Story_Workflow]]
+Required Notes: [[Narrative_Structure]], [[Pacing]], [[Reddit_Story_Workflow]]
 Used By: [[Reddit_Story_Workflow]], [[Reddit_Story_Production]] — Horror_Story_System/Production archived 2026-08-13, see 99_Archive/HorrorProject/
 
 ---
