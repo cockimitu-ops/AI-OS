@@ -94,6 +94,25 @@ DEFAULT_LIMIT = 5
 
 MARKERS = ("TITLE:", "SUMMARY:", "CONCEPTS:", "ACTIONS:", "FLASHCARDS:")
 
+# German markers are accepted as equals, not as a nicety. Caught live on the
+# first paid-tier run: handed German lecture notes, GLM-5.2 sensibly answered
+# in German and labelled the sections TITEL/ZUSAMMENFASSUNG/KONZEPTE/
+# AKTIONEN/LERNKARTEN. The content was excellent and the whole answer was
+# discarded over the label language. A stronger model reasoning "the source
+# is German, so the answer should be" is exactly the behaviour worth having,
+# so the parser bends instead of the model.
+MARKER_ALIASES = {
+    "TITEL:": "TITLE:", "ÜBERSCHRIFT:": "TITLE:",
+    "ZUSAMMENFASSUNG:": "SUMMARY:", "KURZFASSUNG:": "SUMMARY:",
+    "KONZEPTE:": "CONCEPTS:", "BEGRIFFE:": "CONCEPTS:",
+    "KERNKONZEPTE:": "CONCEPTS:",
+    "AKTIONEN:": "ACTIONS:", "AUFGABEN:": "ACTIONS:", "TODO:": "ACTIONS:",
+    "TO-DOS:": "ACTIONS:", "OFFENE PUNKTE:": "ACTIONS:",
+    "LERNKARTEN:": "FLASHCARDS:", "KARTEIKARTEN:": "FLASHCARDS:",
+}
+# Frage/Antwort as well as Q/A, for the same reason.
+CARD_PREFIXES = ("Q:", "F:")
+
 # Folder furniture, not study notes. Every vault directory carries a README by
 # convention, so without this the very first run of every new inbox spends a
 # model call turning the instructions into flashcards - caught on the first
@@ -257,6 +276,11 @@ def build_task(name, text):
                 + f"{MAX_NOTE_CHARS} characters by study_agent.py ...]")
     return (
         agents.directive(AGENT)
+        # Quality decides the outcome here: a definition that is subtly wrong
+        # goes onto a flashcard and gets memorised. Asked for explicitly as
+        # well as set in the agent's own header, so a direct CLI run does not
+        # silently drop to the free chain if that header is ever edited.
+        + agents.model_directive("paid")
         + f"Process this study note. Its filename is: {name}\n\n"
         "Return only the TITLE/SUMMARY/CONCEPTS/ACTIONS/FLASHCARDS block "
         "your role defines. Add nothing that is not in the note below.\n\n"
@@ -321,11 +345,14 @@ def parse_sections(output):
     found, current = {}, None
     for line in text.splitlines():
         stripped = line.strip()
-        marker = next((m for m in MARKERS
-                       if stripped.upper().startswith(m)), None)
-        if marker:
-            current = marker.rstrip(":")
-            found[current] = stripped[len(marker):].strip()
+        upper = stripped.upper()
+        marker = next((m for m in MARKERS if upper.startswith(m)), None)
+        alias = None if marker else next(
+            (a for a in MARKER_ALIASES if upper.startswith(a)), None)
+        if marker or alias:
+            hit = marker or alias
+            current = (marker or MARKER_ALIASES[alias]).rstrip(":")
+            found[current] = stripped[len(hit):].strip()
             continue
         if current:
             found[current] = (found[current] + "\n" + line).strip() \
@@ -447,7 +474,8 @@ def process_note(path, text, digest, dest, timeout_s=DEFAULT_TIMEOUT_S,
     concepts = sum(1 for ln in sections.get("CONCEPTS", "").splitlines()
                    if ln.strip().startswith("-")
                    and "none in these notes" not in ln)
-    cards = sections.get("FLASHCARDS", "").upper().count("Q:")
+    cards = sum(sections.get("FLASHCARDS", "").upper().count(p)
+                for p in CARD_PREFIXES)
     try:
         append_study_log(name, note_path, concepts, cards)
     except OSError as e:

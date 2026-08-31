@@ -598,6 +598,53 @@ class TestAgentSelection(TaskRunnerTestCase):
             finally:
                 self.runner.VOICE_PROFILE_PATH = original
 
+    def test_paid_preference_moves_the_paid_model_to_the_front(self):
+        """Default order is every free tier first, paid only as a last
+        resort - right for the ~25 routine tasks a day, wrong for the handful
+        where the answer's quality decides the outcome."""
+        free_a = self.runner._chain_entry("free/a")
+        free_b = self.runner._chain_entry("free/b")
+        paid = self.runner._chain_entry("paid/x", paid=True)
+        original = self.runner.MODEL_CHAIN
+        self.runner.MODEL_CHAIN = [free_a, free_b, paid]
+        try:
+            self.assertEqual([e["model"] for e in self.runner.chain_for("paid")],
+                             ["paid/x", "free/a", "free/b"])
+            # ... and the free chain is still behind it, so a failed paid
+            # attempt or an exhausted budget still gets the task done.
+            self.assertEqual(len(self.runner.chain_for("paid")), 3)
+            for pref in (None, "free"):
+                self.assertEqual([e["model"] for e in self.runner.chain_for(pref)],
+                                 ["free/a", "free/b", "paid/x"])
+        finally:
+            self.runner.MODEL_CHAIN = original
+
+    def test_paid_preference_is_a_no_op_when_no_paid_tier_is_configured(self):
+        """OPENROUTER_PAID_ENABLED is off by default, so most installs have
+        no paid entry at all - asking for one must not empty the chain."""
+        original = self.runner.MODEL_CHAIN
+        self.runner.MODEL_CHAIN = [self.runner._chain_entry("free/a")]
+        try:
+            self.assertEqual([e["model"] for e in self.runner.chain_for("paid")],
+                             ["free/a"])
+        finally:
+            self.runner.MODEL_CHAIN = original
+
+    def test_explicit_model_directive_beats_the_agents_own_default(self):
+        """Same precedence the agent directive has over routing: something a
+        caller wrote down deliberately is never overridden by a default."""
+        pref, rest = self.agents.parse_model_directive(
+            "<!-- model: free -->\nDo the thing.")
+        self.assertEqual(pref, "free")
+        self.assertEqual(rest, "Do the thing.")
+
+    def test_agent_model_preference_is_read_from_the_agent_file(self):
+        """Which roles are worth paying for lives in the vault, not in the
+        runner - Felix changes it by editing a note."""
+        self.assertEqual(self.agents.model_preference("Study_Teacher"), "paid")
+        self.assertIsNone(self.agents.model_preference("Research_Analyst"))
+        self.assertIsNone(self.agents.model_preference(None))
+
     def test_worker_runs_the_task_with_the_agent_prompt(self):
         """End to end through _run_task: the directive is parsed off, and the
         prompt handed to the model is the scoped one."""
@@ -1721,11 +1768,38 @@ class TestSchedules(unittest.TestCase):
         text = ("<!-- agent: Business_Development -->\n"
                 "<!-- schedule: daily 07:30 -->\n"
                 "Check what is still unpublished.")
-        cadence, agent, propose, instruction = self.rs.parse_schedule_file(text)
+        cadence, agent, propose, _model, instruction = self.rs.parse_schedule_file(text)
         self.assertFalse(propose)
         self.assertEqual(cadence, "daily 07:30")
         self.assertEqual(agent, "Business_Development")
         self.assertEqual(instruction, "Check what is still unpublished.")
+
+    def test_schedule_model_directive_is_reemitted_not_passed_through(self):
+        """The exact bug <!-- propose --> hit live on 2026-08-30: a directive
+        left in the body sits after the "(Scheduled task from ...)" line, and
+        the worker anchors its parsers to the start - so the schedule would
+        silently run on the free chain it asked not to use."""
+        text = ("<!-- agent: Vault_Architect -->\n<!-- schedule: daily 18:45 -->\n"
+                "<!-- model: paid -->\nPlan improvements.")
+        cadence, agent, propose, model, instruction = self.rs.parse_schedule_file(text)
+        self.assertEqual(model, "paid")
+        self.assertNotIn("model:", instruction)
+        self.assertEqual((cadence, agent, propose), ("daily 18:45", "Vault_Architect", False))
+
+    def test_enqueued_schedule_puts_model_directly_after_agent(self):
+        original = self.rs.INBOX
+        with tempfile.TemporaryDirectory() as tmp:
+            self.rs.INBOX = tmp
+            try:
+                name = self.rs.enqueue("Vault_Architect", "Do it.", "s.md",
+                                       propose=True, model="paid")
+                body = open(os.path.join(tmp, name), encoding="utf-8").read()
+            finally:
+                self.rs.INBOX = original
+        head = body.splitlines()
+        self.assertEqual(head[0], "<!-- agent: Vault_Architect -->")
+        self.assertEqual(head[1], "<!-- model: paid -->")
+        self.assertEqual(head[2], "<!-- notify -->")
 
     def test_directives_never_leak_into_the_instruction(self):
         """The enqueue step re-emits the agent directive itself; a copy left
@@ -1733,7 +1807,7 @@ class TestSchedules(unittest.TestCase):
         text = ("<!-- agent: Research_Analyst -->\n"
                 "<!-- schedule: hourly -->\n"
                 "Do the thing.")
-        _, _, _, instruction = self.rs.parse_schedule_file(text)
+        _, _, _, _, instruction = self.rs.parse_schedule_file(text)
         self.assertNotIn("<!--", instruction)
 
     def test_daily_resolves_to_todays_occurrence_once_it_has_passed(self):
@@ -3941,6 +4015,33 @@ A: Gegen Rainbow Tables."""
         self.assertEqual(len([l for l in parsed["CONCEPTS"].splitlines()
                               if l.strip().startswith("-")]), 2)
 
+    def test_german_section_markers_are_accepted(self):
+        """Caught live on the first paid-tier run: handed German lecture
+        notes, GLM-5.2 sensibly answered in German and labelled the sections
+        TITEL/ZUSAMMENFASSUNG/KONZEPTE/AKTIONEN/LERNKARTEN. The content was
+        excellent and the entire answer was discarded over the label
+        language."""
+        german = """TITEL: VL3 Firewalls
+ZUSAMMENFASSUNG:
+Diese Notiz behandelt grundlegende Firewall-Konzepte und den Unterschied
+zwischen stateful und stateless.
+KONZEPTE:
+- Stateless Firewall — prueft nur einzelne Pakete.
+- DMZ — liegt zwischen extern und intern.
+AKTIONEN:
+- keine
+LERNKARTEN:
+F: Was ist eine DMZ?
+A: Ein Netz zwischen extern und intern.
+F: Ist NAT eine Firewall?
+A: Nein."""
+        parsed = self.sa.parse_sections(german)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["TITLE"], "VL3 Firewalls")
+        self.assertIn("Stateless", parsed["CONCEPTS"])
+        self.assertEqual(
+            sum(parsed["FLASHCARDS"].upper().count(p) for p in self.sa.CARD_PREFIXES), 2)
+
     def test_a_wrapping_code_fence_does_not_break_parsing(self):
         self.assertIsNotNone(self.sa.parse_sections("```\n" + self.GOOD + "\n```"))
 
@@ -4008,6 +4109,18 @@ A: Gegen Rainbow Tables."""
         self.assertLess(text.index(self.sa.LOG_HEADING), text.index("- 20"))
 
     # --- the task handed to the worker -----------------------------------
+
+    def test_study_tasks_ask_for_the_paid_tier(self):
+        """A definition that is subtly wrong goes onto a flashcard and gets
+        memorised - this is the one place in the study pipeline where model
+        quality changes the outcome."""
+        import importlib.util as _ilu
+        spec = _ilu.spec_from_file_location("agents_m", os.path.join(HERE, "agents.py"))
+        ag = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(ag)
+        task = self.sa.build_task("a.md", "AES modes")
+        _, rest = ag.parse_directive(task)
+        self.assertEqual(ag.parse_model_directive(rest)[0], "paid")
 
     def test_task_selects_the_study_agent_and_carries_no_thread(self):
         """No thread id means no conversation memory and - by the gate in

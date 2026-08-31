@@ -241,6 +241,33 @@ if os.environ.get("OPENROUTER_PAID_ENABLED", "").lower() == "true" and os.enviro
 # a clear-cut violation either way - genuinely unresolved, not dismissed.
 # Do not flip this back to True without Felix explicitly deciding to accept
 # that risk, or switching this to a real ANTHROPIC_API_KEY instead.
+def chain_for(preference):
+    """MODEL_CHAIN, ordered for this task. -> list of entries.
+
+    Default order is every free tier first and the paid model only as a last
+    resort, which is right for the ~25 tasks a day that are routine. It is
+    wrong for the handful where the answer's quality decides the outcome: a
+    study note carries a definition Felix will memorise from a flashcard, and
+    the daily system plan has twice now asserted drift in files it had not
+    actually read. For those, "paid" puts the paid model first.
+
+    Reordering rather than replacing matters: if the paid attempt fails or
+    the month's budget is spent, the free chain is still behind it and the
+    task still gets done. The budget check in the loop below is what makes
+    this safe to turn on - an exhausted budget silently degrades to free
+    rather than failing the task.
+
+    Cost, measured rather than guessed (2026-08-31): the system prompt is
+    3,150-4,800 tokens and goes out on every call, Open Interpreter makes
+    2-4 calls per task, so a paid task is roughly $0.005-0.01. Every task
+    paid would be ~$6/month, exactly the cap with no headroom; a handful of
+    quality tasks a day is ~$1.50."""
+    if preference != "paid":
+        return MODEL_CHAIN
+    paid = [e for e in MODEL_CHAIN if e["paid"]]
+    return paid + [e for e in MODEL_CHAIN if not e["paid"]] if paid else MODEL_CHAIN
+
+
 CLAUDE_ESCALATION_ENABLED = False
 CLAUDE_MODEL = "sonnet"
 CLAUDE_TIMEOUT_S = 170  # stay under dispatch_task.py/telegram_bridge.py's 180s wait
@@ -839,6 +866,7 @@ def _run_task(task_path, filename):
 
     thread_id, raw = memory.parse_directive(raw)
     agent_name, raw = agents.parse_directive(raw)
+    model_pref, raw = agents.parse_model_directive(raw)
     handoff_depth, raw = agents.parse_handoff_depth(raw)
     notify, raw = _parse_notify(raw)
     propose, instruction = _parse_propose(raw)
@@ -854,6 +882,12 @@ def _run_task(task_path, filename):
     if not agent_name and instruction and ROUTING_ENABLED:
         agent_name = _route(instruction)
         routed = bool(agent_name)
+
+    # Explicit directive wins over the agent's own default, the same
+    # precedence the agent directive itself has over routing: something a
+    # caller wrote down deliberately is never overridden by a default.
+    if model_pref is None:
+        model_pref = agents.model_preference(agent_name)
 
     system_prompt = _system_prompt_for(agent_name, thread_id)
     history = memory.as_messages(thread_id) if thread_id else None
@@ -872,11 +906,13 @@ def _run_task(task_path, filename):
         bits.append(f"handoff depth: {handoff_depth}")
     if history:
         bits.append(f"memory: {len(history) // 2} turn(s)")
+    if model_pref == "paid":
+        bits.append("model: paid-first")
     label = f" ({', '.join(bits)})" if bits else ""
     print(f"[*] Processing task: {filename}{label}", flush=True)
     output = None
     errors = []
-    for entry in MODEL_CHAIN:
+    for entry in chain_for(model_pref):
         model = entry["model"]
         if entry["delay"]:
             time.sleep(entry["delay"])

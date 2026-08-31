@@ -44,6 +44,7 @@ TZ = ZoneInfo("Europe/Berlin")
 
 SCHEDULE_RE = re.compile(r"^\s*<!--\s*schedule:\s*(.+?)\s*-->\s*\n?", re.I | re.M)
 PROPOSE_RE = re.compile(r"^\s*<!--\s*propose\s*-->\s*\n?", re.I | re.M)
+MODEL_RE = re.compile(r"^\s*<!--\s*model:\s*(paid|free|quality)\s*-->\s*\n?", re.I | re.M)
 
 DAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
@@ -71,8 +72,18 @@ def parse_schedule_file(text):
         propose = True
         text = text[:m.start()] + text[m.end():]
 
+    # Stripped and re-emitted like every other directive, for the same
+    # load-bearing reason: the worker anchors its parsers to the start of the
+    # task, so a <!-- model: --> left sitting in the body is invisible to it
+    # and the schedule silently runs on the free chain it asked not to use.
+    model = None
+    m = MODEL_RE.search(text or "")
+    if m:
+        model = m.group(1).strip().lower()
+        text = text[:m.start()] + text[m.end():]
+
     agent, instruction = agents.parse_directive(text)
-    return cadence, agent, propose, instruction
+    return cadence, agent, propose, model, instruction
 
 
 def next_due_after(cadence, reference):
@@ -156,7 +167,7 @@ def save_state(state):
     os.replace(tmp, STATE_PATH)
 
 
-def enqueue(agent, instruction, source_name, propose=False):
+def enqueue(agent, instruction, source_name, propose=False, model=None):
     """Same atomic .part-then-rename the other producers use - the worker
     globs tasks/inbox/*.md every two seconds and would happily pick up a
     half-written file."""
@@ -180,6 +191,9 @@ def enqueue(agent, instruction, source_name, propose=False):
     # Directive order matters: the worker reads agent, then notify, then
     # propose, each anchored to the start of what remains.
     header = agents.directive(agent) if agent else ""
+    # Immediately after the agent directive: that is the order aios_runner
+    # parses them in, each anchored to the start of what is left.
+    header += agents.model_directive(model)
     header += "<!-- notify -->\n"
     if propose:
         header += "<!-- propose -->\n"
@@ -205,7 +219,8 @@ def run(now=None):
     for name in files:
         try:
             with open(os.path.join(SCHEDULES_DIR, name), encoding="utf-8") as f:
-                cadence, agent, propose, instruction = parse_schedule_file(f.read())
+                (cadence, agent, propose, model,
+                 instruction) = parse_schedule_file(f.read())
         except OSError as e:
             results.append((name, f"unreadable: {e}"))
             continue
@@ -223,7 +238,8 @@ def run(now=None):
             results.append((name, "not due"))
             continue
 
-        queued = enqueue(agent, instruction, name, propose=propose)
+        queued = enqueue(agent, instruction, name, propose=propose,
+                         model=model)
         state[name] = now.isoformat()
         results.append((name, f"queued as {queued}"))
 

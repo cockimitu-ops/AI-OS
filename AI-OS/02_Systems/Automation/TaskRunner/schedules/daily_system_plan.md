@@ -1,6 +1,7 @@
 <!-- agent: Vault_Architect -->
 <!-- schedule: daily 18:45 -->
 <!-- propose -->
+<!-- model: paid -->
 Plan improvements to AI-OS itself. Judge every candidate by whether it helps Felix earn money sooner — an improvement that only makes the vault tidier is not worth a slot tonight.
 
 Look for the specific failure this vault actually has: status drift, where a file claims something that stopped being true. Check 00_System/ against reality before trusting any file's description of another.

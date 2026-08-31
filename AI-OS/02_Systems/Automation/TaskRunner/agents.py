@@ -55,6 +55,16 @@ HANDOFF_RE = re.compile(
 # models under load already don't reliably follow prompt instructions (see
 # System_Prompt.md's own guardrail section), so the cap is structural, not
 # "the prompt tells it to stop."
+# Which model tier a task wants. Same HTML-comment convention as the agent
+# directive: invisible in rendered Markdown, trivially parsed, harmless if a
+# human opens the task file. "paid" asks for the budget-capped paid model
+# FIRST rather than only after every free tier has failed - for the handful
+# of tasks where the answer's quality decides the outcome. It is a
+# preference, never a guarantee: if the month's budget is spent, the runner
+# falls straight through to the free chain.
+MODEL_DIRECTIVE_RE = re.compile(
+    r"^\s*<!--\s*model:\s*(paid|free|quality)\s*-->\s*\n?", re.I)
+
 MAX_HANDOFF_DEPTH = 3
 HANDOFF_DEPTH_RE = re.compile(r"^\s*<!--\s*handoff_depth:\s*(\d+)\s*-->\s*\n?", re.I)
 
@@ -159,6 +169,42 @@ def parse_handoff_depth(raw_task):
     if not m:
         return 0, raw_task or ""
     return int(m.group(1)), raw_task[m.end():]
+
+
+def parse_model_directive(raw_task):
+    """-> ("paid"|"free"|None, remaining_task_text)."""
+    m = MODEL_DIRECTIVE_RE.match(raw_task or "")
+    if not m:
+        return None, raw_task
+    pref = m.group(1).lower()
+    return ("paid" if pref in ("paid", "quality") else "free"), raw_task[m.end():]
+
+
+def model_directive(pref):
+    return f"<!-- model: {pref} -->\n" if pref else ""
+
+
+def model_preference(canonical):
+    """An agent's own default tier, read from its file's `Preferred Model:`
+    header.
+
+    In the vault rather than hardcoded here, for the same reason the prompt
+    blocks are: which roles are worth paying for is a judgement Felix should
+    be able to change by editing a note, without touching the runner."""
+    if not canonical:
+        return None
+    path = os.path.join(AGENTS_DIR, f"{canonical}.md")
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if line.lower().startswith("preferred model:"):
+                    value = line.split(":", 1)[1].strip().lower()
+                    return "paid" if value in ("paid", "quality") else "free"
+                if line.startswith("---"):
+                    break  # past the header block
+    except OSError:
+        pass
+    return None
 
 
 def handoff_depth_marker(depth):
