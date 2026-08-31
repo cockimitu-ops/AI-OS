@@ -682,3 +682,24 @@ Two more secrets got printed into this session's transcript while removing the f
 
 ### Process
 Found and closed a real test coverage gap while adding this: the end-to-end check that `_attempt()` actually applies `api_base`/`api_key` to `interpreter.llm` (not just that `MODEL_CHAIN`'s data is correct) was deleted along with the FreeLLMAPI test class it lived in, and nothing replaced it. Added `TestAttemptAppliesItsFieldsToTheRealLlmObject`, covering all four fields including the "resets to None, doesn't leak between calls" property. 65 → 69 tests.
+
+## [0.48.0-alpha] - 2026-08-31
+### Added — revenue infrastructure
+- **DMARC-remediation prospecting pipeline.** `scripts/dmarc_prospector.py` discovers local business domains from OpenStreetMap (Overpass API, open data), audits their published SPF/DMARC/MX via `dig` (strictly passive — public DNS only, never a scan), ranks them as leads, and captures postal addresses + phones. 3,873 domains, 659 qualified leads, 534 mailable. Nightly systemd timer; top-3 new leads in the morning brief. RFC 7489 org-domain fallback, chain/platform/public-body filtering, per-day-shuffled audit order, checkpointed writes.
+- **`scripts/outreach.py`** — renders qualified addressed leads into print-ready DIN-5008 German business letters (€249 fixed-price DMARC/SPF/DKIM fix). Zero per-letter LLM calls (template, not generation — cannot hallucinate a claim about a real company). Postal mail = the one UWG §7-legal channel. Letter copy refined via a paid GLM-5.2 critique (concrete threat, confident CTA; rejected a suggested false-liability claim). `contacted.json` prevents double-contact.
+- **`scripts/kleinanzeigen_sniper.py`** — polls saved Kleinanzeigen searches every 3 min (waking hours), Telegram-alerts genuinely new listings. Serves LocalArbitrage + a broken-phone flip loop. Distance/price/keyword filters verified against live data.
+- **`scripts/money_board.py`** — deterministic single source of truth for what earns next and who must act. Replaced two nightly LLM planners that re-derived a barely-changing list at token cost. Leads the morning brief.
+- **`scripts/status_update.py`** — 10/14/18/22 Telegram status (sniper heartbeat, new leads, health-if-broken). Sends even when quiet, because silence and a dead timer look identical otherwise.
+- **Optional paid model tier** (OpenRouter/GLM-5.2) after every free tier, `scripts/spend_guard.py` monthly cap, off by default. Resolved the long-open Claude-via-Pro ToS question — the API path replaces it.
+
+### Fixed — 3-agent audit of all 283 md files
+- **Knowledge_Core.md** (always-loaded standing context) was stale on every active project: agents now scheduled not manual, TaskRunner ~20 units not 3, Moat Blueprint + Fiverr gig LIVE not "blocked on publishing", ToS question decided. Rewritten.
+- **System_Prompt.md** told the worker "don't roleplay a persona" immediately before the routing code appends one. Rewritten to match how it actually runs.
+- Three framework docs (Execution_Philosophy, Future_Integration) claimed built systems "not yet built".
+- Four capabilities (Metadata_Generation, Series_Planning, Story_Drafting, Story_Ideation) had Knowledge Dependencies not mirrored in Required Notes → silent context loss. Fixed. Story_Ideation's Fear_Of_The_Unknown self-contradiction resolved.
+- Originality_Check had two contradictory Used By lines. Project status self-contradictions fixed (QuickTurnaroundGigs, TemplateSales AI-CONTEXT, Moat AI-CONTEXT, cover.png false-blocker, Funding status, Income_Portfolio superseded sequence).
+- Capability count drift (18→17), systemd unit count, and public-body leads (landkreis-zwickau.de) filtered.
+- Changelog got a read-the-tail token-budget guard; this file's own Last-Updated header fixed.
+
+### Tests
+- 171 → 277. New coverage: sniper (23), prospector (31), paid tier + spend guard (23), status update + stats (13), outreach (9), money board (7), public-body filter (1). Two real bugs caught by their own tests before shipping: spend_guard's stale-default-argument path bug, and a fully-protected domain scoring nonzero.

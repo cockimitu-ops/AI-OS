@@ -1,9 +1,9 @@
 # AI OS
 
 ## Status
-Version: 0.47.0-alpha
-Current Sprint: Sprint 029 — Full Audit and Fix Pass
-Last Updated: 2026-08-26
+Version: 0.48.0-alpha
+Current Sprint: Sprint 030 — Revenue Infrastructure & Audit Fixes
+Last Updated: 2026-08-31
 
 ## Vision
 AI OS is a system for organizing, operating, and scaling AI-assisted work — content production, research, automation, and analysis — as a single coherent repository rather than a collection of disconnected notes and tools. It is built to be read by both humans and machines: a person navigating in Obsidian and an AI agent or MCP server reading the same Markdown files should arrive at the same understanding.

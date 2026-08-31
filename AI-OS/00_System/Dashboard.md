@@ -1,7 +1,7 @@
 # Dashboard
 
 Purpose: The operating-system home screen — what's happening right now, and how to act on it, without navigating the rest of the vault.
-Last Updated: 2026-08-26
+Last Updated: 2026-08-31
 Status: Active
 Stability: Dynamic
 Related Documents: [[Home]], [[Roadmap]], [[Changelog]], [[00_System/Commands/Command_Index|Command Index]]
@@ -15,8 +15,11 @@ Full list: [[00_System/Commands/Command_Index|Command Index]]. Most common:
 - "Review my analytics" → [[Review_Process]]
 - "Create captions" → [[Multi_Platform_Caption_Generation]]
 
+## Money Board
+`scripts/money_board.py` is the single source of truth for what earns next and who must act — read it (or the morning brief) before asking "what should I do to make money". Every item is built and waiting on a human step, sorted by euros.
+
 ## Current Work
-Infrastructure, not content. Three systemd services run continuously on the server ([[02_Systems/Automation/TaskRunner/README|TaskRunner]]); [[10_Projects/TemplateSales/README|TemplateSales]]'s first product (Micro-SaaS Moat Blueprint) is live as of 2026-08-27, waiting on its first sale — the other two are built and staged for later. No story is in production — a new topic still hasn't been chosen since the Horror archival.
+**Revenue infrastructure is the active push.** The server ([[02_Systems/Automation/TaskRunner/README|TaskRunner]], ~20 systemd unit files) now runs two automated income pipelines: a **DMARC-remediation prospector** (3.8k local business domains audited nightly, 659 qualified leads, 534 with postal addresses, print-ready outreach letters via `scripts/outreach.py`) and a **Kleinanzeigen arbitrage sniper** (live alerts to Telegram). Both are built up to the point where only Felix can act — that boundary is tracked deterministically in `scripts/money_board.py` and surfaced every morning. TemplateSales' Moat Blueprint is live (2026-08-27); the Fiverr gig is live. No story is in production.
 
 ## Recent Stories
 The Doorbell Camera — archived 2026-08-13, never published. See [[99_Archive/HorrorProject/README|HorrorProject]]. (This section and Current Work contradicted each other until 2026-08-26: Current Work still called it "Ready to Publish".)
@@ -42,7 +45,7 @@ None tracked yet. See [[Experiment_Tracking]].
 [[00_System/Commands/Command_Index|Full Command Index]] · [[00_System/Commands/Quick_Start|Quick Start]]
 
 ## Current Version
-`0.47.0-alpha`
+`0.48.0-alpha`
 
 ## Repository Health
 Structural audit: [[00_System/Repository_Audit|Repository Audit]] (Sprint 013). Strategic review: [[00_System/Design_Review|Design Review]] (Sprint 014) — confirms the actual business is original horror content, not Reddit adaptation; 17 ranked recommendations, 5 critical.

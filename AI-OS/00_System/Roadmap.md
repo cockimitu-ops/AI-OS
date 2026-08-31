@@ -1,7 +1,7 @@
 # Roadmap
 
 Purpose: Sprint-level plan for building out AI OS.
-Last Updated: 2026-08-26
+Last Updated: 2026-08-31
 Status: Active
 Stability: Dynamic
 Related Documents: [[Dashboard]], [[Changelog]], [[Development_Workflow]]
@@ -51,6 +51,18 @@ Also parked the same week: the Claude escalation tier and the whole [[03_Capabil
 
 ## Sprint 029 — Full Audit and Fix Pass (complete)
 Read the whole repository — vault, TaskRunner, AI-Bridge, MCP server, server-stack, systemd units — and fixed what was actually broken. Eleven code/config defects (worker crash-loop, three write/read races, a backup-pruning path that could leave zero backups anywhere, a silent failure notifier that couldn't run, a TTY corrupting MCP stdio framing, an HTTP bridge binding to `0.0.0.0` with optional auth) and eleven status-drift defects. Full list in [[Changelog]] under 0.35.0-alpha. MCP server build verified for the first time since it was written in Sprint 025.
+
+## Sprint 030 — Revenue Infrastructure & Audit Fixes (complete)
+Built the first two automated income pipelines and used a 3-agent audit to fix the status drift they would otherwise have added to.
+
+**Revenue infrastructure:**
+- **DMARC-remediation prospecting** (leg 2 of [[Income_Portfolio]]). `TaskRunner/prospects/`: 3,873 local business domains discovered from OpenStreetMap (Crimmitschau/Zwickau, Chemnitz, Gera), audited nightly for spoofable email (no/weak DMARC+SPF) via public DNS. 659 qualified leads, 534 with postal addresses. `scripts/outreach.py` renders print-ready German letters (€249 fixed-price fix) — postal mail being the one UWG §7-legal channel. Letter copy sharpened via a paid GLM-5.2 critique.
+- **Kleinanzeigen arbitrage sniper** (leg 1, [[LocalArbitrage]]). Polls saved searches every 3 min, Telegram alerts. Broken-phone flip sub-loop.
+- **Money board** (`scripts/money_board.py`): deterministic single source of truth for what earns next and who must act — replaced two nightly LLM planners that burned tokens re-deriving a list that barely changes.
+- **Paid model tier**: optional OpenRouter/GLM-5.2 escalation after every free tier, budget-capped (`scripts/spend_guard.py`), off by default. Resolved the long-open "Claude-via-Pro ToS" question — API path replaces it.
+- **Status updates** at 10/14/18/22 over Telegram; the morning brief now leads with the money board.
+
+**Audit fixes:** a 3-subagent pass over all 283 md files found and fixed status drift in the always-loaded [[Knowledge_Core]], three framework docs claiming built systems "don't exist", the worker's own System_Prompt contradicting the routing code, four capability dependency-declaration violations causing silent context loss, and ~a dozen project-status self-contradictions. Full list in [[Changelog]] under 0.48.0-alpha.
 
 ## Backlog — for review, not acted on
 - Numeric threshold reconciliation (Reddit-specific numbers still in the shared capabilities' Success Criteria)
