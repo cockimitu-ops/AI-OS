@@ -582,12 +582,21 @@ class TestAgentSelection(TaskRunnerTestCase):
                         scoped.index("VOICE-PROFILE-MARKER"))
 
     def test_missing_voice_profile_is_not_an_error(self):
-        """He has imported nothing yet, and that must stay the normal case -
-        a missing profile means the default register, never a failed task."""
-        path = self.runner.VOICE_PROFILE_PATH
-        self.assertFalse(os.path.exists(path), "test would be meaningless")
-        self.assertEqual(self.runner._system_prompt_for(None, "tg_1"),
-                         self.runner._system_prompt_for(None))
+        """No profile means the default register, never a failed task.
+
+        Points the path at a directory that certainly has no profile in it
+        rather than asserting the real one is absent: the first version of
+        this test did the latter and started failing the moment Felix
+        actually imported his chats - a test that breaks when the feature
+        gets used is testing the machine, not the code."""
+        with tempfile.TemporaryDirectory() as tmp:
+            original = self.runner.VOICE_PROFILE_PATH
+            self.runner.VOICE_PROFILE_PATH = os.path.join(tmp, "nope.md")
+            try:
+                self.assertEqual(self.runner._system_prompt_for(None, "tg_1"),
+                                 self.runner._system_prompt_for(None))
+            finally:
+                self.runner.VOICE_PROFILE_PATH = original
 
     def test_worker_runs_the_task_with_the_agent_prompt(self):
         """End to end through _run_task: the directive is parsed off, and the
@@ -3742,6 +3751,64 @@ class TestVoiceImport(unittest.TestCase):
         self.assertEqual(stats["messages"], len(mine))
         self.assertGreater(stats["lowercase_start_pct"], 50)
         self.assertGreater(stats["burst_pct"], 0)
+
+    def test_braille_and_block_art_are_not_counted_as_emoji(self):
+        """Found auditing the first real import: Unicode category "So"
+        includes Braille patterns and block-drawing characters, so the
+        ASCII-art images people paste into WhatsApp put ⣿, ░ and █ into the
+        top-ten "emoji he reuses" - and the profile then instructed the model
+        to use them."""
+        self.assertEqual(self.vi._emoji("⣿⣿░█⠈"), [])
+        self.assertEqual(self.vi._emoji("😂 ❤ ☠"), ["😂", "❤", "☠"])
+
+    def test_skin_tone_modifiers_are_not_their_own_emoji(self):
+        self.assertEqual(self.vi._emoji("👍🏽"), ["👍"])
+
+    def test_every_media_placeholder_variant_is_dropped(self):
+        """The fixed list missed real ones: "<Video note omitted>" and
+        "<View once voice message omitted>" both survived the first real
+        import and were counted as things Felix wrote."""
+        for placeholder in ("<Video note omitted>",
+                            "<View once voice message omitted>",
+                            "<Medien ausgeschlossen>", "<Media omitted>",
+                            "<Sticker weggelassen>"):
+            self.assertTrue(self.vi._is_noise(placeholder), placeholder)
+        # ... without swallowing his own sentences that mention the words
+        self.assertFalse(self.vi._is_noise(
+            "mathe wird denke taktisch weggelassen"))
+        self.assertFalse(self.vi._is_noise("Was hast du gelöscht"))
+
+    def test_exemplars_span_the_length_distribution(self):
+        """The first version scored every candidate by distance from the
+        median and returned 50 examples all exactly 3 words long - an
+        accurate picture of the median and a useless one of the writer."""
+        mine = ([{"text": "jo", "answering": True, "chat": 0}] * 30
+                + [{"text": "ja passt schon", "answering": True, "chat": 0}] * 30
+                + [{"text": " ".join(f"wort{i}" for i in range(12)),
+                    "answering": False, "chat": 0}] * 30)
+        for i, m in enumerate(mine):  # dedupe would otherwise collapse these
+            m["text"] = f"{m['text']} {i}"
+        stats = self.vi.compute_stats(mine)
+        ex = self.vi.select_exemplars(mine, stats, set(), n=30)
+        lengths = {len(e["text"].split()) for e in ex}
+        self.assertGreater(len(lengths), 2, f"all one length: {lengths}")
+
+    def test_exemplars_are_balanced_across_chats(self):
+        """One chat was 92% of the first real corpus. Examples drawn purely
+        by frequency would all come from that one relationship."""
+        mine = ([{"text": f"nachricht {i}", "answering": True, "chat": 0}
+                 for i in range(400)]
+                + [{"text": f"andere nachricht {i}", "answering": True, "chat": 1}
+                   for i in range(20)])
+        stats = self.vi.compute_stats(mine)
+        ex = self.vi.select_exemplars(mine, stats, set(), n=20)
+        from_second = [e for e in ex if e["text"].startswith("andere")]
+        self.assertTrue(from_second, "the smaller chat contributed nothing")
+
+    def test_profile_says_so_when_one_chat_dominates(self):
+        stats = {"chat_shares": [92.5, 5.0, 2.5]}
+        self.assertIn("92.5%", self.vi._balance_note(stats))
+        self.assertEqual(self.vi._balance_note({"chat_shares": [40.0, 35.0]}), "")
 
     def test_empty_import_degrades_instead_of_crashing(self):
         self.assertEqual(self.vi.compute_stats([]), {"messages": 0})

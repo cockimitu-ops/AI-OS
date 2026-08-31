@@ -72,6 +72,16 @@ NOISE = (
     "verpasster videoanruf", "missed video call",
 )
 
+# The fixed NOISE list above turned out not to be enough on real exports:
+# "<Video note omitted>" and "<View once voice message omitted>" both got
+# through and were counted as things Felix wrote. WhatsApp names too many
+# media types (in two languages, with per-type wording) to enumerate, so any
+# message that is entirely one angle-bracketed "... omitted/weggelassen"
+# placeholder is treated as WhatsApp's text rather than his.
+PLACEHOLDER_RE = re.compile(
+    r"^<[^>]{0,80}(omitted|weggelassen|ausgeschlossen|attached|anhang)[^>]{0,20}>$",
+    re.IGNORECASE)
+
 URL_RE = re.compile(r"https?://\S+|www\.\S+")
 EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.]+\b")
 PHONE_RE = re.compile(r"(?<!\w)(?:\+\d[\d\s/()-]{6,}\d|\d{5,})(?!\w)")
@@ -98,6 +108,8 @@ def _strip_marks(line):
 def _is_noise(text):
     low = text.strip().lower()
     if not low:
+        return True
+    if PLACEHOLDER_RE.match(text.strip()):
         return True
     return any(low.startswith(n) or low == n.rstrip(".") for n in NOISE)
 
@@ -155,7 +167,7 @@ def extract_mine(chats, me):
     else's, which is what separates 'he replies in one line' from 'he sends
     four in a row', without keeping what was said to him."""
     mine, others = [], set()
-    for msgs in chats:
+    for chat_index, msgs in enumerate(chats):
         prev_was_other = True
         for m in msgs:
             if m["sender"] != me:
@@ -165,7 +177,11 @@ def extract_mine(chats, me):
             if _is_noise(m["text"]):
                 prev_was_other = False
                 continue
-            mine.append({"text": m["text"], "answering": prev_was_other})
+            # Which chat a message came from, as an index and never a name:
+            # it is needed to keep one relationship from supplying every
+            # example, and the partner's name is not needed for that.
+            mine.append({"text": m["text"], "answering": prev_was_other,
+                         "chat": chat_index})
             prev_was_other = False
     return mine, others
 
@@ -174,10 +190,29 @@ def _words(text):
     return [w for w in re.split(r"\s+", text.strip()) if w]
 
 
+# Unicode category "So" was the first cut and it was wrong on real data:
+# Braille patterns (U+2800-28FF) and block-drawing characters are all "So",
+# so the ASCII-art images people paste into WhatsApp put ⣿, ░, █ into the
+# "emoji he reuses" list - four of the top ten - and the profile then told
+# the model to use them. Allowlisted ranges instead of a category.
+EMOJI_RANGES = (
+    (0x1F300, 0x1FAFF),  # the emoji blocks proper
+    (0x1F000, 0x1F0FF),  # mahjong / playing cards
+    (0x2600, 0x27BF),    # misc symbols + dingbats: ☠ ♥ ❤ ✂ ✅
+    (0x2B00, 0x2BFF),    # ⬆ ⭐
+)
+# Skin-tone modifiers and the variation selector are parts of an emoji, not
+# emoji - counting them separately would rank "🏽" as its own favourite.
+EMOJI_PARTS = set(range(0x1F3FB, 0x1F400)) | {0xFE0F, 0x200D}
+
+
 def _emoji(text):
     out = []
     for ch in text:
-        if unicodedata.category(ch) == "So" or ord(ch) > 0x1F000:
+        o = ord(ch)
+        if o in EMOJI_PARTS:
+            continue
+        if any(lo <= o <= hi for lo, hi in EMOJI_RANGES):
             out.append(ch)
     return out
 
@@ -255,6 +290,15 @@ def compute_stats(mine):
         "reply_words_median": (
             sorted(len(_words(m["text"])) for m in answering)[len(answering) // 2]
             if answering else 0),
+        # The share each chat contributed. On the first real import one chat
+        # was 92% of 55,820 messages, which makes a "how Felix writes"
+        # profile really a "how Felix writes to one person" profile - the
+        # >=2-chats rule does not catch that, so the number is stated
+        # outright rather than left for someone to notice.
+        "chat_shares": sorted(
+            (_pct(c, total)
+             for c in Counter(m.get("chat", 0) for m in mine).values()),
+            reverse=True),
         "top_openers": [w for w, _ in first_words.most_common(12)],
         "top_words": [w for w, c in all_words.most_common(40) if len(w) > 2][:20],
     }
@@ -281,32 +325,81 @@ def redact(text, names):
     return text
 
 
+# Buckets, not one target length. Scoring every candidate by distance from
+# the median produced 50 examples that were all exactly 3 words long - a
+# perfectly accurate picture of the median and a useless one of the writer,
+# in a corpus where 27% of messages are a single word and 10% run past ten.
+LENGTH_BUCKETS = ((1, 1), (2, 2), (3, 3), (4, 5), (6, 7),
+                  (8, 10), (11, 15), (16, 25), (26, 60))
+
+
 def select_exemplars(mine, stats, names, n=50):
     """Real messages beat any description of them - but they have to be
-    representative, not the funniest ones. Scored toward the measured length
-    distribution so the examples cannot quietly teach a different length
-    than the stats above them state."""
-    target = stats.get("words_median", 5)
-    scored = []
+    representative, and 'representative' is a distribution, not an average.
+
+    Examples are drawn per length bucket in proportion to how often he
+    actually writes messages of that length, and round-robin across chats
+    inside each bucket so one relationship cannot supply all of them."""
+    buckets = {b: [] for b in LENGTH_BUCKETS}
+    counts = {b: 0 for b in LENGTH_BUCKETS}
     for m in mine:
-        clean = redact(m["text"], names).strip()
-        if not clean or clean.count("[") > 2:
-            continue  # mostly redaction left - teaches nothing
-        wc = len(_words(clean))
-        if wc > 60:
+        wc = len(_words(m["text"]))
+        for b in LENGTH_BUCKETS:
+            if b[0] <= wc <= b[1]:
+                counts[b] += 1
+                clean = redact(m["text"], names).strip()
+                if clean and clean.count("[") <= 2:
+                    buckets[b].append(
+                        {"text": clean, "answering": m["answering"],
+                         "chat": m.get("chat", 0)})
+                break
+    total = sum(counts.values()) or 1
+    out, seen = [], set()
+    for b in LENGTH_BUCKETS:
+        want = round(n * counts[b] / total)
+        if counts[b] and not want:
+            want = 1  # a length he really uses should not vanish to rounding
+        pool = buckets[b]
+        if not pool or not want:
             continue
-        scored.append((abs(wc - target), -wc, clean, m["answering"]))
-    scored.sort(key=lambda s: (s[0], s[1]))
-    seen, out = set(), []
-    for _, _, clean, answering in scored:
-        key = clean.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append({"text": clean, "answering": answering})
-        if len(out) >= n:
-            break
-    return out
+        by_chat = {}
+        for item in pool:
+            by_chat.setdefault(item["chat"], []).append(item)
+        order = sorted(by_chat)
+        picked, i = 0, 0
+        while picked < want and any(by_chat[c] for c in order):
+            chat = order[i % len(order)]
+            i += 1
+            if not by_chat[chat]:
+                continue
+            item = by_chat[chat].pop(len(by_chat[chat]) // 2)  # mid, not the
+            key = item["text"].lower()                          # first/newest
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"text": item["text"], "answering": item["answering"]})
+            picked += 1
+    return out[:n]
+
+
+def _balance_note(stats):
+    """Says out loud when the corpus is really one relationship.
+
+    On the first real import, one chat was 92% of 55,820 messages. Nothing
+    about that is wrong as data - it is genuinely where most of his writing
+    went - but a profile silently built from it would carry one relationship's
+    register (its endearments, its running jokes) into every conversation as
+    though it were how he talks generally."""
+    shares = stats.get("chat_shares") or []
+    if not shares or shares[0] < 60:
+        return ""
+    return (
+        f"> Heads-up: {shares[0]}% of these messages come from a single chat, "
+        "so this is closer to how he writes to one person than how he writes "
+        "in general. The examples below are balanced across chats to soften "
+        "that, but the measured numbers above are not. Importing more chats "
+        "of comparable size is what actually fixes it.\n"
+    )
 
 
 def render_profile(stats, exemplars):
@@ -366,6 +459,7 @@ def render_profile(stats, exemplars):
         f"- **Opens with**: {', '.join(stats['top_openers'][:10])}",
         f"- **Reaches for**: {', '.join(stats['top_words'][:15])}",
         "",
+        _balance_note(stats),
         "## Real messages of his",
         "Imitate the register, never the content — these are old messages, "
         "not facts about now. `[name]`, `[nummer]`, `[link]` are redactions.",
