@@ -703,3 +703,18 @@ Found and closed a real test coverage gap while adding this: the end-to-end chec
 
 ### Tests
 - 171 → 277. New coverage: sniper (23), prospector (31), paid tier + spend guard (23), status update + stats (13), outreach (9), money board (7), public-body filter (1). Two real bugs caught by their own tests before shipping: spend_guard's stale-default-argument path bug, and a fully-protected domain scoring nonzero.
+
+## [0.9.3] — 2026-08-31
+### Added
+- **Study & knowledge ingestion agent.** `scripts/study_agent.py` + `04_Agents/Study_Teacher.md` turn raw lecture notes into revisable vault notes: summary, core concepts with definitions, action items, and flashcards. Reads `10_Projects/CyberSecurityLearning/Inbox/`, writes into that project via `vault_write.py`, records every ingestion in its `Study_Log.md`. Nightly `aios-study.timer` at 21:30, or on demand.
+- The model's only job is text-in/text-out. Discovery, dedupe, destination, file naming, headers and logging are deterministic — a misfiled study note is found months later, when it is needed. Same split `dmarc_prospector.py` and `tech_scout.py` use.
+- Routed through the existing task queue rather than a second litellm path, so MODEL_CHAIN's provider fallback and `spend_guard.py`'s ledger still apply. No new agent-routing or model logic.
+- Study_Teacher's hard rule: never add a fact the source note does not contain. Verified live on real German lecture notes — it wrote "Perfect Forward Secrecy — not defined in these notes" rather than supplying a definition from its own knowledge. For security coursework a subtly wrong definition is worse than a missing one, because a flashcard gets memorised.
+- Dedupe is by content hash, not mtime: a git sync or an editor rewriting on save bumps mtime without changing a word, and would otherwise file a duplicate note every night. Source notes are never moved, rewritten or deleted.
+
+### Fixed
+- `vault_write.py` cut the `Purpose:` header mid-word at 160 characters — the first generated study note ended "...erklaeren AES-Blockchiffren un", which reads as a corrupted file. Now cuts at a sentence or word boundary, and callers that already know the note's purpose can pass it instead of having it re-derived from body formatting.
+- `study_agent.py`'s first dry run tried to turn the inbox's own README into flashcards; folder furniture is now skipped.
+
+### Tests
+- 363 → 387. Study agent (22): discovery and dedupe, the five-section parse contract, refusal of tool-transcript answers, append-only study log including the row-gluing bug `flip_log.py` hit, and that a bad destination fails before any model call. `vault_write` Purpose handling (3).

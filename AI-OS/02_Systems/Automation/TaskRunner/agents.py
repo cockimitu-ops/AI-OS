@@ -34,6 +34,7 @@ ALIASES = {
     "Content_Producer": ["content", "producer", "story", "cp"],
     "Research_Analyst": ["research", "analyst", "ra", "gig", "gigs"],
     "Business_Development": ["business", "bizdev", "biz", "bd", "sales"],
+    "Study_Teacher": ["study", "teacher", "lernen", "uni", "lecture", "st"],
 }
 
 # Written into a task file's first line so the worker knows which agent to load.

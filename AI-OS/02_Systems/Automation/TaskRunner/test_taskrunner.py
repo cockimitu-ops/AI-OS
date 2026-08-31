@@ -3842,3 +3842,227 @@ class TestVoiceImport(unittest.TestCase):
             self.assertIn("Voice Profile", profile)
             self.assertNotIn("hast du das schon gemacht", profile)
             self.assertNotIn("Lena", profile)
+
+
+class TestStudyAgent(unittest.TestCase):
+    """Study note ingestion (added 2026-08-31). The model's only job here is
+    turning one note's raw text into structured text - discovery, dedupe,
+    destination, headers and logging are all deterministic and tested
+    without a model. Nothing in this class makes a real model call; the
+    end-to-end path was verified live against the worker separately."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "study_agent", os.path.join(HERE, "scripts", "study_agent.py"))
+        cls.sa = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.sa)
+
+    GOOD = """TITLE: Kryptografie Grundlagen
+SUMMARY: Die Notizen vergleichen symmetrische und asymmetrische Verfahren
+und behandeln AES-Betriebsmodi sowie Hashing.
+CONCEPTS:
+- AES — Blockchiffre mit 128-Bit-Bloecken.
+- Perfect Forward Secrecy — not defined in these notes.
+ACTIONS:
+- Folien 30-45 nacharbeiten.
+FLASHCARDS:
+Q: Warum ist ECB unsicher?
+A: Gleiche Bloecke ergeben gleichen Ciphertext.
+Q: Wogegen hilft ein Salt?
+A: Gegen Rainbow Tables."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.inbox = os.path.join(self.tmp.name, "Inbox")
+        os.makedirs(self.inbox)
+
+    def _note(self, name, text):
+        with open(os.path.join(self.inbox, name), "w", encoding="utf-8") as f:
+            f.write(text)
+
+    # --- discovery -------------------------------------------------------
+
+    def test_readme_and_folder_furniture_are_not_study_notes(self):
+        """Every vault folder carries a README by convention. The first dry
+        run of the real inbox tried to turn its own instructions into
+        flashcards - a wasted model call on every new inbox."""
+        self._note("README.md", "how this folder works")
+        self._note("_draft.md", "not ready")
+        self._note("real_note.md", "VL2 Krypto, AES modes")
+        found = [os.path.basename(p) for p, _, _ in
+                 self.sa.discover(self.inbox, {})]
+        self.assertEqual(found, ["real_note.md"])
+
+    def test_unchanged_notes_are_skipped_by_content_not_mtime(self):
+        """A git sync or an editor rewriting on save bumps mtime without
+        changing a word; on mtime this would re-run the model and file a
+        duplicate note every night."""
+        self._note("a.md", "AES modes")
+        first = self.sa.discover(self.inbox, {})
+        self.assertEqual(len(first), 1)
+        state = {"a.md": {"digest": first[0][2]}}
+        os.utime(os.path.join(self.inbox, "a.md"), (0, 0))
+        self.assertEqual(self.sa.discover(self.inbox, state), [])
+
+    def test_an_edited_note_is_processed_again(self):
+        self._note("a.md", "AES modes")
+        digest = self.sa.discover(self.inbox, {})[0][2]
+        self._note("a.md", "AES modes and CBC needs an IV")
+        self.assertEqual(len(self.sa.discover(self.inbox, {"a.md": {"digest": digest}})), 1)
+
+    def test_force_reprocesses_an_unchanged_note(self):
+        self._note("a.md", "AES modes")
+        digest = self.sa.discover(self.inbox, {})[0][2]
+        state = {"a.md": {"digest": digest}}
+        self.assertEqual(len(self.sa.discover(self.inbox, state, force={"a.md"})), 1)
+
+    def test_empty_and_unreadable_notes_do_not_break_the_batch(self):
+        self._note("empty.md", "   \n\n")
+        self._note("fine.md", "AES modes")
+        found = [os.path.basename(p) for p, _, _ in self.sa.discover(self.inbox, {})]
+        self.assertEqual(found, ["fine.md"])
+
+    def test_missing_inbox_returns_nothing_instead_of_raising(self):
+        self.assertEqual(self.sa.discover("/nonexistent/inbox", {}), [])
+
+    # --- parsing the model's answer --------------------------------------
+
+    def test_parses_the_five_section_contract(self):
+        parsed = self.sa.parse_sections(self.GOOD)
+        self.assertEqual(parsed["TITLE"], "Kryptografie Grundlagen")
+        self.assertIn("AES", parsed["CONCEPTS"])
+        self.assertEqual(parsed["FLASHCARDS"].upper().count("Q:"), 2)
+
+    def test_multi_line_sections_keep_all_their_lines(self):
+        parsed = self.sa.parse_sections(self.GOOD)
+        self.assertIn("Betriebsmodi", parsed["SUMMARY"])
+        self.assertEqual(len([l for l in parsed["CONCEPTS"].splitlines()
+                              if l.strip().startswith("-")]), 2)
+
+    def test_a_wrapping_code_fence_does_not_break_parsing(self):
+        self.assertIsNotNone(self.sa.parse_sections("```\n" + self.GOOD + "\n```"))
+
+    def test_answers_without_a_real_summary_are_refused(self):
+        """The documented failure of this model chain is returning a tool
+        transcript instead of prose (see aios_runner.py's synthesis fix).
+        That must never become a study note."""
+        for junk in ("", "ERROR: model failed", "UNUSABLE: this is a shopping list",
+                     "SUMMARY: ok", "I ran ls and found some files."):
+            self.assertIsNone(self.sa.parse_sections(junk), junk)
+
+    def test_missing_optional_sections_still_produce_a_note(self):
+        parsed = self.sa.parse_sections(
+            "TITLE: T\nSUMMARY: " + "x" * 40 + "\nCONCEPTS:\n- none in these notes")
+        body = self.sa.build_body(parsed, "a.md")
+        self.assertIn("## Action Items", body)
+        self.assertIn("## Flashcards", body)
+
+    def test_body_credits_the_source_note_as_the_authority(self):
+        body = self.sa.build_body(self.sa.parse_sections(self.GOOD), "vl02.md")
+        self.assertIn("vl02.md", body)
+        self.assertIn("source note remains the authority", body)
+
+    # --- the study log ---------------------------------------------------
+
+    def test_study_log_is_created_with_a_real_vault_header(self):
+        path = os.path.join(self.tmp.name, "Study_Log.md")
+        self.sa.append_study_log("a.md", os.path.join(self.sa.VAULT, "x", "N.md"),
+                                 3, 4, when="2026-08-31 10:00", path=path)
+        text = open(path, encoding="utf-8").read()
+        for field in ("Purpose:", "Last Updated:", "Status:", "Related Documents:"):
+            self.assertIn(field, text)
+
+    def test_study_log_appends_and_never_rewrites(self):
+        path = os.path.join(self.tmp.name, "Study_Log.md")
+        for n in ("a.md", "b.md", "c.md"):
+            self.sa.append_study_log(n, os.path.join(self.sa.VAULT, "x", "N.md"),
+                                     1, 1, when="2026-08-31 10:00", path=path)
+        text = open(path, encoding="utf-8").read()
+        for n in ("a.md", "b.md", "c.md"):
+            self.assertIn(n, text)
+        self.assertEqual(text.count("# Study Log"), 1)
+
+    def test_study_log_rows_never_glue_onto_the_previous_paragraph(self):
+        """The exact bug flip_log.py hit writing into its own table: a row
+        ending up welded to the prose above it with no separation."""
+        path = os.path.join(self.tmp.name, "Study_Log.md")
+        self.sa.append_study_log("a.md", os.path.join(self.sa.VAULT, "x", "N.md"),
+                                 1, 1, when="2026-08-31 10:00", path=path)
+        self.sa.append_study_log("b.md", os.path.join(self.sa.VAULT, "x", "N.md"),
+                                 1, 1, when="2026-08-31 10:01", path=path)
+        lines = open(path, encoding="utf-8").read().splitlines()
+        rows = [i for i, l in enumerate(lines) if l.startswith("- 2026-")]
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(lines[i].startswith("- ") for i in rows))
+
+    def test_study_log_recreates_a_heading_someone_deleted(self):
+        path = os.path.join(self.tmp.name, "Study_Log.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("# Study Log\n\nSome prose with no heading below it.\n")
+        self.sa.append_study_log("a.md", os.path.join(self.sa.VAULT, "x", "N.md"),
+                                 1, 1, path=path)
+        text = open(path, encoding="utf-8").read()
+        self.assertIn(self.sa.LOG_HEADING, text)
+        self.assertLess(text.index(self.sa.LOG_HEADING), text.index("- 20"))
+
+    # --- the task handed to the worker -----------------------------------
+
+    def test_task_selects_the_study_agent_and_carries_no_thread(self):
+        """No thread id means no conversation memory and - by the gate in
+        aios_runner - no voice profile. Coursework is not the place for
+        Felix's WhatsApp register."""
+        task = self.sa.build_task("a.md", "AES modes")
+        self.assertTrue(task.startswith("<!-- agent: Study_Teacher -->"))
+        self.assertNotIn("<!-- thread:", task)
+
+    def test_long_notes_are_truncated_visibly_not_silently(self):
+        task = self.sa.build_task("a.md", "wort " * 20000)
+        self.assertIn("note truncated at", task)
+        self.assertLess(len(task), self.sa.MAX_NOTE_CHARS + 2000)
+
+    def test_a_bad_destination_fails_before_any_model_call(self):
+        """A wrong folder must cost nothing - not surface after the worker
+        has already spent a minute on the note."""
+        rc = self.sa.run(source=self.inbox, dest="00_System")
+        self.assertEqual(rc, 1)
+
+    def test_dry_run_touches_nothing(self):
+        self._note("a.md", "AES modes")
+        state_before = os.path.exists(self.sa.STATE_PATH)
+        rc = self.sa.run(source=self.inbox, dest="08_Research", dry_run=True)
+        self.assertEqual(rc, 0)
+        self.assertEqual(os.path.exists(self.sa.STATE_PATH), state_before)
+
+    def test_git_pull_on_a_non_repo_is_a_no_op_not_a_failure(self):
+        self.assertFalse(self.sa.git_pull(self.inbox))
+
+
+class TestVaultWritePurpose(unittest.TestCase):
+    """The Purpose: header line (extended 2026-08-31)."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "vault_write_p", os.path.join(HERE, "vault_write.py"))
+        cls.vw = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.vw)
+
+    def test_long_purpose_is_cut_at_a_word_not_mid_word(self):
+        """The first real study note produced a Purpose: ending
+        "...AES-Blockchiffren un", which reads as a corrupted file."""
+        text = "Diese Notizen erklaeren " + "Blockchiffren und Betriebsmodi " * 12
+        out = self.vw._shorten(text)
+        self.assertLessEqual(len(out), 170)
+        self.assertFalse(out.rstrip(".").endswith("un"))
+        self.assertTrue(out.endswith("...") or out.endswith("."))
+
+    def test_short_purpose_is_left_exactly_alone(self):
+        self.assertEqual(self.vw._shorten("Kurz und fertig."), "Kurz und fertig.")
+
+    def test_explicit_purpose_beats_deriving_one_from_the_body(self):
+        _, content = self.vw.write_note(
+            "08_Research", "T", "## Heading\n\nSome body prose here.",
+            purpose="An explicit one-line purpose.", dry_run=True)
+        self.assertIn("Purpose: An explicit one-line purpose.", content)

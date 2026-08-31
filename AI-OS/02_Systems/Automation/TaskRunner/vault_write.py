@@ -137,11 +137,28 @@ def _first_sentence_for_purpose(body):
             continue  # a heading line, not prose
         if line.startswith(("-", "*", ">")):
             continue  # a list/quote marker line, not a standalone sentence
-        return line[:160]
+        return _shorten(line)
     return "Generated note."
 
 
-def write_note(folder, title, body, status="Active", related=None, dry_run=False):
+def _shorten(text, limit=160):
+    """Cut at a word boundary, not mid-word. The first generated study note
+    produced a Purpose: line ending "...erklaeren AES-Blockchiffren un",
+    which reads as a corrupted file rather than a summary."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    # Prefer ending on a real sentence if one finishes early enough.
+    for end in (". ", "! ", "? "):
+        cut = text.rfind(end, 0, limit + 1)
+        if cut > limit // 2:
+            return text[:cut + 1].strip()
+    cut = text.rfind(" ", 0, limit)
+    return (text[:cut] if cut > 0 else text[:limit]).rstrip(" ,;:-") + "..."
+
+
+def write_note(folder, title, body, status="Active", related=None,
+               dry_run=False, purpose=None):
     body = _clean(body)
     if not body:
         raise ValueError("body is empty after stripping execution markers")
@@ -160,7 +177,10 @@ def write_note(folder, title, body, status="Active", related=None, dry_run=False
         path = os.path.join(target_dir, name)
 
     rel_links = related or ["[[" + folder + "/README|" + folder + "]]"]
-    purpose = _first_sentence_for_purpose(body)
+    # An explicit purpose beats deriving one from the body: a caller that
+    # already knows what the note is about (study_agent.py has the model's
+    # own one-line summary) should not have it re-guessed from formatting.
+    purpose = _shorten(purpose) if purpose else _first_sentence_for_purpose(body)
     content = (
         f"# {title.strip()}\n\n"
         f"Purpose: {purpose}\n"
