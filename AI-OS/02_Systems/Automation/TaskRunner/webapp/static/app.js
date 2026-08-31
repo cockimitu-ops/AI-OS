@@ -27,16 +27,39 @@ function bootstrapTokenFromUrl() {
   }
 }
 
+// crypto.randomUUID() exists only in a secure context - HTTPS or localhost.
+// This app is served over plain HTTP on the tailnet (Tailscale HTTPS certs
+// are not enabled on Felix's account yet), so on his phone the function is
+// simply undefined and every call threw "crypto.randomUUID is not a
+// function" - which took the whole chat down, since getThreadId() runs
+// before any message can be sent. crypto.getRandomValues IS available in an
+// insecure context, so it does the work; Math.random is the last resort.
+// This is an id for one person's own chat threads, not a security token.
+function newId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    const b = new Uint8Array(16);
+    crypto.getRandomValues(b);
+    b[6] = (b[6] & 0x0f) | 0x40;   // version 4
+    b[8] = (b[8] & 0x3f) | 0x80;   // variant
+    const hex = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  return `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function getThreadId() {
   let id = localStorage.getItem(THREAD_KEY);
   if (!id) {
-    id = crypto.randomUUID();
+    id = newId();
     localStorage.setItem(THREAD_KEY, id);
   }
   return id;
 }
 function newThreadId() {
-  const id = crypto.randomUUID();
+  const id = newId();
   localStorage.setItem(THREAD_KEY, id);
   return id;
 }
