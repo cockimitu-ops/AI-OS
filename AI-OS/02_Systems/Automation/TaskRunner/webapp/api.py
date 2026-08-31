@@ -48,7 +48,11 @@ MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 # similar plain data onto the server. Anything executable or web-servable
 # would be a genuinely different feature with genuinely different questions
 # to answer first.
-ALLOWED_UPLOAD_EXT = (".txt", ".zip", ".csv", ".json", ".md")
+ALLOWED_UPLOAD_EXT = (".txt", ".zip", ".csv", ".json", ".md",
+                      # Photos: needed both for sending a design reference and
+                      # for the photo-to-notes path (Felix does not type notes
+                      # on his phone, he photographs slides and boards).
+                      ".jpg", ".jpeg", ".png", ".heic", ".webp", ".pdf")
 UNSAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._ ()\u00c0-\u024f-]")
 
 
