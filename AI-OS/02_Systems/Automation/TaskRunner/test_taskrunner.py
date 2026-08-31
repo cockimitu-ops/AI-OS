@@ -2599,5 +2599,111 @@ class TestSpendGuard(unittest.TestCase):
             self.assertIn("6.00", line)
 
 
+class TestOutreach(unittest.TestCase):
+    """DMARC outreach letter generation (added 2026-08-31). The step that
+    turns hundreds of leads into money without a human writing 500 letters -
+    so the tests guard the two things that make it safe to run unattended:
+    no false security claims, and no accidental double-contact."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "outreach", os.path.join(HERE, "scripts", "outreach.py"))
+        cls.o = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.o)
+
+    def _sender(self):
+        return {"name": "F H", "street": "Str 1", "city": "08451 Crimmitschau",
+                "email": "f@example.com", "phone": "0170 1"}
+
+    def _entry(self, domain="x.de", address=True):
+        e = {"domain": domain, "name": "Bäckerei X"}
+        if address:
+            e["address"] = {"street": "Hauptstr 3", "postcode": "08451", "city": "Crimmitschau"}
+        return e
+
+    def test_finding_text_matches_the_actual_dmarc_state(self):
+        self.assertIn("kein DMARC-Eintrag",
+                      self.o.finding_sentence({"dmarc": None, "spf": None}))
+        self.assertIn("p=none",
+                      self.o.finding_sentence({"dmarc": "none", "spf": "-all"}))
+        self.assertIn("p=quarantine",
+                      self.o.finding_sentence({"dmarc": "quarantine", "spf": "-all"}))
+
+    def test_letter_never_claims_a_system_was_accessed(self):
+        """The legal line: this is a public DNS lookup, not a scan. The letter
+        must say so and must never imply otherwise, or it stops being
+        prospecting and becomes something an angry recipient can complain
+        about."""
+        letter = self.o.render_letter(
+            self._entry(), {"dmarc": None, "spf": None, "provider": "IONOS"},
+            self._sender(), "31.08.2026")
+        self.assertIn("kein Zugriff", letter)
+        self.assertIn("öffentlich", letter)
+        for banned in ("gescannt", "getestet", "Zugriff auf Ihr",
+                       "Sicherheitslücke in Ihrem System", "gehackt"):
+            self.assertNotIn(banned, letter)
+
+    def test_letter_contains_the_real_address_and_price(self):
+        letter = self.o.render_letter(
+            self._entry(), {"dmarc": None, "spf": None, "provider": "unknown"},
+            self._sender(), "31.08.2026")
+        self.assertIn("Hauptstr 3", letter)
+        self.assertIn("08451", letter)
+        self.assertIn("249", letter)
+        self.assertIn("Bäckerei X", letter)
+
+    def test_provider_line_only_appears_when_known(self):
+        known = self.o.render_letter(self._entry(),
+            {"dmarc": None, "spf": None, "provider": "Microsoft 365"},
+            self._sender(), "d")
+        self.assertIn("Microsoft 365", known)
+        unknown = self.o.render_letter(self._entry(),
+            {"dmarc": None, "spf": None, "provider": "unknown"},
+            self._sender(), "d")
+        self.assertNotIn("läuft über", unknown)
+
+    def test_batch_excludes_already_contacted(self):
+        domains = {"a.de": self._entry("a.de"), "b.de": self._entry("b.de")}
+        results = {"a.de": {"domain": "a.de", "score": 9},
+                   "b.de": {"domain": "b.de", "score": 9}}
+        batch = self.o.build_batch(domains, results, {"a.de": {}}, limit=10)
+        got = [e["domain"] for _, e in batch]
+        self.assertEqual(got, ["b.de"])
+
+    def test_batch_excludes_leads_without_an_address(self):
+        """A letter needs an envelope. A lead with no postal address is a
+        phone/other-channel lead, not a mail one, and must not silently drop
+        into a mailing batch as a blank."""
+        domains = {"a.de": self._entry("a.de", address=False)}
+        results = {"a.de": {"domain": "a.de", "score": 9}}
+        self.assertEqual(self.o.build_batch(domains, results, {}, limit=10), [])
+
+    def test_batch_excludes_below_threshold_scores(self):
+        domains = {"a.de": self._entry("a.de")}
+        results = {"a.de": {"domain": "a.de", "score": 3}}
+        self.assertEqual(self.o.build_batch(domains, results, {}, limit=10), [])
+
+    def test_batch_orders_worst_posture_first(self):
+        domains = {f"{c}.de": self._entry(f"{c}.de") for c in "abc"}
+        results = {"a.de": {"domain": "a.de", "score": 6},
+                   "b.de": {"domain": "b.de", "score": 9},
+                   "c.de": {"domain": "c.de", "score": 7}}
+        got = [e["domain"] for _, e in self.o.build_batch(domains, results, {}, limit=10)]
+        self.assertEqual(got, ["b.de", "c.de", "a.de"])
+
+    def test_mark_contacted_persists_and_accumulates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            original = self.o.CONTACTED_PATH
+            self.o.CONTACTED_PATH = os.path.join(tmp, "contacted.json")
+            try:
+                self.o.mark_contacted(["a.de"])
+                self.o.mark_contacted(["b.de"])
+                contacted = self.o.load_contacted()
+            finally:
+                self.o.CONTACTED_PATH = original
+            self.assertEqual(set(contacted), {"a.de", "b.de"})
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

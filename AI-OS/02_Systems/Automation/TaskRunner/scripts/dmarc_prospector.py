@@ -167,8 +167,25 @@ def drop_platform_subdomains(found):
     return {d: e for d, e in found.items() if d == registrable_parent(d)}
 
 
+def parse_address(tags):
+    """OSM addr:* tags -> postal address dict, or None if incomplete.
+
+    Postal mail is why this is captured at all: UWG 7 effectively bars cold
+    email to these businesses and gates cold calls behind presumed consent,
+    but an addressed letter is unrestricted. A partial address is worse than
+    none - an envelope without a house number does not arrive - so street,
+    housenumber, postcode and city are required together."""
+    street = tags.get("addr:street")
+    number = tags.get("addr:housenumber")
+    postcode = tags.get("addr:postcode")
+    city = tags.get("addr:city")
+    if not (street and number and postcode and city):
+        return None
+    return {"street": f"{street} {number}", "postcode": postcode, "city": city}
+
+
 def parse_overpass(payload):
-    """Overpass JSON -> {domain: {name, category, locations}}, chains dropped."""
+    """Overpass JSON -> {domain: {...}}, chains and platform subdomains dropped."""
     found = {}
     for element in payload.get("elements", []):
         tags = element.get("tags", {})
@@ -183,6 +200,17 @@ def parse_overpass(payload):
             "locations": 0,
         })
         entry["locations"] += 1
+        # First complete value wins: a business mapped at two nodes usually
+        # carries the same address on both, and an earlier complete address
+        # must not be overwritten by a later partial one.
+        if not entry.get("address"):
+            address = parse_address(tags)
+            if address:
+                entry["address"] = address
+        if not entry.get("phone"):
+            phone = tags.get("contact:phone") or tags.get("phone")
+            if phone:
+                entry["phone"] = phone.strip()
     found = {d: e for d, e in found.items()
              if e["locations"] <= MAX_LOCATIONS_BEFORE_CHAIN}
     return drop_platform_subdomains(found)
@@ -482,6 +510,7 @@ def cmd_discover(verbose=True):
         return 1
     domains = _load(DOMAINS_PATH, {})
     added = 0
+    enriched = set()
     for i, area in enumerate(areas):
         if i:
             time.sleep(OVERPASS_AREA_DELAY)
@@ -496,10 +525,24 @@ def cmd_discover(verbose=True):
             if domain not in domains:
                 domains[domain] = entry
                 added += 1
+                continue
+            # Enrich, don't skip. Discovery adding only *new* domains meant
+            # that when address/phone capture was added on 2026-08-31, a
+            # re-run reported "0 added" and enriched nothing - all 3,873
+            # already-known domains kept their address-less records, and the
+            # outreach pipeline had no addresses to work from. Only ever
+            # fills blanks; never overwrites a field already present.
+            for field in ("address", "phone", "name", "category"):
+                value = entry.get(field)
+                if value and not domains[domain].get(field):
+                    domains[domain][field] = value
+                    enriched.add(domain)
         if verbose:
             print(f"{area['name']}: {len(found)} businesses, {added} new so far")
     _save(DOMAINS_PATH, domains)
-    print(f"{len(domains)} domains known ({added} added).")
+    with_address = sum(1 for e in domains.values() if e.get("address"))
+    print(f"{len(domains)} domains known ({added} added, {len(enriched)} enriched); "
+          f"{with_address} have a postal address.")
     return 0
 
 

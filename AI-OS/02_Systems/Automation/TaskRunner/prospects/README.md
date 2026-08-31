@@ -86,5 +86,23 @@ None of this is legal advice and it is worth ten minutes with the actual text of
 
 Second point, smaller: some entries carry a person's name (a sole trader's practice), which makes the list personal data under GDPR. Keep it on the server, do not publish it, and delete on request. That is why `domains.json`/`results.json` are gitignored rather than committed.
 
+## From leads to letters (added 2026-08-31)
+Discovery now also captures each business's **postal address and phone** from OpenStreetMap (`addr:*` and `contact:phone` tags) - measured live at ~82% address coverage. That matters because of the UWG §7 constraint above: cold email is effectively barred and cold calls need presumed consent, but an **addressed letter is unrestricted**. The data is therefore shaped for the one channel that is clearly legal.
+
+`scripts/outreach.py` renders qualified, addressed, uncontacted leads into a single print-ready HTML file (`outreach/letters.html`) - one DIN-5008-style German business letter per A4 page, printed to PDF from any browser. Current pool: **534 mailable leads** (qualified + full address), 471 with a phone number too.
+
+```bash
+/usr/bin/python3 scripts/outreach.py --limit 25          # render 25, review
+/usr/bin/python3 scripts/outreach.py --limit 25 --commit # mark posted (do AFTER mailing)
+```
+
+Two deliberate design choices:
+- **No per-letter LLM calls.** Everything that varies is a fact already in the ledger (name, address, which DNS record is missing, which mail provider). A template renders it for zero tokens - and, more importantly, it *cannot invent a security claim* about a real company's domain. An LLM writing 500 letters about other people's DNS is a hallucination surface with legal consequences, for no gain over string substitution.
+- **The letter never claims a system was accessed.** It describes only a public DNS record that is absent or permissive, states the €249 fixed price, and explicitly offers the finding for free if they'd rather fix it themselves. That honesty is the whole differentiator from the scare-mail every owner already bins - and it is enforced by a test (`test_letter_never_claims_a_system_was_accessed`).
+
+`contacted.json` stops a business being written to twice. Sender identity comes from `OUTREACH_SENDER_*` in `.env`; generation refuses to run with any field blank, since a commercial letter with no real sender is both useless and legally wrong.
+
+Economics: postage ~€0.95/letter, so a 25-letter test batch is ~€24, and a single €249 sale covers ~87 batches. This is a paid experiment to measure response rate before committing to the full 534.
+
 ## What this does not do
 It finds and ranks prospects. It does not contact anyone, write the outreach, or verify that a business will buy — and the conversion rate is unknown until the calls happen. A ranked list of 71 qualified leads is the input to a sales process, not a substitute for one.
