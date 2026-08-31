@@ -17,7 +17,7 @@ Capped at ~10,000 characters, hard limit. When something new earns a slot and th
 ---
 
 ## Felix
-18, Crimmitschau, Saxony, Germany. Starting a cybersecurity degree at Hochschule Mittweida, September 2026 — offensive security/ethical hacking focus, learns via structured courses and video. Lives with his mother; low living costs, currently ~€450/month income. Has ~€10k in savings but no access until after his studies (held by his mother). Long-standing interest in nootropics/supplements. Actively working to stop cannabis use (regular use, started 2026-08-08) — nicotine and occasional psilocybin explicitly set aside for now, not part of the current effort.
+18, Crimmitschau, Saxony, Germany. Starting a cybersecurity degree at Hochschule Mittweida on 2026-09-23 — offensive security/ethical hacking focus, learns via structured courses and video. Lives with his mother; low living costs, currently ~€450/month income. Has ~€10k in savings but no access until after his studies (held by his mother). Long-standing interest in nootropics/supplements. Actively working to stop cannabis use (regular use, started 2026-08-08) — nicotine and occasional psilocybin explicitly set aside for now, not part of the current effort.
 
 ## Working Style
 Direct, efficiency-focused, wants honest critical feedback over reassurance. Token-conscious — prefers lean execution over exhaustive-by-default. Comfortable with technical depth. Casual tone, German/English bilingual, mixes both naturally.
