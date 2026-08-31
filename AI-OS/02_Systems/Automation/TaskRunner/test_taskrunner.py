@@ -2501,6 +2501,40 @@ class TestPaidTierGating(unittest.TestCase):
             self.runner.spend_guard.load_ledger(self.runner.spend_guard.LEDGER_PATH))
         self.assertGreater(spent, 0.0)
 
+    def test_paid_entry_has_an_explicit_context_window_and_max_tokens(self):
+        """Verified live 2026-08-31: without these, Open Interpreter can't
+        auto-detect this model's window and silently defaults to 8000
+        against the real 1,048,576 - the same failure already documented
+        and fixed for the free nemotron entry above this one."""
+        entry = [e for e in self.runner.MODEL_CHAIN if e["paid"]][0]
+        self.assertIsNotNone(entry["context_window"])
+        self.assertIsNotNone(entry["max_tokens"])
+        self.assertLess(entry["max_tokens"], 262_144,
+                        "must stay well under the model's real ceiling - one "
+                        "runaway response must not burn a big share of the "
+                        "monthly cap in a single call")
+
+    def test_cost_prefers_openrouter_reported_cost_over_every_estimate(self):
+        """Verified live 2026-08-31: a real call's usage carried
+        usage.cost=4.9476e-05 - what was actually billed, not an estimate
+        of it. Nothing computed locally should override that when present."""
+        self.runner.litellm.completion_cost = lambda **k: 999.0
+        usage = types.SimpleNamespace(cost=0.00042)
+        got = self.runner._cost_for_paid_call("any/model", 100, 50, usage=usage)
+        self.assertAlmostEqual(got, 0.00042)
+
+    def test_cost_falls_back_to_litellm_then_to_env_rate(self):
+        self.runner.litellm.completion_cost = lambda **k: 0.01
+        self.assertAlmostEqual(
+            self.runner._cost_for_paid_call("any/model", 100, 50, usage=None), 0.01)
+
+        self.runner.litellm.completion_cost = lambda **k: (_ for _ in ()).throw(Exception("nope"))
+        self.runner.OPENROUTER_PAID_INPUT_PER_M = 1.19
+        self.runner.OPENROUTER_PAID_OUTPUT_PER_M = 3.74
+        expected = (100 / 1e6) * 1.19 + (50 / 1e6) * 3.74
+        self.assertAlmostEqual(
+            self.runner._cost_for_paid_call("any/model", 100, 50, usage=None), expected)
+
 
 class TestSpendGuard(unittest.TestCase):
     """Pure ledger arithmetic - the budget cap that keeps the paid tier from

@@ -216,7 +216,19 @@ OPENROUTER_PAID_INPUT_PER_M = float(os.environ.get("OPENROUTER_PAID_INPUT_PER_M"
 OPENROUTER_PAID_OUTPUT_PER_M = float(os.environ.get("OPENROUTER_PAID_OUTPUT_PER_M", "1.56"))
 
 if os.environ.get("OPENROUTER_PAID_ENABLED", "").lower() == "true" and os.environ.get("OPENROUTER_API_KEY"):
-    MODEL_CHAIN.append(_chain_entry(OPENROUTER_PAID_MODEL, paid=True))
+    # context_window/max_tokens set explicitly, same reason as the free
+    # nemotron entry above: verified live 2026-08-31 that without them, Open
+    # Interpreter can't auto-detect this model's window and silently
+    # defaults to 8000 against the real 1,048,576 (confirmed directly against
+    # https://openrouter.ai/api/v1/models, not assumed from a listing page -
+    # the free entry's own comment already warns OpenRouter's numbers move).
+    # max_tokens is deliberately far below the model's real 262,144 ceiling:
+    # this is a budget-capped paid model, and one runaway response must not
+    # be able to burn a large fraction of a month's cap in a single call.
+    MODEL_CHAIN.append(_chain_entry(
+        OPENROUTER_PAID_MODEL, paid=True,
+        context_window=1_048_576, max_tokens=32_768,
+    ))
 
 # Last-resort escalation via Claude Code headless (`claude -p`), billed against
 # Felix's Pro subscription's 5h/weekly quota rather than a metered API. DISABLED
@@ -302,10 +314,36 @@ def _usage_field(usage, name):
     return value or 0
 
 
-def _cost_for_paid_call(model, prompt_tokens, completion_tokens):
-    """USD for one call. Prefers litellm's own pricing database (dynamically
-    maintained, provider-aware) and only falls back to the hand-set env rate
-    if litellm doesn't yet know this model - true for a model this new."""
+def _cost_for_paid_call(model, prompt_tokens, completion_tokens, usage=None):
+    """USD for one call, in order of trust:
+
+    1. OpenRouter reports the actual billed cost directly on usage.cost -
+       verified live 2026-08-31 on a plain, non-streamed litellm.completion()
+       call (usage.cost=4.9476e-05 alongside the token counts). This is what
+       was actually charged, not an estimate of it, so nothing beats it when
+       present. Caveat, also verified live the same day: it did NOT appear
+       on the usage captured off Open Interpreter's real streaming path (the
+       one _attempt() actually uses) on an otherwise-identical call - so in
+       practice tier 3 below is what prices most real calls today, not this
+       one. Kept as the first check anyway since it costs nothing to try and
+       will simply start winning if that gap closes upstream.
+    2. litellm.completion_cost() - its own maintained, provider-aware
+       pricing database. Confirmed live the same day that it does NOT yet
+       know this model ("This model isn't mapped yet") - kept as the middle
+       tier anyway since it will start working the moment litellm adds it,
+       with no code change here.
+    3. The hand-set env rate, only as a last resort. Confirmed live
+       2026-08-31 against https://openrouter.ai/api/v1/models that this
+       model actually bills $1.19/$3.74 per million - notably different
+       from the $0.4875/$1.56 an initial web search had suggested a day
+       earlier. Numbers below were corrected to the verified figures, but
+       this whole tier is proof that OpenRouter's real-time pricing must
+       never be trusted from a search result once options 1 or 2 exist.
+    """
+    if usage is not None:
+        reported = _usage_field(usage, "cost")
+        if reported:
+            return reported
     try:
         cost = litellm.completion_cost(
             model=model, prompt_tokens=prompt_tokens,
@@ -334,7 +372,7 @@ def _record_paid_spend(model, instruction, system_prompt, history, output):
             "\n".join(str(turn.get("content", "")) for turn in (history or []))
         prompt_tok = litellm.token_counter(model=model, text=sent)
         completion_tok = litellm.token_counter(model=model, text=output or "")
-    usd = _cost_for_paid_call(model, prompt_tok, completion_tok)
+    usd = _cost_for_paid_call(model, prompt_tok, completion_tok, usage=usage)
     total = spend_guard.record_spend(usd)
     print(f"[$] {model}: ~${usd:.4f} this call (~{prompt_tok}+{completion_tok} tok), "
           f"${total:.2f} of ${OPENROUTER_MONTHLY_BUDGET_USD:.2f} this month")
