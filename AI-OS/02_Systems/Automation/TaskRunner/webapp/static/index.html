@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AI-OS</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0f1115">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <span class="brand">AI-OS</span>
+  <span id="conn-dot" class="dot" title="Verbindung"></span>
+</header>
+
+<main id="screens">
+
+  <section id="screen-chat" class="screen active">
+    <div id="chat-log" class="chat-log"></div>
+    <form id="chat-form" class="chat-form">
+      <input id="chat-input" type="text" placeholder="Nachricht..." autocomplete="off">
+      <button type="submit">Senden</button>
+    </form>
+    <button id="new-conversation" class="link-button">Neue Unterhaltung</button>
+  </section>
+
+  <section id="screen-money" class="screen">
+    <h1>Geld-Board</h1>
+    <div id="money-signals" class="signals"></div>
+    <div id="money-cards" class="cards"></div>
+  </section>
+
+  <section id="screen-dmarc" class="screen">
+    <h1>DMARC-Leads</h1>
+    <div id="dmarc-summary" class="signals"></div>
+    <div id="dmarc-table" class="table-wrap"></div>
+  </section>
+
+  <section id="screen-flips" class="screen">
+    <h1>Flip-Log</h1>
+    <div id="flips-table" class="table-wrap"></div>
+  </section>
+
+</main>
+
+<nav class="tabbar">
+  <button class="tab active" data-screen="screen-chat">Chat</button>
+  <button class="tab" data-screen="screen-money">Geld</button>
+  <button class="tab" data-screen="screen-dmarc">DMARC</button>
+  <button class="tab" data-screen="screen-flips">Flips</button>
+</nav>
+
+<div id="token-modal" class="modal hidden">
+  <div class="modal-box">
+    <h2>Zugangs-Token</h2>
+    <p>Einmalig eingeben - wird nur auf diesem Gerät gespeichert.</p>
+    <input id="token-input" type="password" placeholder="Token">
+    <button id="token-save">Speichern</button>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
