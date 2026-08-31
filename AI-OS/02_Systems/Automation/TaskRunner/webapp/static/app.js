@@ -524,6 +524,33 @@ document.getElementById("upload-input").addEventListener("change", updateUploadB
 document.getElementById("upload-send").addEventListener("click", sendSelectedUploads);
 document.getElementById("voice-build").addEventListener("click", buildVoiceProfile);
 
+// --- install prompt --------------------------------------------------------
+
+// Chrome fires beforeinstallprompt only when the app is genuinely
+// installable - served over HTTPS, with a manifest and a registered service
+// worker. Over plain HTTP none of that holds, so this button simply never
+// appears, which is the honest signal: if you cannot see it, the app is not
+// installable yet and the reason is the missing certificate, not the button.
+let deferredInstall = null;
+
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  deferredInstall = e;
+  document.getElementById("install-btn").classList.remove("hidden");
+});
+
+document.getElementById("install-btn").addEventListener("click", async () => {
+  if (!deferredInstall) return;
+  deferredInstall.prompt();
+  await deferredInstall.userChoice;
+  deferredInstall = null;
+  document.getElementById("install-btn").classList.add("hidden");
+});
+
+window.addEventListener("appinstalled", () => {
+  document.getElementById("install-btn").classList.add("hidden");
+});
+
 // --- boot ------------------------------------------------------------------
 
 if ("serviceWorker" in navigator) {
