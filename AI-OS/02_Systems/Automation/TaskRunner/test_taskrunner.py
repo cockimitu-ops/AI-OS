@@ -1791,5 +1791,206 @@ class TestMorningBrief(unittest.TestCase):
         self.assertIn("x: down", digest)
 
 
+class TestKleinanzeigenSniper(unittest.TestCase):
+    """The arbitrage sniper (added 2026-08-31). Every test here is a real
+    behaviour observed against live Kleinanzeigen HTML on the day it was
+    written, not a hypothetical - the price, distance and iCloud cases in
+    particular were all found by running the thing against the actual site and
+    reading what came back, and each one silently costs money if it regresses.
+
+    Pure functions only: no network. What these prove is that the parsing and
+    filtering logic is right given the site's markup, not that the markup is
+    still what it was - ARTICLE_RE returning nothing is exactly the failure
+    run() reports as an alert rather than as silence."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.modules.setdefault("send_telegram_notification",
+                               types.ModuleType("send_telegram_notification"))
+        sys.modules["send_telegram_notification"].send = lambda *a, **k: True
+        spec = importlib.util.spec_from_file_location(
+            "kleinanzeigen_sniper",
+            os.path.join(HERE, "scripts", "kleinanzeigen_sniper.py"))
+        cls.ks = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.ks)
+
+    # --- price ---------------------------------------------------------------
+
+    def test_price_takes_the_first_number_on_a_reduced_listing(self):
+        """Live example: "280 € VB 290 €" is a reduced price followed by the
+        struck-through original. Reading 290 would push real finds past a
+        max_price filter and hide them."""
+        self.assertEqual(self.ks.parse_price("280 &euro; VB 290 &euro;"), 280)
+
+    def test_price_handles_thousands_separator(self):
+        self.assertEqual(self.ks.parse_price("1.250 &euro; VB"), 1250)
+
+    def test_price_missing_is_none_not_zero(self):
+        """"VB" with no number must stay None so the price filter lets it
+        through - an unpriced ad is the seller-doesn't-know signal."""
+        self.assertIsNone(self.ks.parse_price("VB"))
+        self.assertIsNone(self.ks.parse_price(""))
+
+    def test_zu_verschenken_is_zero_not_missing(self):
+        self.assertEqual(self.ks.parse_price("Zu verschenken"), 0)
+
+    # --- distance ------------------------------------------------------------
+
+    def test_distance_parsed_from_location(self):
+        self.assertEqual(self.ks.parse_distance("08058 Zwickau (9 km)"), 9)
+        self.assertEqual(self.ks.parse_distance("09119 Kappel (ca. 35 km)"), 35)
+        self.assertEqual(self.ks.parse_distance("06179 Teutschenthal + 200 km"), 200)
+
+    def test_distance_absent_is_none(self):
+        """No distance shown means the ad is in the search town itself - the
+        closest possible - so it must not be dropped by the distance filter."""
+        self.assertIsNone(self.ks.parse_distance("08451 Crimmitschau"))
+
+    def test_out_of_radius_listing_is_rejected(self):
+        """Live 2026-08-31: a 35km search returned seven ads at 196-200km."""
+        cfg, _ = self.ks.parse_watch("<!-- search: x -->\n<!-- radius: 35 -->")
+        far = {"title": "t", "desc": "", "price": None, "distance": 200}
+        near = {"title": "t", "desc": "", "price": None, "distance": 9}
+        self.assertFalse(self.ks.matches(far, cfg))
+        self.assertTrue(self.ks.matches(near, cfg))
+
+    def test_radius_has_slack_because_the_site_rounds(self):
+        cfg, _ = self.ks.parse_watch("<!-- search: x -->\n<!-- radius: 30 -->")
+        edge = {"title": "t", "desc": "", "price": None, "distance": 34}
+        self.assertTrue(self.ks.matches(edge, cfg))
+
+    # --- filters -------------------------------------------------------------
+
+    def test_unpriced_ad_survives_a_max_price_filter(self):
+        cfg, _ = self.ks.parse_watch("<!-- search: x -->\n<!-- price: 10-100 -->")
+        self.assertTrue(self.ks.matches(
+            {"title": "t", "desc": "", "price": None, "distance": None}, cfg))
+
+    def test_price_bounds_are_enforced_when_a_price_exists(self):
+        cfg, _ = self.ks.parse_watch("<!-- search: x -->\n<!-- price: 10-100 -->")
+        for price, expected in ((5, False), (10, True), (100, True), (101, False)):
+            listing = {"title": "t", "desc": "", "price": price, "distance": None}
+            self.assertEqual(self.ks.matches(listing, cfg), expected, f"price {price}")
+
+    def test_exclude_matches_the_description_not_just_the_title(self):
+        cfg, _ = self.ks.parse_watch("<!-- search: x -->\n<!-- exclude: ankauf -->")
+        listing = {"title": "iPhone", "desc": "Ankauf von Altgeraeten",
+                   "price": 20, "distance": None}
+        self.assertFalse(self.ks.matches(listing, cfg))
+
+    def test_require_is_an_any_not_an_all(self):
+        cfg, _ = self.ks.parse_watch(
+            "<!-- search: x -->\n<!-- require: bosch, makita -->")
+        self.assertTrue(self.ks.matches(
+            {"title": "Makita Bohrer", "desc": "", "price": 30, "distance": None}, cfg))
+        self.assertFalse(self.ks.matches(
+            {"title": "No-Name Bohrer", "desc": "", "price": 30, "distance": None}, cfg))
+
+    def test_phrase_excludes_do_not_eat_the_opposite_ad(self):
+        """Live 2026-08-31: a bare `icloud` exclude dropped "iPhone 13 Bastler
+        - iCloud frei", an ad advertising precisely the good case. The watch
+        file excludes phrases ("icloud sperre") for this reason."""
+        cfg, _ = self.ks.parse_watch(
+            "<!-- search: x -->\n<!-- exclude: icloud sperre, gesperrt -->")
+        good = {"title": "iPhone 13 Bastler - iCloud frei", "desc": "",
+                "price": 95, "distance": 10}
+        bad = {"title": "iPhone 13", "desc": "hat noch icloud sperre",
+               "price": 95, "distance": 10}
+        self.assertTrue(self.ks.matches(good, cfg))
+        self.assertFalse(self.ks.matches(bad, cfg))
+
+    # --- watch parsing -------------------------------------------------------
+
+    def test_watch_without_a_search_is_an_error_not_a_crash(self):
+        cfg, err = self.ks.parse_watch("just some prose, no directives")
+        self.assertIsNone(cfg)
+        self.assertIn("search", err)
+
+    def test_prose_below_the_directives_is_ignored(self):
+        cfg, err = self.ks.parse_watch(
+            "<!-- search: monitor -->\nNotes about why, mentioning price: 5-9.")
+        self.assertIsNone(err)
+        self.assertEqual(cfg["search"], "monitor")
+        self.assertIsNone(cfg["max_price"])
+
+    def test_defaults_apply_when_directives_are_omitted(self):
+        cfg, _ = self.ks.parse_watch("<!-- search: monitor -->")
+        self.assertEqual(cfg["location"], self.ks.DEFAULT_LOCATION)
+        self.assertEqual(cfg["radius"], self.ks.DEFAULT_RADIUS)
+
+    def test_open_ended_price_ranges(self):
+        lo, _ = self.ks.parse_watch("<!-- search: x -->\n<!-- price: 50- -->")
+        self.assertEqual(lo["min_price"], 50)
+        self.assertIsNone(lo["max_price"])
+        hi, _ = self.ks.parse_watch("<!-- search: x -->\n<!-- price: -80 -->")
+        self.assertIsNone(hi["min_price"])
+        self.assertEqual(hi["max_price"], 80)
+
+    def test_umlauts_survive_into_the_query_but_not_the_slug(self):
+        """"haushaltsaufloesung" and "haushaltsauflaesung" are different
+        searches to Kleinanzeigen; the umlaut one is the one with results."""
+        cfg, _ = self.ks.parse_watch("<!-- search: haushaltsaufl\u00f6sung -->")
+        url = self.ks.build_url(cfg)
+        self.assertIn("haushaltsaufloesung", url)
+        self.assertIn("keywords=haushaltsaufl%C3%B6sung", url)
+
+    def test_explicit_url_directive_wins_over_search(self):
+        cfg, _ = self.ks.parse_watch(
+            "<!-- search: monitor -->\n<!-- url: https://example.com/x -->")
+        self.assertEqual(self.ks.build_url(cfg), "https://example.com/x")
+
+    # --- html parsing --------------------------------------------------------
+
+    def test_parses_a_real_article_block(self):
+        html = ('<article class="aditem" data-adid="3499404638" '
+                'data-href="/s-anzeige/samsung/3499404638-225-3983">'
+                '<div class="aditem-main--top--left">08289 Schneeberg (ca. 30 km)</div>'
+                '<div class="aditem-main--top--right">Gestern, 20:49</div>'
+                '<h2 class="text-module"><a href="#">Samsung Monitor 32"</a></h2>'
+                '<p class="aditem-main--middle--description">Guter Zustand</p>'
+                '<p class="aditem-main--middle--price-shipping--price">120 &euro; VB</p>'
+                '</article>')
+        listings = self.ks.parse_listings(html)
+        self.assertEqual(len(listings), 1)
+        got = listings[0]
+        self.assertEqual(got["id"], "3499404638")
+        self.assertEqual(got["price"], 120)
+        self.assertEqual(got["distance"], 30)
+        self.assertEqual(got["title"], 'Samsung Monitor 32"')
+        self.assertTrue(got["url"].startswith("https://www.kleinanzeigen.de/s-anzeige/"))
+
+    def test_alert_shows_the_link_and_the_drive(self):
+        listing = {"id": "1", "url": "https://x/y", "title": "Bosch GSR",
+                   "desc": "", "location": "09366 Stollberg (30 km)",
+                   "posted": "Heute, 09:12", "price": 95, "distance": 30}
+        alert = self.ks.format_alert(listing, "werkzeug")
+        self.assertIn("[werkzeug]", alert)
+        self.assertIn("95 \u20ac", alert)
+        self.assertIn("30 km", alert)
+        self.assertNotIn("(~", alert)  # location already carries the distance
+        self.assertIn("https://x/y", alert)
+
+    def test_sniper_staleness_is_a_health_failure(self):
+        """The sniper's failure mode is silence, and silence is also what a
+        working sniper looks like on a quiet afternoon. health_check is what
+        tells those two apart."""
+        spec = importlib.util.spec_from_file_location(
+            "health_check", os.path.join(HERE, "scripts", "health_check.py"))
+        hc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hc)
+        self.assertTrue(hc.evaluate_sniper(None)[0], "never-run must not page")
+        self.assertTrue(hc.evaluate_sniper(0.1)[0])
+        self.assertTrue(hc.evaluate_sniper(9.0)[0], "an overnight gap is normal")
+        self.assertFalse(hc.evaluate_sniper(11.0)[0])
+
+    def test_unpriced_alert_says_so_instead_of_showing_none(self):
+        listing = {"id": "1", "url": "https://x/y", "title": "Konvolut",
+                   "desc": "", "location": "08058 Zwickau (9 km)",
+                   "posted": "Heute", "price": None, "distance": 9}
+        alert = self.ks.format_alert(listing, "aufloesung")
+        self.assertIn("VB / kein Preis", alert)
+        self.assertNotIn("None", alert)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

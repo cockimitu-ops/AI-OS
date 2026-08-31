@@ -26,6 +26,7 @@ AI-OS/02_Systems/Automation/TaskRunner/tasks/threads/*
 AI-OS/02_Systems/Automation/TaskRunner/backups/*.tar.gz
 AI-OS/02_Systems/Automation/TaskRunner/health/state.json
 AI-OS/02_Systems/Automation/TaskRunner/schedules/state.json
+AI-OS/02_Systems/Automation/TaskRunner/watches/state.json
 # Proposals are runtime state: what agents suggested and what Felix decided.
 AI-OS/02_Systems/Automation/TaskRunner/proposals/*.json
 AI-OS/02_Systems/Automation/TaskRunner/proposals/*.jsonl

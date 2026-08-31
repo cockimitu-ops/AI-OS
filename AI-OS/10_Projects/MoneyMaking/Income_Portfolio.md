@@ -1,8 +1,8 @@
 # Income Portfolio
 
 Purpose: The actual multi-stream income strategy — what to build, in what order, and why. Prioritizes build-once-sell-repeatedly products, with service income as the funding layer underneath.
-Last Updated: 2026-08-13
-Status: Active — strategy set, nothing shipped yet
+Last Updated: 2026-08-31
+Status: Active — sequence revised 2026-08-31; sniper shipped, nothing sold yet
 Stability: Dynamic
 Related Documents: [[10_Projects/MoneyMaking/README|MoneyMaking]], [[Candidate_Options]], [[10_Projects/TemplateSales/README|TemplateSales]], [[10_Projects/QuickTurnaroundGigs/README|QuickTurnaroundGigs]]
 
@@ -68,3 +68,21 @@ Gumroad (10%), Payhip (5% on free plan), Notion Marketplace (10% + $0.40, best d
 
 ## Status
 Strategy set. Nothing shipped. The next real milestone is a single product live on a single storefront — not another plan.
+
+---
+
+## Sequence revised 2026-08-31
+An options review (server + laptop + phones + €250) produced 26 candidates. Felix picked four and ordered them himself. Recording the order and the *reasoning*, because the order is the decision — the individual ideas were the easy part.
+
+**1. Sniper-fed side hustle (now).** [[10_Projects/LocalArbitrage/README|LocalArbitrage]] plus a broken-phone sub-loop, both fed by the Kleinanzeigen sniper built the same day. Chosen first because it is the only stream here with **no distribution problem** — buyers are already searching — which is precisely the bottleneck this document's opening insight says kills everything else. It produces cash while the other two legs are still unearning.
+
+**2. DMARC/SPF remediation for Mittelstand (next).** Passive DNS checks only, no scanning, no legal exposure; €150–300 per fix. Deferred behind the sniper deliberately: it is the higher ceiling but needs sales conversations, and the sniper needs none.
+
+**3. German-language security content (once money is coming in).** Fills the pillar left empty since the horror archival — with the one subject Felix is about to spend three years becoming credible in. Monetised as **lead-gen for leg 2**, not as ad revenue. That is the correction to the horror mistake: the earlier finding was never "content doesn't work," it was that the *audience* didn't monetise.
+
+**Explicitly deferred, not rejected:** bug bounty and CTFs. Correctly identified by Felix as learning, not income — realistic first-year bounty earnings for a beginner are ~€0. They resume as skill-building once leg 1 pays, and they are what makes leg 2 credible at 20 rather than 19.
+
+### The constraint that shaped the whole order
+Familienversicherung dies above **€565/month** (see [[German_Legal_Basics]]), costing ~€150/month — so income between €565 and ~€715 is strictly *worse* than €560. Every leg above is therefore chosen for high €/hour at low hours, not for volume. Blowing through that ceiling should be a deliberate decision with the numbers checked in writing with the Krankenkasse first, not something a good month does by accident.
+
+Second, quieter constraint: the cybersecurity degree starts September 2026. Time, not money, becomes the scarce input within weeks — which is the real argument for leg 1 being a *machine* that pings a phone rather than a habit requiring daily browser refreshing.

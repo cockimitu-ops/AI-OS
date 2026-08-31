@@ -40,6 +40,13 @@ INBOX = os.path.join(TASK_RUNNER_DIR, "tasks", "inbox")
 # is genuinely not draining.
 MAX_QUEUE_AGE_MINUTES = 45
 
+SNIPER_STATE = os.path.join(TASK_RUNNER_DIR, "watches", "state.json")
+# Sniper timer fires every 3 minutes between 07:00 and 22:59 Europe/Berlin, so
+# the gap across a night is ~8h. 10h clears that without hiding a real outage.
+# This check exists because the sniper's failure mode is silence, and silence
+# is exactly what a working sniper looks like on a quiet afternoon.
+MAX_SNIPER_AGE_HOURS = 10
+
 
 # --- gathering: subprocess/socket/filesystem, no logic ---------------------
 
@@ -53,6 +60,23 @@ def _run(cmd, timeout=10):
 
 def gather_service_status(name):
     return _run(["systemctl", "is-active", name])
+
+
+def gather_sniper_age_hours():
+    """-> hours since the sniper last completed a run, or None if it never has."""
+    try:
+        with open(SNIPER_STATE, encoding="utf-8") as f:
+            last = json.load(f).get("last_run")
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not last:
+        return None
+    try:
+        from datetime import datetime
+        stamp = datetime.fromisoformat(last)
+    except ValueError:
+        return None
+    return (time.time() - stamp.timestamp()) / 3600.0
 
 
 def gather_backup_is_failed():
@@ -212,6 +236,16 @@ def notify(message):
         print(f"Could not send notification: {e}", file=sys.stderr)
 
 
+def evaluate_sniper(age_hours):
+    """Never-run is deliberately OK, not a failure: the sniper is opt-in, and a
+    box that has never had a watch configured should not page about it."""
+    if age_hours is None:
+        return True, "no runs recorded yet"
+    if age_hours > MAX_SNIPER_AGE_HOURS:
+        return False, f"last run {age_hours:.1f}h ago (timer stopped?)"
+    return True, f"last run {age_hours:.1f}h ago"
+
+
 def run_checks():
     current = {}
     for svc in SERVICES:
@@ -224,6 +258,7 @@ def run_checks():
         gather_backup_is_failed(), gather_newest_backup_age_hours(),
     )
     current["queue"] = evaluate_queue(gather_oldest_queued_task_age_minutes())
+    current["sniper"] = evaluate_sniper(gather_sniper_age_hours())
     return current
 
 
