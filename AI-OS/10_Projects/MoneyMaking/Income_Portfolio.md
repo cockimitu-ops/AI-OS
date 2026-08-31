@@ -76,7 +76,13 @@ An options review (server + laptop + phones + €250) produced 26 candidates. Fe
 
 **1. Sniper-fed side hustle (now).** [[10_Projects/LocalArbitrage/README|LocalArbitrage]] plus a broken-phone sub-loop, both fed by the Kleinanzeigen sniper built the same day. Chosen first because it is the only stream here with **no distribution problem** — buyers are already searching — which is precisely the bottleneck this document's opening insight says kills everything else. It produces cash while the other two legs are still unearning.
 
-**2. DMARC/SPF remediation for Mittelstand (next).** Passive DNS checks only, no scanning, no legal exposure; €150–300 per fix. Deferred behind the sniper deliberately: it is the higher ceiling but needs sales conversations, and the sniper needs none.
+**2. DMARC/SPF remediation for Mittelstand (started 2026-08-31).** Passive DNS checks only, no scanning, no legal exposure; €150–300 per fix. Deferred behind the sniper deliberately: it is the higher ceiling but needs sales conversations, and the sniper needs none.
+
+The prospecting half is built and running — see [[02_Systems/Automation/TaskRunner/prospects/README|Prospects]]. 3,873 local business domains discovered from OpenStreetMap across Crimmitschau/Zwickau, Chemnitz and Gera; a nightly DNS audit ranks them and the top 3 new leads land in the 07:00 morning brief.
+
+**The premise measured, not assumed:** on the first 150 randomly sampled local domains, ~39% publish no DMARC record at all and 71 of 150 qualify as leads. Nearly half the local market has the problem this sells the fix for.
+
+What remains is entirely the part software cannot do: the call, the offer, the price, and the first invoice. The list is the input to a sales process, not a substitute for one — and sales is the skill gap [[Candidate_Options]] identified across every option a year of research produced. Nothing about having 71 leads changes that; it only removes the excuse of not knowing who to ring.
 
 **3. German-language security content (once money is coming in).** Fills the pillar left empty since the horror archival — with the one subject Felix is about to spend three years becoming credible in. Monetised as **lead-gen for leg 2**, not as ad revenue. That is the correction to the horror mistake: the earlier finding was never "content doesn't work," it was that the *audience* didn't monetise.
 

@@ -47,6 +47,12 @@ SNIPER_STATE = os.path.join(TASK_RUNNER_DIR, "watches", "state.json")
 # is exactly what a working sniper looks like on a quiet afternoon.
 MAX_SNIPER_AGE_HOURS = 10
 
+PROSPECTOR_RESULTS = os.path.join(TASK_RUNNER_DIR, "prospects", "results.json")
+# Nightly at 01:30, so 26h leaves a few hours' grace. Same reasoning as the
+# sniper: a dead prospector looks exactly like a quiet one from the morning
+# brief, which would just say "keine neuen" forever.
+MAX_PROSPECTOR_AGE_HOURS = 26
+
 
 # --- gathering: subprocess/socket/filesystem, no logic ---------------------
 
@@ -77,6 +83,15 @@ def gather_sniper_age_hours():
     except ValueError:
         return None
     return (time.time() - stamp.timestamp()) / 3600.0
+
+
+def gather_prospector_age_hours():
+    """Age of the results file. Its mtime is the run stamp - the audit rewrites
+    it on every completed run, so no separate bookkeeping is needed."""
+    try:
+        return (time.time() - os.path.getmtime(PROSPECTOR_RESULTS)) / 3600.0
+    except OSError:
+        return None
 
 
 def gather_backup_is_failed():
@@ -246,6 +261,16 @@ def evaluate_sniper(age_hours):
     return True, f"last run {age_hours:.1f}h ago"
 
 
+def evaluate_prospector(age_hours):
+    """Never-run is OK: prospecting is opt-in, and a box with no prospect list
+    configured should not page about one."""
+    if age_hours is None:
+        return True, "no runs recorded yet"
+    if age_hours > MAX_PROSPECTOR_AGE_HOURS:
+        return False, f"last audit {age_hours:.1f}h ago (timer stopped?)"
+    return True, f"last audit {age_hours:.1f}h ago"
+
+
 def run_checks():
     current = {}
     for svc in SERVICES:
@@ -259,6 +284,7 @@ def run_checks():
     )
     current["queue"] = evaluate_queue(gather_oldest_queued_task_age_minutes())
     current["sniper"] = evaluate_sniper(gather_sniper_age_hours())
+    current["prospector"] = evaluate_prospector(gather_prospector_age_hours())
     return current
 
 

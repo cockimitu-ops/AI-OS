@@ -27,6 +27,7 @@ import tempfile
 import time
 import types
 import unittest
+from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -1990,6 +1991,212 @@ class TestKleinanzeigenSniper(unittest.TestCase):
         alert = self.ks.format_alert(listing, "aufloesung")
         self.assertIn("VB / kein Preis", alert)
         self.assertNotIn("None", alert)
+
+
+class TestDmarcProspector(unittest.TestCase):
+    """The DMARC lead finder (added 2026-08-31). Pure functions only - no DNS,
+    no Overpass. Several of these encode mistakes the first live run actually
+    made against real data from around Crimmitschau, each of which would have
+    produced a wrong phone call rather than a crash."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "dmarc_prospector", os.path.join(HERE, "scripts", "dmarc_prospector.py"))
+        cls.dp = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.dp)
+
+    # --- domain hygiene ------------------------------------------------------
+
+    def test_domain_extracted_from_messy_urls(self):
+        for raw, expected in (
+            ("https://www.baeckerei-sens.de/", "baeckerei-sens.de"),
+            ("http://Example.DE/impressum?x=1", "example.de"),
+            ("https://porta.de/zwickau", "porta.de"),
+        ):
+            self.assertEqual(self.dp.domain_from_url(raw), expected, raw)
+
+    def test_garbage_urls_are_dropped_not_guessed_at(self):
+        for raw in ("", None, "not a url", "http://", "mailto:x", "http://localhost"):
+            self.assertIsNone(self.dp.domain_from_url(raw))
+
+    def test_registrable_parent(self):
+        self.assertEqual(self.dp.registrable_parent("agentur.barmenia.de"), "barmenia.de")
+        self.assertEqual(self.dp.registrable_parent("barmenia.de"), "barmenia.de")
+        self.assertEqual(self.dp.registrable_parent("shop.example.co.uk"), "example.co.uk")
+
+    def test_subdomains_are_dropped_because_they_cannot_publish_dmarc(self):
+        """agentur.barmenia.de is an insurance agent on the insurer's corporate
+        domain. He cannot edit that zone, so he cannot buy the fix."""
+        found = {"metzgerei-mueller.de": {}, "agentur.barmenia.de": {},
+                 "12706.apotheken-website-vorschau.de": {}}
+        kept = self.dp.drop_platform_subdomains(found)
+        self.assertEqual(set(kept), {"metzgerei-mueller.de"})
+
+    def test_chains_are_dropped_by_location_count(self):
+        payload = {"elements": [
+            {"tags": {"shop": "supermarket", "name": "Globus",
+                      "website": "https://globus.de"}} for _ in range(9)
+        ] + [{"tags": {"shop": "bakery", "name": "Sens",
+                       "website": "https://baeckerei-sens.de"}}]}
+        parsed = self.dp.parse_overpass(payload)
+        self.assertIn("baeckerei-sens.de", parsed)
+        self.assertNotIn("globus.de", parsed, "a 9-location chain is not a lead")
+
+    # --- record parsing ------------------------------------------------------
+
+    def test_long_txt_records_are_rejoined(self):
+        """dig splits records over 255 chars into adjacent quoted chunks.
+        Reading only the first would misreport a long SPF record's policy."""
+        self.assertEqual(self.dp.join_txt(['"v=spf1 include:a " "include:b -all"']),
+                         ["v=spf1 include:a include:b -all"])
+
+    def test_spf_policy_variants(self):
+        for record, expected in (
+            ("v=spf1 include:spf.ihk.de -all", "-all"),
+            ("v=spf1 mx ~all", "~all"),
+            ("v=spf1 a ?all", "?all"),
+            ("v=spf1 include:x", "none"),
+        ):
+            self.assertEqual(self.dp.parse_spf([record])[0], expected, record)
+
+    def test_spf_ignores_unrelated_txt_records(self):
+        txts = ["google-site-verification=abc", "zone-ownership-verification=xyz"]
+        self.assertIsNone(self.dp.parse_spf(txts)[0])
+
+    def test_dmarc_policy_variants(self):
+        self.assertEqual(self.dp.parse_dmarc(["v=DMARC1; p=reject; rua=mailto:x"])[0], "reject")
+        self.assertEqual(self.dp.parse_dmarc(["v=DMARC1; p=quarantine"])[0], "quarantine")
+        self.assertEqual(self.dp.parse_dmarc(["v=DMARC1; p=none"])[0], "none")
+        self.assertEqual(self.dp.parse_dmarc(["v=DMARC1; rua=mailto:x"])[0], "none")
+        self.assertIsNone(self.dp.parse_dmarc(["v=spf1 -all"])[0])
+
+    def test_provider_classification_drives_the_sales_line(self):
+        self.assertEqual(self.dp.classify_provider(["10 mx00.ionos.de."]), "IONOS")
+        self.assertEqual(self.dp.classify_provider(
+            ["10 x-com.mail.protection.outlook.com."]), "Microsoft 365")
+        self.assertEqual(self.dp.classify_provider([]), "no MX")
+
+    # --- scoring -------------------------------------------------------------
+
+    def test_worst_posture_scores_highest(self):
+        self.assertEqual(self.dp.score(None, None, True), 9)
+
+    def test_already_protected_domain_scores_zero_and_is_never_called(self):
+        """Pitching someone who already deployed DMARC wastes the one thing
+        this list exists to save."""
+        self.assertEqual(self.dp.score("-all", "reject", True), 0)
+
+    def test_dmarc_none_still_scores_as_a_lead(self):
+        """p=none publishes a policy that enforces nothing - a real sale, but
+        below a domain with no record at all."""
+        self.assertLess(self.dp.score("-all", "none", True),
+                        self.dp.score("-all", None, True))
+
+    def test_useless_spf_scores_same_as_no_spf(self):
+        self.assertEqual(self.dp.score("?all", None, True),
+                         self.dp.score(None, None, True))
+
+    def test_mail_flow_raises_the_score(self):
+        self.assertGreater(self.dp.score(None, None, True),
+                           self.dp.score(None, None, False))
+
+    def test_rank_excludes_protected_domains_and_orders_by_score(self):
+        results = {
+            "secure.de": {"domain": "secure.de", "score": 0},
+            "bad.de": {"domain": "bad.de", "score": 9},
+            "mid.de": {"domain": "mid.de", "score": 6},
+        }
+        ranked = [r["domain"] for r, _ in self.dp.rank(results, {}, limit=10)]
+        self.assertEqual(ranked, ["bad.de", "mid.de"])
+
+    # --- scheduling ----------------------------------------------------------
+
+    def test_never_checked_domains_come_first(self):
+        now = datetime.now(timezone.utc).isoformat()
+        domains = {"new.de": {}, "fresh.de": {}}
+        results = {"fresh.de": {"checked": now}}
+        self.assertEqual(self.dp.due_for_check(domains, results), ["new.de"])
+
+    def test_fresh_results_are_not_rechecked(self):
+        now = datetime.now(timezone.utc).isoformat()
+        domains = {"a.de": {}}
+        self.assertEqual(self.dp.due_for_check(domains, {"a.de": {"checked": now}}), [])
+
+    def test_stale_results_are_rechecked(self):
+        old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        domains = {"a.de": {}}
+        self.assertEqual(self.dp.due_for_check(domains, {"a.de": {"checked": old}}), ["a.de"])
+
+    def test_audit_order_is_not_alphabetical(self):
+        """Sorted order meant the first nights returned only A-names, so the
+        morning brief showed Adler-Apotheke, AED-Service, Aerztehaus... for a
+        week instead of a spread across the region."""
+        domains = {f"{c}{i}.de": {} for c in "abcdefghij" for i in range(12)}
+        order = self.dp.due_for_check(domains, {}, budget=120)
+        self.assertNotEqual(order, sorted(order))
+        self.assertEqual(sorted(order), sorted(domains))
+
+    def test_budget_is_respected(self):
+        domains = {f"d{i}.de": {} for i in range(50)}
+        self.assertEqual(len(self.dp.due_for_check(domains, {}, budget=10)), 10)
+
+    # --- morning brief -------------------------------------------------------
+
+    def test_brief_only_shows_unreported_leads(self):
+        results = {"a.de": {"domain": "a.de", "score": 9, "dmarc": None, "spf": None,
+                            "provider": "IONOS"},
+                   "b.de": {"domain": "b.de", "score": 9, "dmarc": None, "spf": None,
+                            "provider": "IONOS"}}
+        section = self.dp.build_brief_section(results, {}, reported={"a.de"}, limit=3)
+        self.assertIn("b.de", section)
+        self.assertNotIn("a.de", section)
+
+    def test_equal_scores_do_not_always_serve_the_same_alphabetical_head(self):
+        """~660 leads tie at the top score and the brief shows 3 a day. An
+        alphabetical tiebreak would serve A-names for a month."""
+        results = {f"{c}{i}.de": {"domain": f"{c}{i}.de", "score": 9}
+                   for c in "abcdefghij" for i in range(6)}
+        top = [r["domain"] for r, _ in self.dp.rank(results, {}, limit=8)]
+        self.assertEqual(len(top), 8)
+        self.assertNotEqual(top, sorted(results)[:8])
+
+    def test_rank_is_stable_within_a_day(self):
+        results = {f"d{i}.de": {"domain": f"d{i}.de", "score": 9} for i in range(40)}
+        first = [r["domain"] for r, _ in self.dp.rank(results, {}, limit=5)]
+        second = [r["domain"] for r, _ in self.dp.rank(results, {}, limit=5)]
+        self.assertEqual(first, second, "a rerun on the same day must not reshuffle")
+
+    def test_brief_says_so_when_nothing_is_new(self):
+        results = {"a.de": {"domain": "a.de", "score": 9, "dmarc": None,
+                            "spf": None, "provider": "IONOS"}}
+        section = self.dp.build_brief_section(results, {}, reported={"a.de"})
+        self.assertIn("keine neuen", section)
+        self.assertIn("1 offene", section)
+
+    def test_brief_is_absent_rather_than_empty_before_any_audit(self):
+        self.assertIsNone(self.dp.build_brief_section({}, {}, reported=set()))
+
+    def test_brief_names_the_business_not_just_the_domain(self):
+        results = {"a.de": {"domain": "a.de", "score": 9, "dmarc": None,
+                            "spf": None, "provider": "IONOS"}}
+        section = self.dp.build_brief_section(
+            results, {"a.de": {"name": "Baeckerei Sens"}}, reported=set())
+        self.assertIn("Baeckerei Sens", section)
+
+    def test_audit_checkpoints_so_an_interrupted_run_is_not_wasted(self):
+        """A full run is ~13 minutes of DNS. Without checkpointing, a reboot at
+        minute 12 discards all of it and the next night restarts from nothing."""
+        self.assertTrue(0 < self.dp.CHECKPOINT_EVERY < self.dp.NIGHTLY_BUDGET)
+
+    def test_prospector_staleness_is_a_health_failure(self):
+        spec = importlib.util.spec_from_file_location(
+            "health_check", os.path.join(HERE, "scripts", "health_check.py"))
+        hc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hc)
+        self.assertTrue(hc.evaluate_prospector(None)[0], "never-run must not page")
+        self.assertTrue(hc.evaluate_prospector(20.0)[0])
+        self.assertFalse(hc.evaluate_prospector(30.0)[0])
 
 
 if __name__ == "__main__":
