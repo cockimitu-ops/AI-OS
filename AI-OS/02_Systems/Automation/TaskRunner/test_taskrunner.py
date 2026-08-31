@@ -645,6 +645,50 @@ class TestAgentSelection(TaskRunnerTestCase):
         self.assertIsNone(self.agents.model_preference("Research_Analyst"))
         self.assertIsNone(self.agents.model_preference(None))
 
+    def test_a_routed_agent_does_not_inherit_its_paid_preference(self):
+        """The router is a guess - its own prompt says prefer NONE over a
+        weak one - and a guess must not spend money. Caught live: "welche
+        obsidian plugins fuers studium?" routed to Study_Teacher on the word
+        "Studium" and would have billed a casual chat to the paid tier."""
+        seen = {}
+
+        def spy(model, instruction, system_prompt=None, history=None, **kwargs):
+            seen.setdefault("models", []).append(model)
+            return "ok"
+
+        paid = self.runner._chain_entry("paid/x", paid=True)
+        free = self.runner._chain_entry("free/a")
+        original_chain, original_route = self.runner.MODEL_CHAIN, self.runner._route
+        self.runner.MODEL_CHAIN = [free, paid]
+        self.runner._attempt = spy
+        self.runner._route = lambda instruction: "Study_Teacher"
+        try:
+            self.queue("t.md", "welche obsidian plugins fuers studium?")
+            self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+            self.assertEqual(seen["models"][0], "free/a")
+        finally:
+            self.runner.MODEL_CHAIN = original_chain
+            self.runner._route = original_route
+
+    def test_an_explicitly_named_paid_agent_still_pays(self):
+        seen = {}
+
+        def spy(model, instruction, system_prompt=None, history=None, **kwargs):
+            seen.setdefault("models", []).append(model)
+            return "ok"
+
+        paid = self.runner._chain_entry("paid/x", paid=True)
+        free = self.runner._chain_entry("free/a")
+        original = self.runner.MODEL_CHAIN
+        self.runner.MODEL_CHAIN = [free, paid]
+        self.runner._attempt = spy
+        try:
+            self.queue("t.md", self.agents.directive("Study_Teacher") + "Process this.")
+            self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
+            self.assertEqual(seen["models"][0], "paid/x")
+        finally:
+            self.runner.MODEL_CHAIN = original
+
     def test_worker_runs_the_task_with_the_agent_prompt(self):
         """End to end through _run_task: the directive is parsed off, and the
         prompt handed to the model is the scoped one."""
@@ -4213,3 +4257,79 @@ class TestVaultWritePurpose(unittest.TestCase):
             "08_Research", "T", "## Heading\n\nSome body prose here.",
             purpose="An explicit one-line purpose.", dry_run=True)
         self.assertIn("Purpose: An explicit one-line purpose.", content)
+
+
+class TestVoiceStyle(unittest.TestCase):
+    """The deterministic voice check (added 2026-08-31). Built after reading
+    the worker's real Telegram replies: the register held on throwaway lines
+    ("jo, was gibt's?") and collapsed into bold headers and numbered lists
+    the moment the answer had substance. Every threshold is a counted fact
+    about 55,809 real messages, not a taste judgement."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "voice_style", os.path.join(HERE, "voice_style.py"))
+        cls.vs = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.vs)
+
+    ASSISTANT = """Am AI-OS selbst vor allem 3 Sachen:
+
+1. **Status-Drift Automatisieren**: laeuft noch nicht automatisch.
+2. **Notion MCP aufraeumen**: liegt seit Wochen ungenutzt rum.
+3. **Tests**: koennten breiter sein und mehr Faelle abdecken hier.
+
+Das waeren die drei Punkte die ich zuerst angehen wuerde, weil sie am
+meisten bringen und am wenigsten Aufwand sind insgesamt."""
+
+    def test_flags_the_real_assistant_shaped_reply(self):
+        found = self.vs.violations(self.ASSISTANT)
+        joined = " ".join(found)
+        self.assertIn("bold", joined)
+        self.assertIn("numbered", joined)
+        self.assertIn("lines", joined)
+
+    def test_passes_a_reply_that_already_sounds_like_him(self):
+        for ok in ("jo, was gibt's?", "ne lass mal",
+                   "Kann ich machen, dauert aber bis morgen frueh."):
+            self.assertEqual(self.vs.violations(ok), [], ok)
+
+    def test_a_single_dash_line_is_not_a_list(self):
+        """People write one dashed aside in a normal message. Two is a list."""
+        self.assertEqual(self.vs.violations("passt\n- ausser dem einen ding"), [])
+
+    def test_code_blocks_are_exempt_from_length_and_line_rules(self):
+        """When he asks for a script he wants the script - trimming it would
+        obey the letter of his style while destroying the answer."""
+        reply = "hier:\n\n```python\n" + "print('x')\n" * 40 + "```"
+        self.assertEqual(self.vs.violations(reply), [])
+
+    def test_bold_inside_prose_is_still_flagged_when_code_is_present(self):
+        reply = "**so** geht das:\n\n```py\nx=1\n```"
+        self.assertTrue(any("bold" in v for v in self.vs.violations(reply)))
+
+    def test_nudge_names_the_specific_problems(self):
+        text = self.vs.nudge(self.vs.violations(self.ASSISTANT))
+        self.assertIn("bold", text)
+        self.assertIn("Keep any code block", text)
+
+    def test_nudge_is_empty_when_nothing_is_wrong(self):
+        self.assertEqual(self.vs.nudge([]), "")
+
+    def test_a_rewrite_that_threw_the_content_away_is_refused(self):
+        """A short reply that lost the answer is worse than a well-formatted
+        one - the rewrite is a formatting pass, not a summariser."""
+        self.assertFalse(self.vs.is_better("jo", self.ASSISTANT))
+
+    def test_a_genuinely_better_rewrite_is_accepted(self):
+        better = ("Drei Sachen: Status-Drift laeuft nicht automatisch, das "
+                  "Notion MCP liegt ungenutzt rum, und die Tests koennten "
+                  "breiter sein.")
+        self.assertTrue(self.vs.is_better(better, self.ASSISTANT))
+
+    def test_an_empty_rewrite_is_never_accepted(self):
+        for junk in ("", "   ", None):
+            self.assertFalse(self.vs.is_better(junk, self.ASSISTANT))
+
+    def test_missing_stats_file_is_not_an_error(self):
+        self.assertEqual(self.vs.load_stats("/nonexistent/stats.json"), {})

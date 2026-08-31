@@ -82,6 +82,9 @@ PLACEHOLDER_RE = re.compile(
     r"^<[^>]{0,80}(omitted|weggelassen|ausgeschlossen|attached|anhang)[^>]{0,20}>$",
     re.IGNORECASE)
 
+_MD_LIST_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+\S", re.M)
+_MD_HEAD_RE = re.compile(r"^\s{0,3}#{1,4}\s+\S", re.M)
+
 URL_RE = re.compile(r"https?://\S+|www\.\S+")
 EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.]+\b")
 PHONE_RE = re.compile(r"(?<!\w)(?:\+\d[\d\s/()-]{6,}\d|\d{5,})(?!\w)")
@@ -269,6 +272,17 @@ def compute_stats(mine):
         # In German every noun is capitalised, so a lowercase first letter is
         # a much stronger style signal here than it would be in English.
         "lowercase_start_pct": _pct(has(lambda t: t[:1].islower()), total),
+        "capital_start_pct": _pct(has(lambda t: t[:1].isupper()), total),
+        # The formatting facts. These turned out to matter more than any
+        # word choice: reviewing real replies, the register held on short
+        # lines and collapsed into bold headers and numbered lists the moment
+        # the answer had substance. Stating the rate makes the rule a fact
+        # about him rather than a style preference.
+        "markdown_pct": _pct(has(lambda t: "**" in t or _MD_LIST_RE.search(t)
+                                 or _MD_HEAD_RE.search(t)), total),
+        "multiline_pct": _pct(has(lambda t: "\n" in t.strip()), total),
+        "words_p95": lengths[int(len(lengths) * 0.95)],
+        "words_p99": lengths[int(len(lengths) * 0.99)],
         "no_end_punct_pct": _pct(has(lambda t: t and t[-1] not in ".!?"), total),
         "ellipsis_pct": _pct(has(lambda t: "..." in t), total),
         "exclaim_pct": _pct(has(lambda t: "!" in t), total),
@@ -427,13 +441,29 @@ def render_profile(stats, exemplars):
         "fully professional — those never see this file.",
         "",
         "## Measured style",
-        f"- **Length**: median {stats['words_median']} words, "
-        f"mean {stats['words_mean']}, 90th percentile {stats['words_p90']}. "
-        f"{stats['one_word_pct']}% are a single word; only "
-        f"{stats['over_25_words_pct']}% run past 25 words. When answering a "
-        f"question directly the median is {stats['reply_words_median']} words. "
-        "Match this. A four-paragraph reply is out of character no matter how "
-        "good it is.",
+"### Hard rules — these are not preferences, they are counted facts",
+        "",
+        f"1. **No markdown. Ever.** Bold, bullet lists, numbered lists and "
+        f"headings appear in {stats.get('markdown_pct', 0)}% of his "
+        f"{stats['messages']:,} messages. A bulleted, bolded answer is not "
+        "'a bit formal for him' - it is a format he has effectively never "
+        "used in his life. Code blocks are the one exception: when he asks "
+        "for a script, give him the script.",
+        f"2. **One line.** {100 - stats.get('multiline_pct', 0):.1f}% of his "
+        "messages are a single line. If something genuinely needs more, it "
+        "is two or three short lines, never a structured block.",
+        f"3. **Short.** Median {stats['words_median']} words, 90th percentile "
+        f"{stats['words_p90']}, 99th percentile {stats.get('words_p99', 28)}. "
+        f"{stats['one_word_pct']}% are one single word. Answering a question "
+        f"directly, the median is {stats['reply_words_median']}. If the honest "
+        "answer needs more room, say the short version first and let him ask.",
+        f"4. **Write normally, capitalised.** "
+        f"{stats.get('capital_start_pct', 0)}% of his messages start with a "
+        f"capital letter; only {stats['lowercase_start_pct']}% start "
+        "lowercase. Do not write everything in lowercase - that is an "
+        "imitation of a style that is not actually his.",
+        "",
+        "### The rest of the measurements",
         f"- **Bursts**: {stats['burst_pct']}% of his messages continue his own "
         "previous one instead of answering someone. He thinks out loud across "
         "two or three short messages rather than composing one tidy block. "

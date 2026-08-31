@@ -17,6 +17,7 @@ import memory
 import proposals
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts"))
 import spend_guard
+import voice_style
 
 # Disable telemetry and interactive terminal hooks before importing interpreter
 os.environ["INTERPRETER_ANONYMOUS_TELEMETRY"] = "false"
@@ -860,6 +861,71 @@ def _enqueue_handoff_task(target_agent, depth, reason, prior_output, source_agen
     return filename
 
 
+# How many chain entries a voice rewrite may try before giving up. Same
+# reasoning as ROUTING_MAX_MODELS: a formatting fix must never cost more than
+# the answer it is reformatting.
+VOICE_REWRITE_MAX_MODELS = 2
+VOICE_REWRITE_TIMEOUT_S = 60
+
+
+def _rewrite_in_his_voice(output, thread_id, entry):
+    """Second pass over a chat reply that came back in assistant format.
+
+    The voice profile was already in the system prompt and the worker still
+    answered him in bold headers and numbered lists. Tonight's real Telegram
+    replies show why a stronger prompt would not have fixed it: the register
+    held on short throwaway lines and collapsed the moment the answer had
+    substance. That is a habit, not a misunderstanding - so this measures the
+    output and hands back a specific, named correction instead of repeating
+    an instruction that was already ignored.
+
+    A direct litellm call, not _attempt(): reformatting is a text
+    transformation, and putting it through Open Interpreter would spin up the
+    whole tool-calling loop - shell access included - to rewrite a sentence.
+
+    Never raises and never loses an answer: any failure, and the original
+    reply is returned untouched. A slightly formal answer is a small problem;
+    an empty one is a real one."""
+    if not output or not thread_id or not thread_id.startswith(VOICE_THREAD_PREFIXES):
+        return output
+    profile = _load_voice_profile(thread_id)
+    if not profile:
+        return output
+    found = voice_style.violations(output)
+    if not found:
+        return output
+
+    system = (
+        "You rewrite one chat message so it reads exactly like the person "
+        "below writes. You change only the wording and shape - never the "
+        "facts, never the language, never drop or add information.\n\n"
+        + profile
+    )
+    user = voice_style.nudge(found) + "\n\n--- the message to rewrite ---\n" + output
+    for candidate_entry in ([entry] + MODEL_CHAIN)[:VOICE_REWRITE_MAX_MODELS + 1]:
+        if candidate_entry["paid"] and not spend_guard.can_spend(
+                spend_guard.load_ledger(), OPENROUTER_MONTHLY_BUDGET_USD):
+            continue
+        try:
+            with _time_limit(VOICE_REWRITE_TIMEOUT_S):
+                response = litellm.completion(
+                    model=candidate_entry["model"],
+                    messages=[{"role": "system", "content": system},
+                              {"role": "user", "content": user}],
+                    api_base=candidate_entry["api_base"],
+                    api_key=candidate_entry["api_key"],
+                    max_tokens=1024,
+                )
+            rewritten = (response.choices[0].message.content or "").strip()
+        except Exception as e:  # noqa: BLE001 - see docstring: never lose the answer
+            print(f"[!] voice rewrite via {candidate_entry['model']} failed ({e})")
+            continue
+        if voice_style.is_better(rewritten, output):
+            print(f"[~] voice: rewrote reply ({', '.join(found)})")
+            return rewritten
+    return output
+
+
 def _run_task(task_path, filename):
     with open(task_path, "r", encoding="utf-8") as f:
         raw = f.read()
@@ -886,7 +952,14 @@ def _run_task(task_path, filename):
     # Explicit directive wins over the agent's own default, the same
     # precedence the agent directive itself has over routing: something a
     # caller wrote down deliberately is never overridden by a default.
-    if model_pref is None:
+    #
+    # A ROUTED agent deliberately does not inherit its paid preference. The
+    # router is a guess - its own prompt says to prefer NONE over a weak one -
+    # and a guess must not spend money. Caught live: "welche obsidian plugins
+    # fuers studium?" routed to Study_Teacher on the word "Studium" and would
+    # have billed a casual chat question to the paid tier. Naming the agent
+    # explicitly, or writing the directive, still pays.
+    if model_pref is None and not routed:
         model_pref = agents.model_preference(agent_name)
 
     system_prompt = _system_prompt_for(agent_name, thread_id)
@@ -934,6 +1007,7 @@ def _run_task(task_path, filename):
                                   max_tokens=entry["max_tokens"])
             if entry["paid"]:
                 _record_paid_spend(model, instruction, system_prompt, history, output)
+            output = _rewrite_in_his_voice(output, thread_id, entry)
             break
         except Exception as e:
             print(f"[!] {model} failed ({e})")
