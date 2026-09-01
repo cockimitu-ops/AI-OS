@@ -136,7 +136,25 @@ class PhoneError(RuntimeError):
     said 'nothing'."""
 
 
+def _attached(serial):
+    try:
+        out = subprocess.run(["adb", "devices"], capture_output=True,
+                             timeout=10).stdout.decode("utf-8", "replace")
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return any(l.startswith(serial) and l.rstrip().endswith("device")
+               for l in out.splitlines())
+
+
 def _adb(*args, timeout=ADB_TIMEOUT, binary=False):
+    # Re-establish the registration if it was lost. adb forgets a network
+    # device whenever the connection drops, and then reports "not found" for
+    # a phone that is reachable and listening.
+    if _ACTIVE["serial"] and not _attached(_ACTIVE["serial"]):
+        try:
+            connect()
+        except PhoneError:
+            pass
     cmd = ["adb", "-s", _active_serial(), *args]
     try:
         proc = subprocess.run(cmd, capture_output=True, timeout=timeout)
@@ -423,14 +441,56 @@ def screen_size():
     return (int(m.group(1)), int(m.group(2))) if m else None
 
 
+# One shell invocation instead of five. Each adb round trip over the tailnet
+# costs about a second; separately that made status() take ~6s, which is
+# enough for two phones probed in parallel to both miss the device panel's
+# deadline and be reported offline while perfectly reachable.
+_STATUS_CMD = (
+    "echo '<<<BATTERY>>>'; dumpsys battery; "
+    "echo '<<<POWER>>>'; dumpsys power | grep -m1 mWakefulness; "
+    "echo '<<<ACT>>>'; dumpsys activity activities | grep -m1 -E "
+    "'mResumedActivity|topResumedActivity'; "
+    "echo '<<<SIZE>>>'; wm size"
+)
+
+
+def _split_sections(raw):
+    out, current = {}, None
+    for line in (raw or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("<<<") and stripped.endswith(">>>"):
+            current = stripped.strip("<>")
+            out[current] = []
+        elif current:
+            out[current].append(line)
+    return {k: "\n".join(v) for k, v in out.items()}
+
+
 def status():
-    """Everything readable in one call, for the assistant's own use."""
+    """Everything readable, in a single round trip."""
     connect()
+    sections = _split_sections(_adb("shell", _STATUS_CMD))
+    binfo = {}
+    for line in sections.get("BATTERY", "").splitlines():
+        if ":" in line:
+            k, _, v = line.strip().partition(":")
+            binfo[k.strip()] = v.strip()
+    wake = re.search(r"mWakefulness=(\w+)", sections.get("POWER", ""))
+    app = re.search(r"(?:mResumedActivity|topResumedActivity).*?\{[^}]*?\s([\w.]+)/",
+                    sections.get("ACT", ""))
+    size = re.search(r"Physical size:\s*(\d+)x(\d+)", sections.get("SIZE", ""))
     return {
         "reachable": True,
-        "battery": battery(),
-        "screen_on": screen_on(),
-        "current_app": current_app(),
+        "battery": {
+            "level": int(binfo["level"]) if binfo.get("level", "").isdigit() else None,
+            "charging": binfo.get("AC powered") == "true"
+                        or binfo.get("USB powered") == "true",
+            "temperature_c": (int(binfo["temperature"]) / 10
+                              if binfo.get("temperature", "").isdigit() else None),
+        },
+        "screen_on": (wake.group(1).lower() == "awake") if wake else None,
+        "current_app": app.group(1) if app else None,
+        "size": (int(size.group(1)), int(size.group(2))) if size else None,
         "notifications": notifications(),
     }
 

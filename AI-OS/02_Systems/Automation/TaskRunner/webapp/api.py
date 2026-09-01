@@ -313,7 +313,10 @@ DEVICES = {
 # to put a factory reset.
 # A panel is an at-a-glance view; waiting longer than this for a phone that
 # is probably asleep makes the whole screen feel broken.
-DEVICE_PROBE_S = 9
+# Raised from 9s once the probes themselves dropped from ~6s to under
+# a second: the headroom is now for a phone waking from doze, not for
+# protocol overhead.
+DEVICE_PROBE_S = 12
 
 DEVICE_ACTIONS = {"screenshot", "tap", "swipe", "key", "text", "open", "status"}
 
@@ -335,7 +338,10 @@ def get_devices(_body):
         row = {"id": key, "label": entry["label"], "rooted": entry["rooted"]}
         try:
             state = entry["module"].status()
-            size = entry["module"].screen_size()
+            # From the same round trip status() already made. A separate
+            # screen_size() call doubled the probe cost for a number that
+            # arrives free with everything else.
+            size = state.get("size") or entry["module"].screen_size()
             row.update({
                 "reachable": True,
                 "battery": state.get("battery"),

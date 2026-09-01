@@ -5178,6 +5178,97 @@ class TestPhoneRootToolkit(unittest.TestCase):
         cls.pr = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.pr)
 
+    def test_status_is_one_round_trip_not_five(self):
+        """Each adb call over the tailnet costs about a second. status() used
+        to make five - getprop, battery, power, activity, size - so probing
+        two phones in parallel blew the panel's deadline and both were
+        reported offline while perfectly reachable. Measured after batching:
+        5.3s -> 0.8s."""
+        calls = []
+        orig = self.pr._adb
+        self.pr._adb = lambda *a, **k: calls.append(a) or (
+            "<<<PROPS>>>\n[ro.product.model]: [X]\n"
+            "<<<BATTERY>>>\n  level: 50\n  AC powered: false\n"
+            "<<<POWER>>>\n  mWakefulness=Awake\n"
+            "<<<ACT>>>\n  mResumedActivity: ActivityRecord{u0 com.x/.Main}\n"
+            "<<<SIZE>>>\nPhysical size: 1080x2400\n")
+        try:
+            info = self.pr.status()
+        finally:
+            self.pr._adb = orig
+        self.assertEqual(len(calls), 1, f"{len(calls)} adb calls, expected 1")
+        self.assertEqual(info["battery"]["level"], 50)
+        self.assertTrue(info["screen_on"])
+        self.assertEqual(info["size"], (1080, 2400))
+        self.assertEqual(info["current_app"], "com.x")
+
+    def test_status_does_not_probe_root_on_every_refresh(self):
+        """has_root() is its own `su` round trip. The panel refreshes
+        constantly; root status changes about once a year."""
+        orig = self.pr._adb
+        self.pr._adb = lambda *a, **k: "<<<BATTERY>>>\n  level: 10\n"
+        try:
+            self.assertIsNone(self.pr.status()["rooted"])
+        finally:
+            self.pr._adb = orig
+
+    def test_a_truncated_status_reply_does_not_crash(self):
+        """A phone waking from doze can answer partially."""
+        orig = self.pr._adb
+        self.pr._adb = lambda *a, **k: "<<<BATTERY>>>\n"
+        try:
+            info = self.pr.status()
+        finally:
+            self.pr._adb = orig
+        self.assertIsNone(info["battery"]["level"])
+        self.assertIsNone(info["size"])
+
+    def test_a_lost_registration_reconnects_instead_of_failing(self):
+        """adb only knows a network device after an explicit `adb connect`,
+        and that registration is lost on every drop - reboot, doze, network
+        change. The daemon then reports "device not found" for a phone that is
+        reachable and listening, and nothing restores it on its own. That is
+        why the Poco kept needing a manual reconnect after each interruption,
+        and why it looked offline in the panel while being perfectly fine."""
+        calls = []
+        orig_attached, orig_reconnect = self.pr._is_attached, self.pr.reconnect
+        self.pr._is_attached = lambda: False
+        self.pr.reconnect = lambda: calls.append("reconnect") or True
+        orig_run = self.pr.subprocess.run
+        class Result:
+            returncode = 0
+            stdout = b"ok"
+            stderr = b""
+        self.pr.subprocess.run = lambda *a, **k: Result()
+        try:
+            self.pr._adb("shell", "echo", "ok")
+        finally:
+            self.pr._is_attached = orig_attached
+            self.pr.reconnect = orig_reconnect
+            self.pr.subprocess.run = orig_run
+        self.assertEqual(calls, ["reconnect"])
+
+    def test_reconnect_is_attempted_once_not_forever(self):
+        """A genuinely absent phone must fail, not loop reconnecting."""
+        orig_attached, orig_reconnect = self.pr._is_attached, self.pr.reconnect
+        tries = []
+        self.pr._is_attached = lambda: False
+        self.pr.reconnect = lambda: tries.append(1) or True
+        orig_run = self.pr.subprocess.run
+        class Result:
+            returncode = 1
+            stdout = b""
+            stderr = b"device 'x' not found"
+        self.pr.subprocess.run = lambda *a, **k: Result()
+        try:
+            with self.assertRaises(self.pr.PhoneError):
+                self.pr._adb("shell", "echo", "ok")
+        finally:
+            self.pr._is_attached = orig_attached
+            self.pr.reconnect = orig_reconnect
+            self.pr.subprocess.run = orig_run
+        self.assertLessEqual(len(tries), 2)
+
     def test_destructive_verbs_exist_but_refuse_without_confirm(self):
         """Present and callable by Felix, unreachable by accident. Same
         pattern as OPENROUTER_PAID_ENABLED and AIOS_MCP_ALLOW_DISPATCH:

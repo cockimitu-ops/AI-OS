@@ -86,7 +86,30 @@ def reconnect():
         return False
 
 
+def _is_attached():
+    """Is the device registered with the adb daemon at all?
+
+    Distinct from "is it reachable". adb only knows about a network device
+    after an explicit `adb connect`, and that registration is lost whenever
+    the connection drops - phone reboot, doze, network change. The daemon then
+    reports "device not found" for a phone that is perfectly reachable and
+    listening, and nothing reconnects on its own. That is exactly why the Poco
+    kept needing a manual reconnect after every interruption."""
+    try:
+        out = subprocess.run(["adb", "devices"], capture_output=True,
+                             timeout=10).stdout.decode("utf-8", "replace")
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return any(line.startswith(DEVICE) and line.rstrip().endswith("device")
+               for line in out.splitlines())
+
+
 def _adb(*args, timeout=ADB_TIMEOUT, binary=False, check=True, _retried=False):
+    # Reconnect before failing rather than after: adbd is listening again the
+    # moment the phone is back, so the only thing missing is the registration,
+    # and restoring it costs one cheap call.
+    if not _retried and not _is_attached():
+        reconnect()
     cmd = ["adb", "-s", DEVICE, *args]
     try:
         proc = subprocess.run(cmd, capture_output=True, timeout=timeout)
@@ -101,8 +124,13 @@ def _adb(*args, timeout=ADB_TIMEOUT, binary=False, check=True, _retried=False):
                         _retried=True)
         raise PhoneError(f"adb timed out after {timeout}s")
     if check and proc.returncode != 0:
-        raise PhoneError(proc.stderr.decode("utf-8", "replace").strip()
-                         or "adb failed")
+        err = proc.stderr.decode("utf-8", "replace").strip()
+        # Lost between the attach check and the call itself - one more
+        # reconnect, then report honestly.
+        if not _retried and "not found" in err.lower() and reconnect():
+            return _adb(*args, timeout=timeout, binary=binary, check=check,
+                        _retried=True)
+        raise PhoneError(err or "adb failed")
     return proc.stdout if binary else proc.stdout.decode("utf-8", "replace")
 
 
@@ -530,7 +558,76 @@ def screen_size():
     return (int(m.group(1)), int(m.group(2))) if m else None
 
 
+# One shell invocation instead of five. Each adb round trip over the tailnet
+# costs about a second, so status() was taking 5-6s purely in protocol
+# overhead - enough that two phones probed in parallel both missed the device
+# panel's deadline and were reported offline while being perfectly reachable.
+# The markers let one output be split back into its parts.
+_STATUS_CMD = (
+    "echo '<<<PROPS>>>'; getprop; "
+    "echo '<<<BATTERY>>>'; dumpsys battery; "
+    "echo '<<<POWER>>>'; dumpsys power | grep -m1 mWakefulness; "
+    "echo '<<<ACT>>>'; dumpsys activity activities | grep -m1 -E "
+    "'mResumedActivity|topResumedActivity'; "
+    "echo '<<<SIZE>>>'; wm size"
+)
+
+
+def _split_sections(raw):
+    out, current = {}, None
+    for line in (raw or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("<<<") and stripped.endswith(">>>"):
+            current = stripped.strip("<>")
+            out[current] = []
+        elif current:
+            out[current].append(line)
+    return {k: "\n".join(v) for k, v in out.items()}
+
+
 def status():
+    """Everything the panel needs, in a single round trip."""
+    sections = _split_sections(_adb("shell", _STATUS_CMD))
+    props = {}
+    for line in sections.get("PROPS", "").splitlines():
+        m = re.match(r"\[([^\]]+)\]:\s*\[([^\]]*)\]", line.strip())
+        if m:
+            props[m.group(1)] = m.group(2)
+
+    binfo = {}
+    for line in sections.get("BATTERY", "").splitlines():
+        if ":" in line:
+            k, _, v = line.strip().partition(":")
+            binfo[k.strip()] = v.strip()
+
+    wake = re.search(r"mWakefulness=(\w+)", sections.get("POWER", ""))
+    app = re.search(r"(?:mResumedActivity|topResumedActivity).*?\{[^}]*?\s([\w.]+)/",
+                    sections.get("ACT", ""))
+    size = re.search(r"Physical size:\s*(\d+)x(\d+)", sections.get("SIZE", ""))
+
+    info = {
+        "model": props.get("ro.product.model"),
+        "device": props.get("ro.product.device"),
+        "android": props.get("ro.build.version.release"),
+        "sdk": props.get("ro.build.version.sdk"),
+        "security_patch": props.get("ro.build.version.security_patch"),
+        # Deliberately NOT probed here: has_root() is a separate `su` round
+        # trip, and the panel refreshes constantly while root status changes
+        # about once a year. device_info() still reports it when asked.
+        "rooted": None,
+        "battery": {
+            "level": int(binfo["level"]) if binfo.get("level", "").isdigit() else None,
+            "charging": binfo.get("AC powered") == "true"
+                        or binfo.get("USB powered") == "true",
+        },
+        "screen_on": (wake.group(1).lower() == "awake") if wake else None,
+        "current_app": app.group(1) if app else None,
+        "size": (int(size.group(1)), int(size.group(2))) if size else None,
+    }
+    return info
+
+
+def status_full():
     info = device_info()
     info["battery"] = battery()
     info["screen_on"] = screen_on()
