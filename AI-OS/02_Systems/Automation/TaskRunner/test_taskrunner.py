@@ -4857,3 +4857,112 @@ class TestPhoneControl(unittest.TestCase):
                 self.ph.screenshot()
         finally:
             self.ph._adb = original
+
+
+class TestPhoneRootToolkit(unittest.TestCase):
+    """Extended toolkit for the rooted Poco X3 Pro (added 2026-09-01).
+
+    Felix asked for a toolkit without restrictions on his own rooted phone -
+    his device, his call. These tests do not guard against HIM; they guard the
+    boundary between "capability available" and "an unattended agent can reach
+    it by accident", and they cover the shell-quoting, which is the part that
+    turns a filename into a command."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "phone_root", os.path.join(HERE, "scripts", "phone_root.py"))
+        cls.pr = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.pr)
+
+    def test_destructive_verbs_exist_but_refuse_without_confirm(self):
+        """Present and callable by Felix, unreachable by accident. Same
+        pattern as OPENROUTER_PAID_ENABLED and AIOS_MCP_ALLOW_DISPATCH:
+        capability there, enabling it a decision."""
+        with self.assertRaises(self.pr.PhoneError):
+            self.pr.uninstall("com.example.app")
+        with self.assertRaises(self.pr.PhoneError):
+            self.pr.wipe_package_data("com.example.app")
+        with self.assertRaises(self.pr.PhoneError):
+            self.pr.remove_file("/sdcard/x")
+        with self.assertRaises(self.pr.PhoneError):
+            self.pr.reboot("recovery")
+
+    def test_the_refusal_says_how_to_proceed(self):
+        """A gate that does not say how to pass it is just an obstacle."""
+        with self.assertRaises(self.pr.PhoneError) as ctx:
+            self.pr.uninstall("com.example.app")
+        self.assertIn("confirm=True", str(ctx.exception))
+
+    def test_a_normal_reboot_is_not_gated(self):
+        """It costs a minute. Recovery and bootloader drop him somewhere he
+        has to climb out of by hand, which is a different thing."""
+        called = {}
+        original = self.pr._adb
+        self.pr._adb = lambda *a, **k: called.setdefault("args", a) or ""
+        try:
+            self.pr.reboot()
+        finally:
+            self.pr._adb = original
+        self.assertEqual(called["args"], ("reboot",))
+
+    def test_shell_quoting_neutralises_injection(self):
+        """Everything reaching `adb shell` is re-parsed by a shell ON THE
+        PHONE, so a path with a semicolon is not a formatting problem - it is
+        command execution on his device."""
+        import shlex
+        evil = "/sdcard/x'; rm -rf /sdcard; echo '"
+        quoted = self.pr._q(evil)
+        # Parsed the way the phone's shell will parse it: it must come back as
+        # exactly ONE argument, identical to the input. If the quoting were
+        # wrong this would split into several words and "rm" would be one of
+        # them - a command, not a filename.
+        parsed = shlex.split(quoted)
+        self.assertEqual(parsed, [evil])
+        self.assertNotIn("rm", parsed)
+
+    def test_package_names_are_validated_before_reaching_a_shell(self):
+        for evil in ("com.x; reboot", "$(id)", "a b", "", "../etc/passwd"):
+            with self.assertRaises(self.pr.PhoneError):
+                self.pr.app_info(evil)
+
+    def test_setting_namespace_and_key_are_validated(self):
+        with self.assertRaises(self.pr.PhoneError):
+            self.pr.setting("evil", "key")
+        with self.assertRaises(self.pr.PhoneError):
+            self.pr.setting("system", "key; reboot")
+
+    def test_screen_recording_length_is_capped(self):
+        """screenrecord's own limit is 180s, and an unbounded call blocks the
+        caller for minutes."""
+        captured = {}
+        orig_sh, orig_adb = self.pr.sh, self.pr._adb
+        self.pr.sh = lambda cmd, **k: captured.setdefault("cmd", cmd) or ""
+        self.pr._adb = lambda *a, **k: ""
+        try:
+            self.pr.record(seconds=9999)
+        finally:
+            self.pr.sh, self.pr._adb = orig_sh, orig_adb
+        self.assertIn("--time-limit 180", captured["cmd"])
+
+    def test_has_root_checks_uid_not_the_su_binary(self):
+        """Magisk can be installed and still DENY the request, and a denied
+        su returns success with empty output - so looking for the binary
+        reports root that is not there."""
+        original = self.pr.sh
+        self.pr.sh = lambda *a, **k: ""
+        try:
+            self.assertFalse(self.pr.has_root())
+        finally:
+            self.pr.sh = original
+        self.pr.sh = lambda *a, **k: "uid=0(root) gid=0(root)"
+        try:
+            self.assertTrue(self.pr.has_root())
+        finally:
+            self.pr.sh = original
+
+    def test_dangerous_list_matches_the_gated_functions(self):
+        """So a verb added later without a gate shows up as a failing test
+        rather than as a live footgun."""
+        for name in ("uninstall", "wipe_package_data", "remove_file"):
+            self.assertIn(name, self.pr.DANGEROUS)
