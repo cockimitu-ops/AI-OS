@@ -340,8 +340,80 @@ def _require_confirm(action, confirm):
             f"it by accident.")
 
 
+def notifications():
+    """-> [{"package", "title", "text"}] currently on the shade.
+
+    Root matters here: `dumpsys notification --noredact` only returns the
+    actual message text to a privileged caller. Unprivileged, the interesting
+    fields come back redacted, which produces a list of packages with no
+    content - technically a notification list, useless for deciding whether
+    something needs attention.
+
+    Parses defensively: dumpsys formats for humans and the layout shifts
+    between Android versions. This is triage, not a mail client, so a missing
+    field is worth less than a crash."""
+    try:
+        out = sh("dumpsys notification --noredact", root=True)
+    except PhoneError:
+        return []
+    found, current = [], None
+    for line in out.splitlines():
+        line = line.strip()
+        m = re.search(r"pkg=([\w.]+)", line)
+        if m and "NotificationRecord" in line:
+            if current and (current["title"] or current["text"]):
+                found.append(current)
+            current = {"package": m.group(1), "title": "", "text": ""}
+            continue
+        if current is None:
+            continue
+        for key, field in (("android.title=", "title"), ("android.text=", "text")):
+            if key in line:
+                value = line.split(key, 1)[1].strip()
+                value = re.sub(r"^String\s*\(", "", value).rstrip(")").strip()
+                if value and value.lower() != "null":
+                    current[field] = value[:300]
+    if current and (current["title"] or current["text"]):
+        found.append(current)
+    # An ongoing notification is re-posted on every update and appears many
+    # times in one dump - a music player would otherwise fill the whole list.
+    seen, unique = set(), []
+    for n in found:
+        key = (n["package"], n["title"], n["text"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(n)
+    return unique
+
+
+def screen_on():
+    m = re.search(r"mWakefulness=(\w+)", sh("dumpsys power"))
+    return (m.group(1) if m else "").lower() == "awake"
+
+
+def battery():
+    info = {}
+    for line in sh("dumpsys battery").splitlines():
+        if ":" in line:
+            k, _, v = line.strip().partition(":")
+            info[k.strip()] = v.strip()
+    return {
+        "level": int(info["level"]) if info.get("level", "").isdigit() else None,
+        "charging": info.get("AC powered") == "true" or info.get("USB powered") == "true",
+    }
+
+
+def current_app():
+    m = re.search(r"(?:mResumedActivity|topResumedActivity).*?\{[^}]*?\s([\w.]+)/",
+                  sh("dumpsys activity activities"))
+    return m.group(1) if m else None
+
+
 def status():
     info = device_info()
+    info["battery"] = battery()
+    info["screen_on"] = screen_on()
+    info["current_app"] = current_app()
     info["tailnet"] = tailnet_address()
     return info
 

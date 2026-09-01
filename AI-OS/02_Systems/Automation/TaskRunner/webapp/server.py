@@ -47,6 +47,7 @@ TOKEN = os.environ.get("AIOS_WEB_TOKEN", "")
 # a handful of entries is well inside what a manual table can hold clearly.
 API_ROUTES = {
     ("GET", "/api/today"): api.get_today,
+    ("GET", "/api/phone"): api.get_phone,
     # POST because they take a query body; both are reads and change nothing.
     ("POST", "/api/snipes"): api.get_snipes,
     ("POST", "/api/vault-search"): api.get_vault_search,

@@ -28,6 +28,7 @@ import memory
 import money_board
 import dmarc_prospector
 import flip_log
+import phone_root
 import proposals
 import snipe_rank
 import study_agent
@@ -59,6 +60,48 @@ ALLOWED_UPLOAD_EXT = (".txt", ".zip", ".csv", ".json", ".md",
                       # on his phone, he photographs slides and boards).
                       ".jpg", ".jpeg", ".png", ".heic", ".webp", ".pdf")
 UNSAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._ ()\u00c0-\u024f-]")
+
+
+# --- phone ---------------------------------------------------------------
+
+# Notification packages that are never worth surfacing: system plumbing and
+# persistent media controls. An assistant that reports "Android System" and a
+# paused Spotify track as things needing attention teaches you to ignore it.
+PHONE_NOISE = {
+    "android", "com.android.systemui", "com.android.settings",
+    "com.miui.securitycenter", "com.miui.powerkeeper", "com.xiaomi.misettings",
+    "com.google.android.gms", "com.android.providers.downloads",
+    "com.spotify.music", "com.miui.player", "com.google.android.apps.youtube.music",
+}
+
+
+def get_phone(_body):
+    """Live state of the rooted phone: battery, foreground app, notifications
+    worth seeing.
+
+    Degrades rather than fails. The phone is frequently unreachable - out of
+    the house on mobile data with the tailnet asleep, rebooted since the last
+    `adb tcpip`, or simply off - and none of that should make the home screen
+    show an error. Unreachable is a normal state for a phone, not a fault."""
+    try:
+        state = phone_root.status()
+    except Exception as e:  # noqa: BLE001 - see docstring
+        return 200, {"reachable": False, "reason": str(e)[:160]}
+
+    try:
+        notes = phone_root.notifications()
+    except Exception:  # noqa: BLE001
+        notes = []
+    signal = [n for n in notes if n.get("package") not in PHONE_NOISE]
+    return 200, {
+        "reachable": True,
+        "battery": state.get("battery"),
+        "screen_on": state.get("screen_on"),
+        "current_app": state.get("current_app"),
+        "notifications": signal[:12],
+        "notification_total": len(notes),
+        "filtered": len(notes) - len(signal),
+    }
 
 
 # --- snipes --------------------------------------------------------------

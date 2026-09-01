@@ -345,6 +345,12 @@ async function loadToday() {
       });
     }
 
+    // Loaded separately and never awaited with the rest: the phone is often
+    // unreachable (out of the house, rebooted since the last adb tcpip, or
+    // simply off) and it must not be able to delay or break the screen that
+    // has to be trustworthy at a glance.
+    loadPhoneCard();
+
     const last = d.sniper?.last_run;
     quietEl.textContent = last
       ? `Sniper zuletzt ${new Date(last).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })} · ${d.sniper.alerted} Funde insgesamt`
@@ -352,6 +358,39 @@ async function loadToday() {
   } catch (err) {
     setConnDot("err");
     heroEl.innerHTML = `<div class="hero"><div class="hero-action">Fehler: ${escapeHtml(err.message)}</div></div>`;
+  }
+}
+
+async function loadPhoneCard() {
+  const el = document.getElementById("today-phone");
+  if (!el) return;
+  try {
+    const p = await api("/api/phone");
+    if (!p.reachable) {
+      el.innerHTML = `<div class="phone-head"><span class="phone-dot off"></span>
+        <span class="phone-label">Handy nicht erreichbar</span></div>`;
+      return;
+    }
+    const b = p.battery || {};
+    const notes = p.notifications || [];
+    el.innerHTML = `
+      <div class="phone-head">
+        <span class="phone-dot ${b.charging ? "charging" : ""}"></span>
+        <span class="phone-label">Handy</span>
+        <span class="phone-meta">${b.level ?? "?"}%${b.charging ? " lädt" : ""} ·
+          ${p.screen_on ? "Bildschirm an" : "Bildschirm aus"}</span>
+      </div>
+      ${notes.length ? notes.map((n) => `
+        <div class="phone-note">
+          <span class="np">${escapeHtml((n.package || "").split(".").pop())}</span>
+          <span class="nt">${escapeHtml(n.title || "")}</span>
+          <span class="nx">${escapeHtml(n.text || "")}</span>
+        </div>`).join("")
+        : `<div class="phone-note quiet">Nichts, was dich unterbrechen müsste.</div>`}
+      ${p.filtered ? `<div class="phone-filtered">${p.filtered} Systemmeldung${p.filtered === 1 ? "" : "en"} ausgeblendet</div>` : ""}`;
+  } catch (err) {
+    el.innerHTML = `<div class="phone-head"><span class="phone-dot off"></span>
+      <span class="phone-label">Handy: ${escapeHtml(err.message)}</span></div>`;
   }
 }
 

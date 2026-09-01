@@ -3565,6 +3565,52 @@ class TestWebappApi(unittest.TestCase):
         finally:
             os.remove(log)
 
+    def test_phone_unreachable_is_a_normal_state_not_an_error(self):
+        """The phone is often away - out of the house with the tailnet asleep,
+        rebooted since the last adb tcpip, or simply off. None of that should
+        make the home screen show an error, and none of it should return a
+        non-200: unreachable is a fact about the phone, not a fault in the
+        server."""
+        original = self.api.phone_root
+        class Away:
+            def __getattr__(self, _):
+                raise RuntimeError("Phone not reachable")
+        self.api.phone_root = Away()
+        try:
+            status, payload = self.api.get_phone({})
+        finally:
+            self.api.phone_root = original
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["reachable"])
+        self.assertIn("reason", payload)
+
+    def test_phone_notification_noise_is_filtered_but_counted(self):
+        """An assistant that reports "Android System" and a paused music
+        player as things needing attention teaches you to ignore it. The
+        filtered count is still reported, so nothing is hidden silently."""
+        original = self.api.phone_root
+        class Fake:
+            @staticmethod
+            def status():
+                return {"battery": {"level": 50, "charging": False},
+                        "screen_on": True, "current_app": "com.whatsapp"}
+            @staticmethod
+            def notifications():
+                return [
+                    {"package": "com.android.systemui", "title": "System", "text": ""},
+                    {"package": "com.spotify.music", "title": "Now playing", "text": "x"},
+                    {"package": "com.whatsapp", "title": "Mutti", "text": "Ruf an"},
+                ]
+        self.api.phone_root = Fake()
+        try:
+            _, payload = self.api.get_phone({})
+        finally:
+            self.api.phone_root = original
+        self.assertEqual(len(payload["notifications"]), 1)
+        self.assertEqual(payload["notifications"][0]["package"], "com.whatsapp")
+        self.assertEqual(payload["filtered"], 2)
+        self.assertEqual(payload["notification_total"], 3)
+
     def test_dmarc_leads_shape(self):
         status, payload = self.api.get_dmarc_leads({})
         self.assertEqual(status, 200)

@@ -640,3 +640,32 @@ body[data-screen="screen-downloads"] #fx-grain {
 .data-row.snipe .reasons {
   margin-top: 5px; font-size: 0.75rem; color: var(--text-faint); line-height: 1.45;
 }
+
+/* --- phone card on Today ------------------------------------------------- */
+
+.phone-card { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--border); }
+.phone-head { display: flex; align-items: center; gap: 9px; margin-bottom: 12px; }
+.phone-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint);
+  flex-shrink: 0;
+}
+.phone-dot.charging { background: var(--good); box-shadow: 0 0 9px var(--good); }
+.phone-dot.off { background: var(--text-faint); }
+.phone-label {
+  font-size: 0.72rem; letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--text-dim);
+}
+.phone-meta { font-size: 0.78rem; color: var(--text-faint); margin-left: auto; }
+
+.phone-note { padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 0.85rem; }
+.phone-note:last-of-type { border-bottom: 0; }
+.phone-note.quiet { color: var(--text-faint); font-style: italic; border-bottom: 0; }
+/* The app name is the least important part - it orients you, it is not the
+   message. Dim and small; the title carries the weight. */
+.phone-note .np {
+  display: inline-block; font-size: 0.68rem; color: var(--text-faint);
+  text-transform: uppercase; letter-spacing: 0.09em; margin-right: 8px;
+}
+.phone-note .nt { color: var(--text); }
+.phone-note .nx { display: block; color: var(--text-dim); font-size: 0.8rem; margin-top: 2px; }
+.phone-filtered { margin-top: 10px; font-size: 0.72rem; color: var(--text-faint); }

@@ -163,6 +163,16 @@ const READ_TOOLS = [
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
+    name: "aios_phone",
+    description:
+      "Live state of Felix's rooted phone: battery, whether the screen is on, " +
+      "the foreground app, and the notifications actually worth seeing " +
+      "(system plumbing and media controls are filtered out). Returns " +
+      "reachable:false rather than failing when the phone is off or away - " +
+      "that is a normal state for a phone, not an error.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
     name: "aios_flip_log",
     description: "The LocalArbitrage flip log: what was bought, sold, and net per hour.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -217,6 +227,8 @@ function buildServer(): Server {
           return text(await callApi("/api/vault-page", "POST", { page: args.page }));
         case "aios_dmarc_leads":
           return text(await callApi("/api/dmarc-leads"));
+        case "aios_phone":
+          return text(await callApi("/api/phone"));
         case "aios_flip_log":
           return text(await callApi("/api/flip-log"));
         case "aios_dispatch_task": {
