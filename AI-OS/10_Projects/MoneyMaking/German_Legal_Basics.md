@@ -1,7 +1,7 @@
 # German Legal Basics
 
 Purpose: German tax/legal facts that stay relevant regardless of which specific business direction gets chosen — preserved from v1 research rather than discarded along with the rejected candidate ideas.
-Last Updated: 2026-08-04
+Last Updated: 2026-09-01
 Status: Active — from Perplexity research, not independently verified by Claude
 Related Documents: [[10_Projects/MoneyMaking/README|MoneyMaking]]
 
@@ -24,6 +24,9 @@ During a first Ausbildung or first degree, there's no income limit — parents k
 
 ## Krankenversicherung — Familienversicherung
 **The number that matters most for anything that scales:** free family insurance coverage holds as long as self-employment stays secondary (under 20 hours/week) and monthly income stays under **€565/month**. Crossing that threshold risks roughly €150/month in independent contributions. This is a bigger practical brake on scaling than tax or business registration — confirm with the Krankenkasse in writing before approaching it, not after.
+
+## BAföG — a separate system from the €565 Familienversicherung line
+**Added 2026-09-01, unverified — flagged, not researched.** Felix receives BAföG for his upcoming studies and is considering registering the DMARC Gewerbe under his mother's name with himself employed as a Minijobber, specifically to keep the income off his own BAföG assessment. **Not yet confirmed whether this actually works**: BAföG's income test (§21 BAföG) covers a student's own earned income broadly, and Minijob wages are still Felix's own earned income — restructuring who owns the Gewerbe may not remove that income from the BAföG calculation at all, just move which line item it appears under. This is a completely different legal system and threshold from the €565/month Familienversicherung line above — do not conflate the two. Confirm the actual mechanics in writing with the BAföG-Amt/Studentenwerk before building a plan around this assumption. Also unverified: how German social insurance law treats employment between family members ("Beschäftigung unter Angehörigen") — a real scrutiny category, exact tests not researched here.
 
 ## DAC7 / Platform Tax Transparency
 Etsy, eBay, Vinted, and similar platforms automatically report seller data to the Bundeszentralamt für Steuern once a seller passes **30 sales or €2,000 in revenue** in a year. Being reported doesn't automatically mean tax is owed for genuine private occasional sales — but a real commercial activity still needs proper registration regardless of whether DAC7 reporting triggers.
