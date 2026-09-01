@@ -503,11 +503,51 @@ def post_chat(body):
         f.write(body_text)
     os.replace(tmp_path, task_path)  # atomic enqueue, same reason dispatch_task.py does this
 
-    start = time.time()
-    while time.time() - start < CHAT_TIMEOUT_S:
-        if os.path.exists(log_path):
-            with open(log_path, encoding="utf-8") as f:
-                return 200, {"reply": f.read().strip(), "agent": agent}
-        time.sleep(1)
+    # Returns immediately with a ticket instead of holding the connection open
+    # until the worker finishes.
+    #
+    # Why this changed: a real message on 2026-09-01 took 93 seconds to answer.
+    # The worker produced a perfectly good reply and wrote it to its log - and
+    # Felix saw "failed to fetch", because a phone browser does not keep a
+    # request open that long. Screen off, app backgrounded, or a network switch
+    # and the fetch dies. The answer existed and was unreachable, which is the
+    # worst of both outcomes.
+    #
+    # Polling also makes the reply survive a reload: the ticket is the task
+    # filename, so a client that comes back later can still collect it.
+    return 200, {"task_id": filename, "pending": True, "agent": agent}
 
-    return 504, {"error": "worker did not respond in time"}
+
+def get_chat_result(body):
+    """Collect a queued chat reply. -> pending, ready, or failed.
+
+    Deliberately reports elapsed seconds: the client shows it, so a slow model
+    reads as "still thinking, 40s" rather than as a frozen app. That ambiguity
+    is what made the old behaviour feel broken."""
+    task_id = (body or {}).get("task_id") or ""
+    # The ticket becomes a filesystem path, so it is validated as a plain
+    # task filename and nothing else.
+    if not re.fullmatch(r"task_web_[\w.-]{1,60}\.md", task_id):
+        return 400, {"error": "invalid task_id"}
+
+    log_path = os.path.join(LOGS, f"{task_id}.log")
+    if os.path.exists(log_path):
+        with open(log_path, encoding="utf-8") as f:
+            return 200, {"ready": True, "reply": f.read().strip()}
+
+    queued = os.path.join(INBOX, task_id)
+    running = os.path.join(TASK_RUNNER_DIR, "tasks", "completed", task_id)
+    if not os.path.exists(queued) and not os.path.exists(running):
+        # Neither waiting, nor finished, nor recorded as done: the task is
+        # gone. Saying so beats polling forever against a task that will
+        # never produce a log.
+        return 200, {"ready": False, "lost": True,
+                     "error": "Task nicht mehr auffindbar"}
+
+    try:
+        age = int(time.time() - os.path.getmtime(queued if os.path.exists(queued)
+                                                 else running))
+    except OSError:
+        age = 0
+    return 200, {"ready": False, "elapsed": age,
+                 "timed_out": age > CHAT_TIMEOUT_S}

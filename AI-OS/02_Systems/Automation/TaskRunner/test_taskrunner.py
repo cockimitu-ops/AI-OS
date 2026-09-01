@@ -3524,6 +3524,47 @@ class TestWebappApi(unittest.TestCase):
         self.assertEqual(self.api.get_vault_page({"page": "Nope_Does_Not_Exist"})[0], 404)
         self.assertEqual(self.api.get_vault_page({})[0], 400)
 
+    def test_chat_returns_a_ticket_immediately_not_a_reply(self):
+        """A real message on 2026-09-01 took 93 seconds. The worker answered
+        correctly and Felix saw "failed to fetch" - a phone browser will not
+        hold a request open that long through a screen blanking. The answer
+        existed and was unreachable, which is the worst possible outcome."""
+        status, payload = self.api.post_chat(
+            {"message": "hallo", "thread_id": "test-ticket"})
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["pending"])
+        self.assertRegex(payload["task_id"], r"^task_web_.+\.md$")
+        self.assertNotIn("reply", payload)
+        os.remove(os.path.join(self.api.INBOX, payload["task_id"]))
+
+    def test_chat_result_rejects_a_ticket_that_is_a_path(self):
+        """The ticket becomes a filesystem path, so anything that is not a
+        plain task filename must be refused before it gets there."""
+        for evil in ("../../etc/passwd", "/etc/shadow", "task_web_../x.md",
+                     "", "other_task.md"):
+            status, _ = self.api.get_chat_result({"task_id": evil})
+            self.assertEqual(status, 400, evil)
+
+    def test_chat_result_reports_a_vanished_task_instead_of_polling_forever(self):
+        status, payload = self.api.get_chat_result(
+            {"task_id": "task_web_20200101_000000_000000.md"})
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["lost"])
+
+    def test_chat_result_returns_the_reply_once_the_log_exists(self):
+        task_id = "task_web_20260101_120000_000001.md"
+        log = os.path.join(self.api.LOGS, f"{task_id}.log")
+        os.makedirs(self.api.LOGS, exist_ok=True)
+        with open(log, "w", encoding="utf-8") as f:
+            f.write("  fertige Antwort  ")
+        try:
+            status, payload = self.api.get_chat_result({"task_id": task_id})
+            self.assertEqual(status, 200)
+            self.assertTrue(payload["ready"])
+            self.assertEqual(payload["reply"], "fertige Antwort")
+        finally:
+            os.remove(log)
+
     def test_dmarc_leads_shape(self):
         status, payload = self.api.get_dmarc_leads({})
         self.assertEqual(status, 200)

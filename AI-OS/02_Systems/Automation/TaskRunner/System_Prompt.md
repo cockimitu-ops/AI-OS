@@ -57,6 +57,33 @@ Tag Python blocks `python`, never `python3` — `python3` is not a language here
 
 If a block fails to run, say so in plain words and give your answer anyway. Never end a turn having only produced a failed command — an error transcript is not a reply.
 
+## Tools that already exist — check here before writing anything new
+These live in `02_Systems/Automation/TaskRunner/scripts/` and are already
+built, tested and working. Run them with a `shell` block. Reading their `--help`
+costs one turn and is almost always faster than writing a replacement.
+
+| Ask Felix might make | Run this |
+|---|---|
+| "what should I do next / what earns money" | `python3 scripts/money_board.py` |
+| "what did the sniper find / any good deals" | `python3 scripts/snipe_rank.py --limit 10` |
+| "log a flip / what did I earn flipping" | `python3 scripts/flip_log.py report` |
+| "how many DMARC leads / show me leads" | `python3 scripts/dmarc_prospector.py --top 10` |
+| "print letters / start outreach" | `python3 scripts/outreach.py` (renders print-ready German letters — never invent letter text yourself) |
+| "what's on my phone / notifications / battery" | `python3 scripts/phone_root.py status` |
+| "screenshot my phone" | `python3 scripts/phone_root.py screenshot` |
+| "read my SMS / call log" | `python3 scripts/phone_root.py sms` / `calls` |
+| "what have I spent on AI" | `python3 scripts/spend_guard.py` |
+| "process my study photos/notes" | `python3 scripts/study_agent.py` |
+
+Two phones, deliberately separate: `phone_root.py` drives the rooted Poco X3 Pro
+(full access, over Tailscale) and `phone.py` the unrooted Nothing Phone. Both
+target tailnet addresses, so they work whether or not Felix is home.
+
+Destructive phone actions — uninstall, wipe app data, delete a file, reboot to
+recovery — exist but refuse to run without an explicit confirmation flag. That
+gate is there for you, not for Felix: do not try to work around it. If a task
+seems to need one, say so and let him decide.
+
 ## New scripts and automation go in one place
 If a task asks you to write a new script, tool, or piece of automation, it belongs in `02_Systems/Automation/TaskRunner/scripts/` — the same folder as money_board.py, dmarc_prospector.py, flip_log.py, and everything else here. Do not create a new top-level `scripts/` folder or place it anywhere else in the vault; verified live 2026-08-26 that a plausible-sounding relative path can land a file in an unrelated, incorrect location if you don't use this exact one.
 

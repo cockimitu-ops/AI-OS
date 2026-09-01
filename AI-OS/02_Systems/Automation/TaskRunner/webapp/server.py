@@ -57,6 +57,7 @@ API_ROUTES = {
     ("GET", "/api/downloads"): api.get_downloads,
     ("GET", "/api/uploads"): api.get_uploads,
     ("POST", "/api/chat"): api.post_chat,
+    ("POST", "/api/chat-result"): api.get_chat_result,
     ("POST", "/api/voice-import"): api.post_voice_import,
 }
 

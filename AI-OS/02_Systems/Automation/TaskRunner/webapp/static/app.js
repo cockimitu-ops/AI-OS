@@ -192,6 +192,38 @@ function addBubble(text, cls) {
   return div;
 }
 
+// Backs off from 1s to 4s: a fast answer still feels instant, a slow one
+// stops hammering the server sixty times a minute for two minutes.
+async function pollChatResult(taskId, bubble) {
+  const started = Date.now();
+  let wait = 1000;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, wait));
+    wait = Math.min(wait * 1.4, 4000);
+    let res;
+    try {
+      res = await api("/api/chat-result", {
+        method: "POST",
+        body: JSON.stringify({ task_id: taskId }),
+      });
+    } catch (err) {
+      // A failed poll is not a failed answer - the phone may have lost the
+      // tailnet for a moment. Keep trying; the reply is on disk either way.
+      const secs = Math.round((Date.now() - started) / 1000);
+      bubble.textContent = `... (offline? ${secs}s)`;
+      continue;
+    }
+    if (res.ready) return res.reply;
+    if (res.lost) throw new Error(res.error || "Task verloren");
+    const secs = res.elapsed ?? Math.round((Date.now() - started) / 1000);
+    // Showing the count is the point: "still thinking, 40s" reads as slow,
+    // a frozen "..." reads as broken.
+    bubble.textContent = res.timed_out
+      ? `... ${secs}s - dauert ungewöhnlich lange`
+      : `... ${secs}s`;
+  }
+}
+
 chatForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   if (chatInFlight) return; // one message in flight, matching the backend's
@@ -205,13 +237,20 @@ chatForm.addEventListener("submit", async (e) => {
   chatInFlight = true;
   chatInput.disabled = true;
   try {
-    const data = await api("/api/chat", {
+    // Enqueue, then poll. The send request now returns in milliseconds with a
+    // ticket; the answer is collected separately. A real message on
+    // 2026-09-01 took 93 seconds, the worker answered correctly, and Felix saw
+    // "failed to fetch" - a phone browser will not hold a request open that
+    // long through a screen blanking or a network switch. The reply existed
+    // and was unreachable.
+    const queued = await api("/api/chat", {
       method: "POST",
       body: JSON.stringify({ message: text, thread_id: getThreadId() }),
     });
-    pending.textContent = data.reply;
-    pending.className = "bubble assistant";
     setConnDot("ok");
+    const reply = await pollChatResult(queued.task_id, pending);
+    pending.textContent = reply;
+    pending.className = "bubble assistant";
   } catch (err) {
     pending.textContent = `Fehler: ${err.message}`;
     pending.className = "bubble error";
