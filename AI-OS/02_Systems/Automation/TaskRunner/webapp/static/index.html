@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <title>AI-OS</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#000000">
@@ -10,158 +10,210 @@
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body data-screen="screen-today">
 
 <canvas id="fx-canvas" aria-hidden="true"></canvas>
+<div id="fx-veil" aria-hidden="true"></div>
 
-<header class="topbar">
-  <span class="brand">AI-OS</span>
-  <button id="install-btn" class="install-btn hidden">Installieren</button>
-  <span id="conn-dot" class="dot" title="Verbindung"></span>
+<header class="topbar glass">
+  <span class="brand">AI&#8202;·&#8202;OS</span>
+  <div class="topbar-right">
+    <button id="cost-pill" class="cost-pill" title="Kosten">—</button>
+    <button id="install-btn" class="ghost-btn hidden">Installieren</button>
+    <span id="conn-dot" class="dot" title="Verbindung"></span>
+  </div>
 </header>
 
 <main id="screens">
 
+  <!-- ---------------------------------------------------------------- -->
   <section id="screen-today" class="screen active">
-    <div class="today-scroll">
-      <div id="today-greeting" class="today-greeting"></div>
+    <div class="scroll">
+      <div id="today-greeting" class="eyebrow"></div>
       <div id="today-hero"></div>
-      <div id="today-rows" class="today-rows"></div>
-      <div id="today-phone" class="phone-card"></div>
-      <div id="today-quiet" class="today-quiet"></div>
+      <div id="today-rows" class="stat-list"></div>
+      <div id="today-phone"></div>
+      <div id="today-quiet" class="hint"></div>
     </div>
   </section>
 
-  <section id="screen-chat" class="screen">
+  <!-- ---------------------------------------------------------------- -->
+  <section id="screen-chat" class="screen chat-screen">
+    <button id="chat-session" class="session-bar glass">
+      <span class="session-title">Sitzung wird geladen…</span>
+      <span class="session-meta"></span>
+      <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
     <div id="chat-log" class="chat-log"></div>
-    <form id="chat-form" class="chat-form">
-      <input id="chat-input" type="text" placeholder="Nachricht..." autocomplete="off">
-      <button type="submit">Senden</button>
+    <form id="chat-form" class="chat-form glass">
+      <textarea id="chat-input" rows="1" placeholder="Weiterschreiben…"
+                autocomplete="off" autocapitalize="sentences"></textarea>
+      <button type="submit" id="chat-send" class="send-btn" aria-label="Senden">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15M13 6l6 6-6 6"/></svg>
+      </button>
     </form>
-    <button id="new-conversation" class="link-button">Neue Unterhaltung</button>
   </section>
 
+  <!-- ---------------------------------------------------------------- -->
+  <section id="screen-devices" class="screen">
+    <div class="scroll">
+      <h1>Geräte</h1>
+      <div id="device-tabs" class="chip-row"></div>
+      <div id="device-info" class="device-info"></div>
+
+      <div id="device-stage" class="device-stage">
+        <div class="stage-empty">kein Bild</div>
+      </div>
+      <div id="device-stagebar" class="stagebar"></div>
+
+      <div id="device-controls" class="device-controls"></div>
+      <p id="device-status" class="hint"></p>
+
+      <h2 class="section-title">Werkzeuge</h2>
+      <p class="hint" id="device-tools-hint"></p>
+      <div id="device-tools" class="chip-row"></div>
+      <div id="device-toolpanel" class="toolpanel"></div>
+      <pre id="device-out" class="out"></pre>
+
+      <h2 class="section-title">Rechner-Fernzugriff</h2>
+      <p class="hint">Befehl auf einem Knoten ausführen. Läuft über die
+        Job-Warteschlange — der Befehl wartet, wenn der Rechner gerade schläft,
+        statt fehlzuschlagen.</p>
+      <div id="node-list" class="chip-row"></div>
+      <div class="inline-form">
+        <input id="node-cmd" type="text" placeholder="Befehl…" autocomplete="off"
+               autocapitalize="off" spellcheck="false">
+        <button class="pill-btn" id="node-send">Ausführen</button>
+      </div>
+      <pre id="node-output" class="out"></pre>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------------- -->
   <section id="screen-money" class="screen">
-    <h1>Geld-Board</h1>
-    <div id="money-signals" class="signals"></div>
-    <div id="money-cards" class="cards"></div>
+    <div class="scroll">
+      <h1>Geld-Board</h1>
+      <div id="money-signals" class="signals"></div>
+      <div id="money-cards" class="cards"></div>
+    </div>
   </section>
 
+  <!-- ---------------------------------------------------------------- -->
+  <section id="screen-costs" class="screen">
+    <div class="scroll">
+      <h1>Kosten</h1>
+      <div id="cost-hero"></div>
+      <div id="cost-cards" class="cards"></div>
+      <h2 class="section-title">Claude</h2>
+      <p class="hint" id="cost-claude-note"></p>
+      <div id="cost-claude" class="cards"></div>
+      <h2 class="section-title">Letzte bezahlte Aufrufe</h2>
+      <div id="cost-calls" class="table-wrap"></div>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------------- -->
   <section id="screen-dmarc" class="screen">
-    <h1>DMARC-Leads</h1>
-    <div id="dmarc-summary" class="signals"></div>
-    <div id="dmarc-table" class="table-wrap"></div>
+    <div class="scroll">
+      <h1>DMARC-Leads</h1>
+      <div id="dmarc-summary" class="signals"></div>
+      <div id="dmarc-table" class="table-wrap"></div>
+    </div>
   </section>
 
   <section id="screen-snipes" class="screen">
-    <h1>Snipes</h1>
-    <p class="hint">Reihenfolge zum Anschauen, keine Wertschätzung — der
-      Wiederverkaufspreis kommt weiter aus verkauften Vergleichsangeboten.</p>
-    <div id="snipe-filters" class="snipe-filters"></div>
-    <div id="snipe-list" class="table-wrap"></div>
+    <div class="scroll">
+      <h1>Snipes</h1>
+      <p class="hint">Reihenfolge zum Anschauen, keine Wertschätzung — der
+        Wiederverkaufspreis kommt weiter aus verkauften Vergleichsangeboten.</p>
+      <div id="snipe-filters" class="chip-row"></div>
+      <div id="snipe-list" class="table-wrap"></div>
+    </div>
   </section>
 
   <section id="screen-flips" class="screen">
-    <h1>Flip-Log</h1>
-    <div id="flips-table" class="table-wrap"></div>
-  </section>
-
-  <section id="screen-devices" class="screen">
-    <h1>Geräte</h1>
-    <div id="device-tabs" class="chip-row"></div>
-    <div id="device-info" class="device-info"></div>
-    <div id="device-screen-wrap" class="device-screen-wrap"></div>
-    <div id="device-controls" class="device-controls"></div>
-    <p id="device-status" class="hint"></p>
-
-    <h2 class="section-title">Rechner-Fernzugriff</h2>
-    <p class="hint">Befehl auf einem Knoten ausführen. Läuft über die
-      Job-Warteschlange — der Befehl wartet, wenn der Rechner gerade schläft,
-      statt fehlzuschlagen.</p>
-    <div id="node-list" class="chip-row"></div>
-    <div class="device-typerow">
-      <input id="node-cmd" type="text" placeholder="Befehl..." autocomplete="off"
-             autocapitalize="off" spellcheck="false">
-      <button class="upload-send" id="node-send">Ausführen</button>
+    <div class="scroll">
+      <h1>Flip-Log</h1>
+      <div id="flips-table" class="table-wrap"></div>
     </div>
-    <pre id="node-output" class="node-output"></pre>
   </section>
 
   <section id="screen-downloads" class="screen">
-    <h1>Dateien</h1>
+    <div class="scroll">
+      <h1>Dateien</h1>
 
-    <h2 class="section-title">Hochladen</h2>
-    <p class="hint">WhatsApp-Exporte (.txt) und andere Daten für den Server.
-      Bleiben lokal - nichts davon geht an ein Modell ausser dem, was du
-      ausdrücklich importierst.</p>
-    <div class="upload-row">
-      <label class="upload-pick">
-        <input id="upload-input" type="file" multiple
-               accept=".txt,.zip,.csv,.json,.md,.jpg,.jpeg,.png,.heic,.webp,.pdf,image/*">
-        <span>Dateien wählen</span>
-      </label>
-      <button id="upload-send" class="upload-send" disabled>Hochladen</button>
+      <h2 class="section-title">Hochladen</h2>
+      <p class="hint">WhatsApp-Exporte (.txt) und andere Daten für den Server.
+        Bleiben lokal — nichts davon geht an ein Modell ausser dem, was du
+        ausdrücklich importierst.</p>
+      <div class="inline-form">
+        <label class="pill-btn ghost">
+          <input id="upload-input" type="file" multiple
+                 accept=".txt,.zip,.csv,.json,.md,.jpg,.jpeg,.png,.heic,.webp,.pdf,image/*">
+          <span>Dateien wählen</span>
+        </label>
+        <button id="upload-send" class="pill-btn" disabled>Hochladen</button>
+      </div>
+      <p id="upload-status" class="hint"></p>
+      <div id="uploads-list" class="cards"></div>
+
+      <h2 class="section-title">Voice-Profil</h2>
+      <p class="hint">Baut aus den hochgeladenen Chat-Exporten dein Stil-Profil.
+        Nur du siehst es, nur im Chat mit dir — alles Geschäftliche bleibt
+        professionell. Braucht mindestens 2 Chats.</p>
+      <button id="voice-build" class="pill-btn">Voice-Profil bauen</button>
+      <p id="voice-status" class="hint"></p>
+
+      <h2 class="section-title">Downloads</h2>
+      <p class="hint">Dateien, die der Bot erstellt hat, und alles, was du vom
+        Handy gezogen hast.</p>
+      <div id="downloads-list" class="cards"></div>
     </div>
-    <p id="upload-status" class="hint"></p>
-    <div id="uploads-list" class="cards"></div>
-
-    <h2 class="section-title">Voice-Profil</h2>
-    <p class="hint">Baut aus den hochgeladenen Chat-Exporten dein Stil-Profil.
-      Nur du siehst es, nur im Chat mit dir - alles Geschäftliche bleibt
-      professionell. Braucht mindestens 2 Chats.</p>
-    <button id="voice-build" class="upload-send">Voice-Profil bauen</button>
-    <p id="voice-status" class="hint"></p>
-
-    <h2 class="section-title">Downloads</h2>
-    <p class="hint">Dateien, die der Bot auf Anfrage erstellt hat - z.B. PDFs aus dem Chat.</p>
-    <div id="downloads-list" class="cards"></div>
   </section>
 
 </main>
 
-<nav class="tabbar">
+<nav class="tabbar glass">
   <button class="tab active" data-screen="screen-today">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>
-    Heute
+    <span>Heute</span>
   </button>
   <button class="tab" data-screen="screen-chat">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a3 3 0 0 1-3 3H8l-5 3V6a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3z"/></svg>
-    Chat
-  </button>
-  <button class="tab" data-screen="screen-money">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-    Geld
-  </button>
-  <button class="tab" data-screen="screen-dmarc">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
-    DMARC
-  </button>
-  <button class="tab" data-screen="screen-snipes">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
-    Snipes
-  </button>
-  <button class="tab" data-screen="screen-flips">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h14l-3-3"/><path d="M21 16H7l3 3"/></svg>
-    Flips
+    <span>Chat</span>
   </button>
   <button class="tab" data-screen="screen-devices">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>
-    Geräte
+    <span>Geräte</span>
   </button>
-  <button class="tab" data-screen="screen-downloads">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h6l2 3h8v13H4z"/></svg>
-    Dateien
+  <button class="tab" data-screen="screen-money">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+    <span>Geld</span>
+  </button>
+  <button class="tab" id="more-tab">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+    <span>Mehr</span>
   </button>
 </nav>
 
+<div id="sheet" class="sheet-wrap hidden">
+  <div class="sheet-scrim"></div>
+  <div class="sheet glass">
+    <div class="sheet-grip"></div>
+    <div id="sheet-body"></div>
+  </div>
+</div>
+
 <div id="token-modal" class="modal hidden">
-  <div class="modal-box">
+  <div class="modal-box glass">
     <h2>Zugangs-Token</h2>
-    <p>Einmalig eingeben - wird nur auf diesem Gerät gespeichert.</p>
+    <p class="hint">Einmalig eingeben — wird nur auf diesem Gerät gespeichert.</p>
     <input id="token-input" type="text" inputmode="text" autocapitalize="off"
            autocorrect="off" autocomplete="off" spellcheck="false" placeholder="Token">
-    <button id="token-save">Speichern</button>
-    <p id="token-status" class="hint" style="margin-top:10px;"></p>
+    <button id="token-save" class="pill-btn">Speichern</button>
+    <p id="token-status" class="hint"></p>
   </div>
 </div>
 

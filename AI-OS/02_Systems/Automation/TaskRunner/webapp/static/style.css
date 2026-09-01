@@ -1,734 +1,642 @@
-/* Palette taken from "Can You Grasp Time" (Dogan Ural), the reference Felix
-   sent: a true-black field, a subject made of cool white-blue filaments and
-   starlight, and rare iridescent specks - gold, violet - never as fills, only
-   as points. The design rule that follows from it: content is light emerging
-   from darkness, not boxes sitting on a background. So almost no borders, no
-   grey card fills; a focal element glows and everything else recedes.
+/* AI-OS - "Glas / Tiefe".
+   ------------------------------------------------------------------------
+   Felix picked this direction over a flat instrument look and an editorial
+   one: the starfield stays, and content floats above it in layered glass
+   rather than sitting on it in boxes.
 
-   True black rather than the old #0f1115 is also the practical choice on an
-   OLED phone: those pixels are genuinely off, which is both deeper contrast
-   and less battery. */
+   Three rules keep that from turning into fog:
+
+   1. REAL GLASS IS EXPENSIVE, SO IT IS RARE. backdrop-filter is applied to
+      four surfaces only - the top bar, the tab bar, the hero, and sheets.
+      Everything else is a translucent fill with a lit top edge, which reads
+      as the same material at a fraction of the cost. On a phone, blurring
+      thirty elements per frame is how a beautiful design becomes a warm
+      battery and a stuttering scroll.
+
+   2. LIGHT COMES FROM ABOVE AND FROM THE POINTER. Every panel has a bright
+      hairline on its top edge fading to nothing at the bottom - that single
+      detail is what makes a translucent rectangle read as a pane of glass
+      rather than as a grey box. Cards additionally carry --mx/--my, set by
+      app.js on touch, for a specular highlight under the finger.
+
+   3. DEPTH IS ORDERED. Three elevations, and they never mix: --e1 for
+      resting panels, --e2 for the hero and anything focused, --e3 for
+      anything that floats over the app (sheets, modals). A shadow that does
+      not correspond to one of those is a mistake, not a variation.
+
+   The palette is unchanged from the previous design - it came from a
+   reference Felix chose ("Can You Grasp Time", Dogan Ural) and he asked for
+   a new design, not a new subject. */
+
 :root {
   --bg: #000000;
-  --surface: #06070a;        /* barely there - a breath above black */
-  --surface-2: #0c0e13;
-  --border: rgba(207, 227, 255, 0.07);   /* hairline, never a frame */
   --text: #eef3fa;
-  --text-dim: #7c8797;
-  --text-faint: #4a5260;
+  --text-dim: #97a3b4;
+  --text-faint: #5c6675;
   --accent: #cfe3ff;         /* the filament white-blue */
-  --accent-glow: rgba(207, 227, 255, 0.16);
-  --gold: #e8c98a;           /* the rare warm speck */
+  --gold: #e8c98a;
   --violet: #b9a0ff;
   --good: #8fe3b0;
   --bad: #ff9a9a;
+
+  /* Glass. Two fills: a pane, and a brighter one for the focused layer. */
+  --pane: rgba(150, 178, 215, 0.055);
+  --pane-2: rgba(160, 190, 230, 0.085);
+  --pane-solid: rgba(10, 13, 19, 0.72);
+  --edge: rgba(207, 227, 255, 0.16);   /* the lit top edge */
+  --edge-soft: rgba(207, 227, 255, 0.06);
+  --blur: saturate(150%) blur(22px);
+
+  --e1: 0 1px 2px rgba(0,0,0,0.5);
+  --e2: 0 18px 44px -18px rgba(0,0,0,0.9), 0 2px 10px rgba(0,0,0,0.4);
+  --e3: 0 -8px 60px -12px rgba(0,0,0,0.95), 0 2px 24px rgba(0,0,0,0.6);
+
+  --r: 20px;
+  --r-sm: 13px;
+  --pad: 16px;
+  --tabbar-h: 62px;
 }
 
-* { box-sizing: border-box; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
 html, body {
   margin: 0; padding: 0; height: 100%;
   background: var(--bg); color: var(--text);
   font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 16px;
   overscroll-behavior: none;
-  /* The reference has real light in it - defined stars, a soft glowing
-     nebula behind the subject, a trail dissolving into stardust. The first
-     version of this (opacity 0.10-0.16, 1-1.5px dots) was tuned looking at
-     a screenshot on a laptop; on Felix's real OLED phone it was completely
-     invisible - confirmed from photos he sent of the actual device, not
-     guessed. This version is deliberately much bolder: brighter stars,
-     more of them, in layers of different sizes so it reads as depth rather
-     than a flat grid, plus two soft glow washes.
-     Never `background-attachment: fixed` scroll tricks and never applied to
-     a scrolling child - this sits on html/body, which never scrolls
-     (#screens owns internal scrolling per screen - see below), so it is
-     always the same fixed "sky" behind every screen regardless of how much
-     content that screen has. That is also what fills the empty space below
-     a short list instead of leaving it dead black: the atmosphere is there
-     the whole time, not just decoration at the top. */
+  /* The sky. On html/body, which never scroll (#screens owns per-screen
+     scrolling), so it stays a fixed backdrop behind every screen instead of
+     sliding away - and fills the space under a short list rather than
+     leaving dead black there. */
   background-color: var(--bg);
   background-image:
-    /* Nebula: a soft cool glow roughly where the hero sits on the busiest
-       screen (Today), echoing the reference's light concentrated around
-       the subject near the top of the frame. */
-    radial-gradient(60% 38% at 50% 16%, rgba(150,190,255,0.16), transparent 72%),
-    /* A second, fainter violet wash lower and to the side - the dissolving
-       trail in the reference, not a mirrored second subject. */
-    radial-gradient(55% 50% at 66% 58%, rgba(180,160,255,0.07), transparent 72%),
-    /* A last, faint warm pool low in the frame - the rare gold the
-       reference uses as an accent, not a fill. */
-    radial-gradient(45% 32% at 30% 82%, rgba(220,190,140,0.05), transparent 75%),
-    /* Stars: four layers at sizes with no common factor (130/210/95/280),
-       so the tiles interleave instead of visibly lining up into a grid -
-       the giveaway a single repeated dot at high opacity would have. */
-    radial-gradient(1.6px 1.6px at 20% 35%, rgba(255,255,255,0.85), transparent 100%),
-    radial-gradient(1.2px 1.2px at 82% 12%, rgba(255,255,255,0.6), transparent 100%),
-    radial-gradient(2px 2px at 45% 68%, rgba(210,225,255,0.9), transparent 100%),
-    radial-gradient(1px 1px at 65% 40%, rgba(255,255,255,0.5), transparent 100%),
-    radial-gradient(1.4px 1.4px at 10% 80%, rgba(255,255,255,0.65), transparent 100%),
-    radial-gradient(1px 1px at 90% 60%, rgba(232,201,138,0.55), transparent 100%),
-    radial-gradient(1.3px 1.3px at 35% 15%, rgba(255,255,255,0.55), transparent 100%),
-    radial-gradient(1px 1px at 55% 90%, rgba(255,255,255,0.45), transparent 100%);
+    radial-gradient(60% 38% at 50% 14%, rgba(150,190,255,0.15), transparent 72%),
+    radial-gradient(55% 50% at 68% 58%, rgba(180,160,255,0.075), transparent 72%),
+    radial-gradient(45% 32% at 28% 84%, rgba(220,190,140,0.05), transparent 75%),
+    radial-gradient(1.6px 1.6px at 20% 35%, rgba(255,255,255,0.8), transparent 100%),
+    radial-gradient(1.2px 1.2px at 82% 12%, rgba(255,255,255,0.55), transparent 100%),
+    radial-gradient(2px 2px at 45% 68%, rgba(210,225,255,0.85), transparent 100%),
+    radial-gradient(1px 1px at 65% 40%, rgba(255,255,255,0.45), transparent 100%),
+    radial-gradient(1.4px 1.4px at 10% 80%, rgba(255,255,255,0.6), transparent 100%),
+    radial-gradient(1px 1px at 90% 60%, rgba(232,201,138,0.5), transparent 100%),
+    radial-gradient(1.3px 1.3px at 35% 15%, rgba(255,255,255,0.5), transparent 100%),
+    radial-gradient(1px 1px at 55% 90%, rgba(255,255,255,0.42), transparent 100%);
   background-size:
     100% 100%, 100% 100%, 100% 100%,
     130px 130px, 210px 210px, 95px 95px, 175px 175px,
     280px 280px, 240px 240px, 150px 150px, 320px 320px;
 }
-
-
-
 body { display: flex; flex-direction: column; }
 
+/* The veil sits between the sky and the content: without it, bright stars
+   land directly behind body text and every line gets a random speckle in it.
+   Opacity is driven per screen - Today wants the sky, a data table does not. */
+#fx-veil {
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background: radial-gradient(120% 80% at 50% 30%,
+              rgba(0,0,0,0.30), rgba(0,0,0,0.72) 70%, rgba(0,0,0,0.85));
+  transition: opacity 500ms ease;
+}
+body[data-screen="screen-today"] #fx-veil { opacity: 0.55; }
+body[data-screen="screen-chat"] #fx-veil { opacity: 0.9; }
+body[data-screen="screen-devices"] #fx-veil { opacity: 0.95; }
+#fx-canvas { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+
+/* Grain over everything. Very low opacity: it is the difference between a
+   flat gradient and one that looks like a photographed surface. */
+#fx-grain {
+  position: fixed; inset: -50%; z-index: 60; pointer-events: none;
+  opacity: 0.035; mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,\
+<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'>\
+<filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/></filter>\
+<rect width='140' height='140' filter='url(%23n)' opacity='0.55'/></svg>");
+}
+
+/* --- the glass material ------------------------------------------------ */
+
+.glass {
+  background: var(--pane-solid);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+  border: 1px solid transparent;
+  /* Two backgrounds through one border: the fill is clipped to the padding
+     box, the lit edge to the border box. That is what draws a 1px highlight
+     that is bright at the top and gone at the bottom - a uniform border
+     would read as an outline, not as an edge catching light. */
+  background-image: linear-gradient(var(--pane-solid), var(--pane-solid)),
+    linear-gradient(to bottom, var(--edge), var(--edge-soft) 45%, transparent);
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+}
+
+.panel {
+  position: relative;
+  border-radius: var(--r);
+  border: 1px solid transparent;
+  background-image: linear-gradient(var(--pane), var(--pane)),
+    linear-gradient(to bottom, var(--edge), var(--edge-soft) 40%, transparent 85%);
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+  box-shadow: var(--e1);
+  overflow: hidden;
+}
+/* The specular highlight. --mx/--my come from app.js on touch; with no touch
+   yet they default to the top-left third, which is where the ambient light
+   in the background gradient comes from anyway. */
+.panel::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(200px 160px at var(--mx, 30%) var(--my, 0%),
+              rgba(207,227,255,0.10), transparent 70%);
+  opacity: 0; transition: opacity 420ms ease;
+}
+.panel.lit::before { opacity: 1; }
+
+/* --- top bar ----------------------------------------------------------- */
+
 .topbar {
+  position: relative; z-index: 30;
   display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 16px; border-bottom: 1px solid var(--border);
+  gap: 10px;
+  padding: calc(env(safe-area-inset-top, 0px) + 10px) var(--pad) 10px;
+  border-radius: 0;
+  border: none;
+  border-bottom: 1px solid var(--edge-soft);
+  background-image: none;
   flex-shrink: 0;
 }
-.brand { font-weight: 650; font-size: 1.05rem; letter-spacing: 0.02em; }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); }
-.dot.ok { background: var(--good); }
-.dot.err { background: var(--bad); }
-
-#screens { flex: 1; overflow: hidden; position: relative; }
-
-.screen {
-  display: none; flex-direction: column; height: 100%;
-  padding: 16px; overflow-y: auto;
+.brand {
+  font-weight: 600; font-size: 0.98rem; letter-spacing: 0.18em;
+  color: var(--accent);
+  text-shadow: 0 0 22px rgba(207,227,255,0.35);
 }
-.screen.active { display: flex; }
-.screen h1 { font-size: 1.65rem; margin: 4px 0 16px; color: var(--text); font-weight: 650; letter-spacing: -0.01em; }
+.topbar-right { display: flex; align-items: center; gap: 10px; }
+.dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint);
+  box-shadow: 0 0 0 0 rgba(143,227,176,0.5);
+}
+.dot.ok { background: var(--good); box-shadow: 0 0 10px rgba(143,227,176,0.6); }
+.dot.err { background: var(--bad); box-shadow: 0 0 10px rgba(255,154,154,0.6); }
 
-/* --- chat --- */
-#screen-chat { padding: 0; }
+.cost-pill {
+  font: inherit; font-size: 0.76rem; font-variant-numeric: tabular-nums;
+  color: var(--text-dim); background: var(--pane); border: 1px solid var(--edge-soft);
+  border-radius: 999px; padding: 4px 10px; cursor: pointer;
+}
+.cost-pill.warn { color: var(--gold); border-color: rgba(232,201,138,0.35); }
+.ghost-btn {
+  font: inherit; font-size: 0.78rem; color: var(--accent);
+  background: none; border: 1px solid var(--edge); border-radius: 999px;
+  padding: 5px 12px; cursor: pointer;
+}
+
+/* --- screens ----------------------------------------------------------- */
+
+#screens { position: relative; z-index: 10; flex: 1; min-height: 0; }
+.screen { display: none; height: 100%; min-height: 0; }
+.screen.active { display: flex; flex-direction: column; }
+.scroll {
+  flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  padding: 18px var(--pad) calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) + 28px);
+}
+
+h1 {
+  font-size: 1.75rem; font-weight: 600; letter-spacing: -0.02em;
+  margin: 0 0 16px;
+}
+h2.section-title {
+  font-size: 0.72rem; font-weight: 600; letter-spacing: 0.16em;
+  text-transform: uppercase; color: var(--text-faint);
+  margin: 30px 0 10px;
+}
+.eyebrow {
+  font-size: 0.7rem; letter-spacing: 0.22em; text-transform: uppercase;
+  color: var(--text-faint); margin-bottom: 14px;
+}
+.hint { font-size: 0.82rem; color: var(--text-dim); line-height: 1.5; margin: 0 0 12px; }
+.empty-state {
+  padding: 26px 18px; text-align: center; color: var(--text-faint);
+  font-size: 0.88rem;
+}
+
+/* --- hero (Today) ------------------------------------------------------- */
+
+.hero {
+  position: relative;
+  border-radius: 24px; padding: 22px 20px 20px; margin-bottom: 22px;
+  background: linear-gradient(165deg, rgba(24,32,48,0.86), rgba(6,8,13,0.9));
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+  border: 1px solid transparent;
+  background-image:
+    linear-gradient(165deg, rgba(24,32,48,0.86), rgba(6,8,13,0.9)),
+    linear-gradient(to bottom, rgba(207,227,255,0.30), var(--edge-soft) 40%, transparent);
+  background-origin: border-box; background-clip: padding-box, border-box;
+  box-shadow: var(--e2);
+  overflow: hidden;
+}
+.hero::after {
+  /* The slow light sweep. Purely decorative, and the one place it belongs:
+     the single most important thing on the screen. */
+  content: ""; position: absolute; top: -60%; left: -60%;
+  width: 80%; height: 220%;
+  background: linear-gradient(105deg, transparent, rgba(207,227,255,0.10), transparent);
+  transform: rotate(8deg);
+  animation: sweep 9s ease-in-out 1.2s infinite;
+}
+@keyframes sweep {
+  0%, 62% { transform: translateX(0) rotate(8deg); opacity: 0; }
+  68% { opacity: 1; }
+  100% { transform: translateX(320%) rotate(8deg); opacity: 0; }
+}
+.hero .kicker {
+  font-size: 0.66rem; letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--gold); margin-bottom: 12px;
+}
+.hero .title {
+  font-size: 1.4rem; font-weight: 600; line-height: 1.25;
+  letter-spacing: -0.02em; margin-bottom: 14px;
+}
+.hero .meta {
+  display: flex; gap: 16px; font-size: 0.8rem; color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.hero .body {
+  margin-top: 16px; padding-top: 16px; font-size: 0.88rem; line-height: 1.6;
+  color: var(--text-dim); border-top: 1px solid var(--edge-soft);
+}
+
+/* --- stat rows --------------------------------------------------------- */
+
+.stat-list { display: flex; flex-direction: column; }
+.stat-row {
+  display: flex; align-items: baseline; gap: 16px;
+  padding: 15px 4px; border-bottom: 1px solid var(--edge-soft);
+}
+.stat-row .num {
+  font-size: 1.7rem; font-weight: 300; letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  min-width: 3.2ch; text-align: right;
+}
+.stat-row .num.zero { color: var(--text-faint); }
+.stat-row .num.hot { color: var(--accent); text-shadow: 0 0 20px rgba(207,227,255,0.4); }
+.stat-row .label { flex: 1; font-size: 0.92rem; color: var(--text-dim); }
+
+/* --- cards / signals --------------------------------------------------- */
+
+.cards { display: flex; flex-direction: column; gap: 11px; }
+.card, .panel-card {
+  position: relative; border-radius: var(--r); padding: 15px 16px;
+  border: 1px solid transparent;
+  background-image: linear-gradient(var(--pane), var(--pane)),
+    linear-gradient(to bottom, var(--edge), var(--edge-soft) 40%, transparent 85%);
+  background-origin: border-box; background-clip: padding-box, border-box;
+  box-shadow: var(--e1);
+}
+.card h3 { margin: 0 0 6px; font-size: 0.95rem; font-weight: 600; }
+.card .sub { font-size: 0.8rem; color: var(--text-dim); line-height: 1.5; }
+.card .row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+
+.signals { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 10px; margin-bottom: 18px; }
+.signal {
+  border-radius: var(--r-sm); padding: 12px 13px;
+  border: 1px solid transparent;
+  background-image: linear-gradient(var(--pane), var(--pane)),
+    linear-gradient(to bottom, var(--edge), transparent 70%);
+  background-origin: border-box; background-clip: padding-box, border-box;
+}
+.signal .v {
+  font-size: 1.4rem; font-weight: 300; font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em; display: block;
+}
+.signal .k {
+  font-size: 0.66rem; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--text-faint); margin-top: 4px; display: block;
+}
+.signal.good .v { color: var(--good); }
+.signal.warn .v { color: var(--gold); }
+.signal.bad .v { color: var(--bad); }
+
+/* --- chips / buttons --------------------------------------------------- */
+
+.chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.chip {
+  font: inherit; font-size: 0.82rem; color: var(--text-dim);
+  background: var(--pane); border: 1px solid var(--edge-soft);
+  border-radius: 999px; padding: 8px 14px; cursor: pointer;
+  transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+.chip:active { transform: scale(0.97); }
+.chip.on {
+  color: #05070c; background: var(--accent); border-color: var(--accent);
+  font-weight: 600; box-shadow: 0 0 22px rgba(207,227,255,0.3);
+}
+.chip[disabled] { opacity: 0.4; }
+.chip.danger { color: var(--bad); border-color: rgba(255,154,154,0.3); }
+
+.pill-btn {
+  font: inherit; font-size: 0.85rem; font-weight: 600; color: #05070c;
+  background: var(--accent); border: none; border-radius: 999px;
+  padding: 10px 18px; cursor: pointer;
+}
+.pill-btn:disabled { opacity: 0.35; }
+.pill-btn.ghost {
+  color: var(--accent); background: var(--pane); border: 1px solid var(--edge);
+  font-weight: 500; position: relative; overflow: hidden;
+}
+.pill-btn.ghost input[type=file] { position: absolute; inset: 0; opacity: 0; }
+.pill-btn.wide { display: block; width: 100%; text-align: center; }
+
+.inline-form { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+.inline-form input[type=text] {
+  flex: 1; min-width: 0; font: inherit; font-size: 0.9rem; color: var(--text);
+  background: var(--pane); border: 1px solid var(--edge-soft);
+  border-radius: var(--r-sm); padding: 11px 13px;
+}
+.inline-form input:focus { outline: none; border-color: var(--edge); }
+
+.out {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.74rem; line-height: 1.5; color: var(--text-dim);
+  background: rgba(0,0,0,0.5); border: 1px solid var(--edge-soft);
+  border-radius: var(--r-sm); padding: 12px;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 42vh; overflow: auto; margin: 0;
+}
+.out:empty { display: none; }
+
+/* --- tables ------------------------------------------------------------ */
+
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-bottom: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.82rem; }
+th, td { text-align: left; padding: 10px 12px 10px 0; border-bottom: 1px solid var(--edge-soft); }
+th {
+  font-size: 0.64rem; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--text-faint); font-weight: 600; white-space: nowrap;
+}
+td { color: var(--text-dim); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; padding-right: 0; }
+td strong { color: var(--text); font-weight: 600; }
+
+/* --- chat -------------------------------------------------------------- */
+
+.chat-screen { padding: 0 var(--pad); }
+.session-bar {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  margin: 12px 0 4px; padding: 11px 14px; border-radius: var(--r-sm);
+  font: inherit; text-align: left; color: var(--text); cursor: pointer;
+  flex-shrink: 0;
+}
+.session-title { flex: 1; font-size: 0.88rem; font-weight: 600; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.session-meta { font-size: 0.72rem; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.session-bar .chev { width: 16px; height: 16px; color: var(--text-faint); flex-shrink: 0; }
+.session-bar.live .session-title::after {
+  content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 8px;
+  border-radius: 50%; background: var(--good); vertical-align: middle;
+  animation: pulse 1.8s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
+
 .chat-log {
-  flex: 1; overflow-y: auto; padding: 16px; display: flex;
-  flex-direction: column; gap: 10px;
+  flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  padding: 12px 0 6px; display: flex; flex-direction: column; gap: 10px;
 }
 .bubble {
-  max-width: 80%; padding: 10px 14px; border-radius: 14px; line-height: 1.4;
-  white-space: pre-wrap; word-wrap: break-word;
+  max-width: 86%; padding: 11px 14px; border-radius: 18px;
+  font-size: 0.9rem; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
 }
-.bubble.user { align-self: flex-end; background: var(--accent); color: #0a1420; }
-.bubble.assistant { align-self: flex-start; background: var(--surface-2); }
-.bubble.pending { align-self: flex-start; background: var(--surface); color: var(--text-dim); font-style: italic; }
-.bubble.error { align-self: flex-start; background: #3a1f1f; color: var(--bad); }
+.bubble.me {
+  align-self: flex-end; color: #05070c; font-weight: 500;
+  background: linear-gradient(160deg, #dbe9ff, #b9cdf0);
+  border-bottom-right-radius: 6px;
+  box-shadow: 0 6px 18px -8px rgba(207,227,255,0.5);
+}
+.bubble.bot {
+  align-self: flex-start; color: var(--text);
+  border: 1px solid transparent;
+  background-image: linear-gradient(var(--pane-2), var(--pane-2)),
+    linear-gradient(to bottom, var(--edge), transparent 60%);
+  background-origin: border-box; background-clip: padding-box, border-box;
+  border-bottom-left-radius: 6px;
+}
+.bubble.tool {
+  align-self: flex-start; max-width: 92%;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.71rem; color: var(--text-faint);
+  background: none; border: none; padding: 2px 2px 2px 6px;
+  border-left: 2px solid var(--edge-soft); border-radius: 0;
+  white-space: pre-wrap; opacity: 0.75;
+}
+.bubble.err { color: var(--bad); }
+.bubble.pending { color: var(--text-faint); font-style: italic; }
 
 .chat-form {
-  display: flex; gap: 8px; padding: 12px 16px;
-  border-top: 1px solid var(--border); flex-shrink: 0;
+  display: flex; gap: 8px; align-items: flex-end; flex-shrink: 0;
+  padding: 10px; border-radius: var(--r);
+  margin-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) + 10px);
 }
-.chat-form input {
-  flex: 1; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);
-  background: var(--surface); color: var(--text); font-size: 1rem;
+.chat-form textarea {
+  flex: 1; min-width: 0; font: inherit; font-size: 0.92rem; color: var(--text);
+  background: none; border: none; resize: none; max-height: 30vh;
+  padding: 8px 4px; line-height: 1.45;
 }
-.chat-form button {
-  padding: 10px 16px; border-radius: 10px; border: none;
-  background: var(--accent); color: #0a1420; font-weight: 600;
+.chat-form textarea:focus { outline: none; }
+.send-btn {
+  width: 38px; height: 38px; flex-shrink: 0; border-radius: 50%;
+  border: none; background: var(--accent); color: #05070c; cursor: pointer;
+  display: grid; place-items: center;
 }
-.link-button {
-  background: none; border: none; color: var(--text-dim);
-  font-size: 0.85rem; padding: 8px 16px; text-align: left; flex-shrink: 0;
-}
+.send-btn svg { width: 19px; height: 19px; }
+.send-btn:disabled { opacity: 0.35; }
 
-/* --- cards (money board) --- */
-.signals { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
-.signal-pill {
-  background: var(--surface-2); border-radius: 999px; padding: 6px 12px;
-  font-size: 0.8rem; color: var(--text-dim);
-}
-.hint { color: var(--text-dim); font-size: 0.85rem; margin: 0 0 14px; }
-.cards { display: flex; flex-direction: column; gap: 10px; }
-.card {
-  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
-  padding: 14px;
-}
-.card-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-.card-euros { font-weight: 700; color: var(--good); font-size: 1.1rem; white-space: nowrap; }
-.card-minutes { color: var(--text-dim); font-size: 0.8rem; }
-/* A gating row earns 0 EUR itself but blocks the rows under it - it sorts to
-   the top, so it must not read as the least valuable card on the board. */
-.card-gate { color: var(--accent); }
-.card-action { margin: 6px 0 4px; }
-.card-note { color: var(--text-dim); font-size: 0.85rem; }
-.download-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
-.download-meta { color: var(--text-dim); font-size: 0.8rem; margin-top: 2px; }
-.download-btn {
-  padding: 8px 14px; border-radius: 8px; border: none; flex-shrink: 0;
-  background: var(--accent); color: #0a1420; font-weight: 600; font-size: 0.85rem;
-}
-.download-btn:disabled { opacity: 0.5; }
-
-/* --- tables (dmarc, flips) --- */
-/* Stacked rows, not a <table>. Seven data columns do not fit a 390px
-   phone: an earlier version rendered a real HTML table here, and on the
-   actual device it showed the Name column and nothing else - the rest sat
-   off-screen with no visible hint it was even there. A hairline row per
-   record, meta wrapped as small tags, needs no horizontal scroll at any
-   width and reads closer to the reference than a cramped spreadsheet would
-   have anyway. */
-.table-wrap { display: flex; flex-direction: column; }
-.data-row { padding: 14px 2px; border-bottom: 1px solid var(--border); }
-.data-row:last-child { border-bottom: 0; }
-.data-row .title { font-size: 1rem; color: var(--text); }
-.data-row .subtitle {
-  color: var(--text-faint); font-size: 0.78rem; margin-top: 1px;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-}
-.data-row .meta {
-  display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 8px;
-  font-size: 0.78rem; color: var(--text-dim);
-}
-.data-row .meta .warn { color: var(--gold); }
-.data-row .meta .net.win { color: var(--good); }
-.data-row .meta .net.loss { color: var(--bad); }
-.data-row .meta .open { color: var(--accent); }
-.empty-state { color: var(--text-dim); padding: 20px; text-align: center; }
-.show-more-btn {
-  width: 100%; margin-top: 4px; padding: 13px; border-radius: 12px;
-  border: 1px solid var(--border); background: var(--surface);
-  color: var(--accent); font-size: 0.88rem; cursor: pointer;
-}
-
-/* --- tab bar --- */
-.tabbar {
-  display: flex; border-top: 1px solid var(--border); flex-shrink: 0;
-  padding-bottom: env(safe-area-inset-bottom);
-}
-.tab {
-  flex: 1; padding: 12px 0; background: none; border: none; color: var(--text-dim);
-  font-size: 0.85rem;
-}
-.tab.active { color: var(--accent); font-weight: 600; }
-
-/* --- token modal --- */
-.modal {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.6);
-  display: flex; align-items: center; justify-content: center; z-index: 10;
-}
-.modal.hidden { display: none; }
-.modal-box {
-  background: var(--surface); border-radius: 14px; padding: 20px;
-  width: min(320px, 90vw);
-}
-.modal-box h2 { margin: 0 0 8px; font-size: 1rem; }
-.modal-box p { color: var(--text-dim); font-size: 0.85rem; margin: 0 0 12px; }
-.modal-box input {
-  width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border);
-  background: var(--bg); color: var(--text); margin-bottom: 10px;
-}
-.modal-box button {
-  width: 100%; padding: 10px; border-radius: 8px; border: none;
-  background: var(--accent); color: #0a1420; font-weight: 600;
-}
-
-/* Upload controls. A bare <input type="file"> is unusable on a phone - it
-   renders as a tiny unstyled button with a "no file chosen" label - so the
-   real input is hidden inside a label that acts as the tap target. */
-.section-title { font-size: 0.95rem; color: var(--text-dim); margin: 22px 0 4px;
-  text-transform: uppercase; letter-spacing: 0.06em; }
-.upload-row { display: flex; gap: 10px; align-items: center; margin: 10px 0; flex-wrap: wrap; }
-.upload-pick { flex: 1 1 auto; }
-.upload-pick input[type="file"] { display: none; }
-.upload-pick span { display: block; text-align: center; padding: 12px;
-  border: 1px dashed var(--border); border-radius: 10px; color: var(--text-dim);
-  background: var(--surface); cursor: pointer; }
-.upload-send { padding: 12px 18px; border: 0; border-radius: 10px;
-  background: var(--accent); color: #0f1115; font-weight: 600; cursor: pointer; }
-.upload-send:disabled { background: var(--surface-2); color: var(--text-dim); cursor: default; }
-
-/* Only ever visible when the browser says the app is genuinely installable
-   (HTTPS + manifest + service worker), so its absence is a real diagnostic. */
-.install-btn { margin-left: auto; margin-right: 10px; padding: 5px 12px;
-  border: 1px solid var(--accent); border-radius: 999px; background: transparent;
-  color: var(--accent); font-size: 0.78rem; cursor: pointer; }
-.install-btn.hidden { display: none; }
-
-/* ---------- Today: the home screen ---------------------------------------
-   The reference is one luminous subject in a large empty field. So this
-   screen has exactly one bright thing - the next action - and everything
-   else is dim and small. If three things glow, nothing does. */
-
-#screen-today { padding: 0; }
-/* justify-content: safe center - a real screenshot from Felix's phone
-   showed the actual problem: on a tall phone, five short rows pinned to the
-   top left a huge dead black gap below them that read as broken rather
-   than a design choice. "safe center" middles short content (feels
-   composed, not stranded) but falls back to top alignment the instant
-   content would overflow - so a day with more proposals/notes still
-   scrolls correctly from the top instead of clipping. */
-.today-scroll {
-  flex: 1; overflow-y: auto; padding: 8px 20px 24px;
-  display: flex; flex-direction: column; justify-content: safe center;
-}
-
-.today-greeting {
-  color: var(--text-faint); font-size: 0.8rem; letter-spacing: 0.14em;
-  text-transform: uppercase; margin: 18px 0 28px;
-}
-
-/* The hero. A radial glow behind it rather than a card fill, so it reads as
-   lit from within instead of as a box on a page. */
-.hero {
-  position: relative; padding: 26px 22px 24px; border-radius: 20px;
-  background:
-    radial-gradient(120% 90% at 50% 0%, rgba(207,227,255,0.10), transparent 70%),
-    var(--surface);
-  border: 1px solid var(--border);
-  box-shadow: 0 0 60px -20px var(--accent-glow);
-}
-.hero-label {
-  color: var(--accent); font-size: 0.7rem; letter-spacing: 0.18em;
-  text-transform: uppercase; opacity: 0.85;
-}
-.hero-action {
-  /* Deliberately NOT headline-weight: this text is the money board's raw
-     action string, which is sometimes a fragment ("Act on Kleinanzeigen
-     sniper alerts") and sometimes a full legal sentence about the
-     Gewerbeanmeldung. A real screenshot at headline size and weight let one
-     long row take over the entire first screen. The "one lit thing" idea
-     from the reference is carried by the glow and the accent-coloured
-     label above this, not by making the sentence itself enormous. */
-  font-size: 1.14rem; line-height: 1.42; margin: 10px 0 14px;
-  font-weight: 460; letter-spacing: -0.005em; color: var(--text);
-}
-.hero-meta { display: flex; gap: 18px; color: var(--text-dim); font-size: 0.85rem; }
-.hero-meta .euros { color: var(--gold); }
-.hero-note {
-  margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border);
-  color: var(--text-dim); font-size: 0.84rem; line-height: 1.5;
-}
-
-/* Everything below the hero: quiet rows, no boxes, hairline separators. */
-.today-rows { margin-top: 26px; }
-.today-row {
-  display: flex; align-items: baseline; gap: 12px; padding: 15px 2px;
-  border-bottom: 1px solid var(--border); cursor: pointer;
-}
-.today-row:last-child { border-bottom: 0; }
-.today-row .val {
-  font-size: 1.15rem; font-variant-numeric: tabular-nums; min-width: 3.2ch;
-  color: var(--text);
-}
-.today-row .val.zero { color: var(--text-faint); }
-.today-row .lbl { color: var(--text-dim); font-size: 0.9rem; flex: 1; }
-.today-row .chev { color: var(--text-faint); font-size: 0.9rem; }
-.today-row .val.warn { color: var(--gold); }
-
-.today-quiet {
-  margin-top: 30px; color: var(--text-faint); font-size: 0.78rem;
-  line-height: 1.6; letter-spacing: 0.03em; text-align: center;
-}
-
-/* ---------- tab bar: icons, bigger targets ------------------------------ */
-.tabbar { background: rgba(0,0,0,0.86); backdrop-filter: blur(12px); }
-.tab {
-  display: flex; flex-direction: column; align-items: center; gap: 5px;
-  padding: 11px 0 8px; font-size: 0.72rem; font-weight: 500; letter-spacing: 0.03em;
-  min-height: 60px;              /* a real thumb target, not a text link */
-}
-.tab svg { width: 25px; height: 25px; stroke-width: 1.6; }
-.tab.active svg { filter: drop-shadow(0 0 6px var(--accent-glow)); }
-
-/* The notch and the home bar. Deliberately last in the file: an earlier
-   version put these near the top, above the .topbar/.tabbar blocks that set
-   padding wholesale, so they were silently overridden and did nothing -
-   which on a phone looks like the design simply ignoring the cutout.
-   Without them the top row hides under the camera and the tab bar sits under
-   the gesture pill, the most obvious "this is a website" tell there is. */
-.topbar { padding-top: calc(12px + env(safe-area-inset-top)); }
-.tabbar { padding-bottom: calc(6px + env(safe-area-inset-bottom)); }
-
-/* ==========================================================================
-   ATMOSPHERE — the "unnötig viel Design" layer
-   Two references: "Can You Grasp Time" (the luminous void) and efecto.app
-   (heavy dither grain over a particle form). Everything below is behind or
-   on top of content and never intercepts a tap.
-   ========================================================================== */
-
-/* The drifting particle field (fx.js). Fixed, so it is one continuous sky
-   behind every screen rather than something that scrolls away. z-index 0
-   with content at 1: it sits above the body's static gradients (which stay
-   as the nebula wash) and below everything readable. */
-#fx-canvas {
-  position: fixed; inset: 0; z-index: 0;
-  pointer-events: none;
-}
-.topbar, #screens, .tabbar { position: relative; z-index: 1; }
-
-/* Dither grain, straight from the efecto reference. An inline SVG
-   feTurbulence as a data URI: generated once by the browser, no image
-   request, no canvas, no per-frame cost. `mix-blend-mode: overlay` makes it
-   bite into the bright areas (the hero glow, the nebula) and stay invisible
-   over pure black - which is exactly how film grain behaves and why it reads
-   as texture rather than as a dirty screen. */
-#fx-grain {
-  position: fixed; inset: 0; z-index: 2;
-  pointer-events: none;
-  opacity: 0.85;
-  mix-blend-mode: soft-light;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.42'/%3E%3C/svg%3E");
-  background-size: 200px 200px;
-}
-
-/* A second, coarser dither pass at very low opacity. Two grains at different
-   scales is what separates "textured" from "noisy JPEG" - the fine layer
-   gives the surface, the coarse one gives it structure. */
-#fx-grain::after {
-  content: ""; position: absolute; inset: 0;
-  opacity: 0.35;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='m'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.35' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23m)' opacity='0.5'/%3E%3C/svg%3E");
-  background-size: 120px 120px;
-}
-
-/* --- hero: a light source, not a card ----------------------------------- */
-
-.hero { overflow: hidden; }
-
-/* A slow sweep of light crossing the card, like the shaft the reference's
-   hand is lit by. 9s apart so it registers as atmosphere you catch out of
-   the corner of your eye, not as a loading shimmer demanding attention. */
-.hero::before {
-  content: ""; position: absolute; inset: -40% -60%;
-  background: linear-gradient(75deg,
-    transparent 42%,
-    rgba(207, 227, 255, 0.13) 50%,
-    transparent 58%);
-  animation: heroSweep 9s ease-in-out infinite;
-  pointer-events: none;
-}
-@keyframes heroSweep {
-  0%, 62% { transform: translateX(-72%); }
-  100%    { transform: translateX(72%); }
-}
-
-/* The glow behind the card breathes. Very slow and very small - a 6% shift
-   over 7 seconds is felt rather than seen, which is the point. */
-.hero {
-  animation: heroBreathe 7s ease-in-out infinite;
-}
-@keyframes heroBreathe {
-  0%, 100% { box-shadow: 0 0 60px -20px var(--accent-glow); }
-  50%      { box-shadow: 0 0 78px -18px rgba(207, 227, 255, 0.26); }
-}
-
-.hero-label {
-  /* Wide tracking on a tiny uppercase label is the reference's own
-     typographic move (its "x.com/doganuraldesign" caption). */
-  text-shadow: 0 0 18px rgba(207, 227, 255, 0.45);
-}
-
-/* --- entrances ----------------------------------------------------------- */
-
-.fx-in {
-  opacity: 0;
-  animation: fxIn 620ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-@keyframes fxIn {
-  from { opacity: 0; transform: translateY(14px) scale(0.985); filter: blur(6px); }
-  to   { opacity: 1; transform: none;                          filter: blur(0);  }
-}
-
-/* Screen changes crossfade instead of cutting. */
-.screen.active { animation: screenIn 380ms cubic-bezier(0.16, 1, 0.3, 1); }
-@keyframes screenIn {
-  from { opacity: 0; transform: translateY(8px); }
-  to   { opacity: 1; transform: none; }
-}
-
-/* --- numbers ------------------------------------------------------------- */
-
-/* A non-zero count glows; a zero stays flat and faint. On this dashboard
-   that difference carries meaning - "0 Briefe raus" should look inert,
-   because it is. */
-.today-row .val:not(.zero) { text-shadow: 0 0 16px rgba(207, 227, 255, 0.35); }
-.today-row .val.warn       { text-shadow: 0 0 18px rgba(232, 201, 138, 0.45); }
-
-/* Tapping a row lights its whole line briefly. */
-.today-row { transition: background 220ms ease, padding-left 220ms ease; border-radius: 10px; }
-.today-row:active {
-  background: linear-gradient(90deg, rgba(207,227,255,0.09), transparent 75%);
-  padding-left: 10px;
-}
-
-/* --- tab bar ------------------------------------------------------------- */
-
-.tab { transition: color 240ms ease, transform 240ms cubic-bezier(0.16,1,0.3,1); }
-.tab:active { transform: scale(0.92); }
-.tab.active svg {
-  filter: drop-shadow(0 0 9px var(--accent-glow));
-  animation: tabPop 420ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-@keyframes tabPop {
-  0%   { transform: scale(0.8) translateY(2px); }
-  55%  { transform: scale(1.14); }
-  100% { transform: none; }
-}
-
-/* Every motion above is decoration. Someone who has asked their OS not to
-   animate things has not asked for an exception for pretty ones. */
-@media (prefers-reduced-motion: reduce) {
-  .hero, .hero::before, .screen.active, .fx-in, .tab.active svg {
-    animation: none !important;
-  }
-  .fx-in { opacity: 1; }
-}
-
-/* ==========================================================================
-   AMPLIFIED — second pass, after seeing pass one rendered on a real phone.
-   It was present and forgettable. This is the "unnötig viel" the brief
-   actually asked for.
-   ========================================================================== */
-
-/* Rim light on the hero. The reference's subject is defined by light
-   catching its edge against the void, not by an outline - a gradient border
-   does exactly that: bright where the light would fall (top-left), dissolving
-   to nothing on the shadow side. Two layers via background-clip because a
-   plain `border` cannot hold a gradient. */
-.hero {
-  border: 1px solid transparent;
-  /* The opaque #05060a base is load-bearing, not decoration. Without it this
-     rule's gradients replaced the original solid --surface fill entirely and
-     the card went translucent - the particle field drifted straight through
-     the text, which a screenshot caught immediately. A card lit from its own
-     edge has to be a solid object; light passes around it, not through it. */
-  background:
-    linear-gradient(#05060a, #05060a) padding-box,
-    radial-gradient(130% 100% at 50% -10%, rgba(207,227,255,0.12), transparent 68%)
-      padding-box,
-    linear-gradient(150deg,
-      rgba(207,227,255,0.5) 0%,
-      rgba(185,160,255,0.2) 26%,
-      rgba(207,227,255,0.05) 48%,
-      transparent 72%) border-box;
-}
-
-/* An aurora that actually moves, behind the hero content. Slow enough
-   (22s) to never compete with reading, large enough to be unmistakably
-   there - the previous version's 6% box-shadow shift was invisible. */
-.hero::after {
-  content: ""; position: absolute; inset: -60% -30% auto -30%; height: 190%;
-  background:
-    radial-gradient(38% 44% at 28% 32%, rgba(150,190,255,0.20), transparent 70%),
-    radial-gradient(32% 38% at 74% 58%, rgba(185,160,255,0.15), transparent 70%),
-    radial-gradient(26% 30% at 52% 84%, rgba(232,201,138,0.09), transparent 72%);
-  filter: blur(26px);
-  animation: aurora 22s ease-in-out infinite alternate;
-  pointer-events: none; z-index: 0;
-}
-@keyframes aurora {
-  0%   { transform: translate3d(-7%, -4%, 0) rotate(-3deg) scale(1.05); }
-  50%  { transform: translate3d(5%, 3%, 0)  rotate(2deg)  scale(1.14); }
-  100% { transform: translate3d(-3%, 6%, 0) rotate(4deg)  scale(1.02); }
-}
-/* Hero content has to sit above its own aurora and sweep. */
-.hero > * { position: relative; z-index: 1; }
-
-/* --- the numbers become the point --------------------------------------- */
-
-.today-rows { margin-top: 30px; }
-.today-row { padding: 18px 2px; gap: 16px; align-items: center; }
-.today-row .val {
-  /* Big, tabular, and light-weight: a large thin numeral reads as data on a
-     dark field rather than as a shouting headline. */
-  font-size: 2.1rem; font-weight: 300; min-width: 3.6ch;
-  letter-spacing: -0.03em; line-height: 1;
-}
-.today-row .val.zero { color: var(--text-faint); font-weight: 200; }
-.today-row .lbl { font-size: 0.95rem; }
-
-/* --- the greeting becomes a title ---------------------------------------- */
-
-.today-greeting {
-  font-size: 0.72rem; letter-spacing: 0.34em; margin: 22px 0 22px;
-  color: var(--text-dim);
-  /* A hairline that fades out to the right, like the caption rules in the
-     reference - a full-width divider would cut the void in half. */
-  padding-bottom: 14px;
-  border-bottom: 1px solid transparent;
-  border-image: linear-gradient(90deg, rgba(207,227,255,0.28), transparent 78%) 1;
-}
-
-/* --- vignette ------------------------------------------------------------ */
-
-/* Darkens the corners so the centre of the screen reads as lit. This is what
-   makes a black background feel like depth instead of like an off pixel, and
-   it is the single cheapest "expensive-looking" trick there is. Sits under
-   the grain, over the particles. */
-#fx-grain::before {
-  content: ""; position: absolute; inset: 0;
-  background: radial-gradient(120% 78% at 50% 42%,
-    transparent 44%, rgba(0,0,0,0.5) 82%, rgba(0,0,0,0.78) 100%);
-  mix-blend-mode: normal;
-}
-
-/* --- topbar ------------------------------------------------------------- */
-
-.brand {
-  letter-spacing: 0.22em; font-size: 0.92rem; font-weight: 600;
-  text-shadow: 0 0 22px rgba(207,227,255,0.5);
-}
-.topbar { border-bottom: 1px solid transparent;
-  border-image: linear-gradient(90deg, rgba(207,227,255,0.22), transparent 88%) 1; }
-
-/* The connection dot gets a pulse - the one live, breathing thing in the
-   chrome, so "is it connected" is answerable without reading anything. */
-.dot.ok { box-shadow: 0 0 12px var(--good); animation: dotPulse 2.6s ease-in-out infinite; }
-@keyframes dotPulse {
-  0%, 100% { opacity: 1;    box-shadow: 0 0 12px var(--good); }
-  50%      { opacity: 0.55; box-shadow: 0 0 4px var(--good); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .hero::after, .dot.ok { animation: none !important; }
-}
-
-/* Atmosphere is dialled back on the screens whose job is reading. On Today
-   and Chat the particle field IS the design - lots of open space, little
-   text, and it carries the whole reference. On a 100-row lead list or the
-   flip log it competes with the thing Felix actually has to read to make
-   money, and a bright mote landing behind a phone number is a real cost for
-   a decorative gain. Same field, same motion, just quieter where it would
-   otherwise be in the way. */
-body[data-screen="screen-snipes"] #fx-canvas,
-body[data-screen="screen-dmarc"] #fx-canvas,
-body[data-screen="screen-flips"] #fx-canvas,
-body[data-screen="screen-money"] #fx-canvas,
-body[data-screen="screen-downloads"] #fx-canvas {
-  opacity: 0.35;
-}
-body[data-screen="screen-snipes"] #fx-grain,
-body[data-screen="screen-dmarc"] #fx-grain,
-body[data-screen="screen-flips"] #fx-grain,
-body[data-screen="screen-money"] #fx-grain,
-body[data-screen="screen-downloads"] #fx-grain {
-  opacity: 0.5;
-}
-#fx-canvas, #fx-grain { transition: opacity 420ms ease; }
-
-/* --- snipes -------------------------------------------------------------- */
-
-.snipe-filters { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
-.chip-row { display: flex; flex-wrap: wrap; gap: 7px; }
-.chip {
-  padding: 7px 13px; border-radius: 999px; font-size: 0.8rem; cursor: pointer;
-  border: 1px solid var(--border); background: var(--surface); color: var(--text-dim);
-  transition: background 180ms ease, color 180ms ease, border-color 180ms ease;
-}
-.chip.on { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: 600; }
-.chip.clear { color: var(--text-faint); }
-
-/* Tier colour runs warm-to-cool down the ranking: S reads as gold because it
-   is rare (2 of 75 on real data), D recedes. Deliberately not red/green -
-   this is a triage order, and a green badge would read as "good deal", which
-   is exactly the valuation claim this feature refuses to make. */
-.tier-badge {
-  display: inline-flex; align-items: center; justify-content: center;
-  min-width: 24px; height: 24px; border-radius: 7px; font-size: 0.78rem;
-  font-weight: 700; flex-shrink: 0;
-}
-.tier-badge.tier-S { background: var(--gold); color: #1a1408; }
-.tier-badge.tier-A { background: var(--accent); color: #06131f; }
-.tier-badge.tier-B { background: var(--surface-2); color: var(--accent); }
-.tier-badge.tier-C { background: var(--surface-2); color: var(--text-dim); }
-.tier-badge.tier-D { background: transparent; color: var(--text-faint); border: 1px solid var(--border); }
-.chip.tier-S.on { background: var(--gold); border-color: var(--gold); color: #1a1408; }
-
-.data-row.snipe { display: block; text-decoration: none; color: inherit; }
-.snipe-head { display: flex; align-items: center; gap: 10px; }
-.snipe-head .title { font-size: 1rem; color: var(--text); line-height: 1.35; }
-.data-row.snipe .meta .free { color: var(--gold); font-weight: 600; }
-.data-row.snipe .reasons {
-  margin-top: 5px; font-size: 0.75rem; color: var(--text-faint); line-height: 1.45;
-}
-
-/* --- phone card on Today ------------------------------------------------- */
-
-.phone-card { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--border); }
-.phone-head { display: flex; align-items: center; gap: 9px; margin-bottom: 12px; }
-.phone-dot {
-  width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint);
-  flex-shrink: 0;
-}
-.phone-dot.charging { background: var(--good); box-shadow: 0 0 9px var(--good); }
-.phone-dot.off { background: var(--text-faint); }
-.phone-label {
-  font-size: 0.72rem; letter-spacing: 0.2em; text-transform: uppercase;
-  color: var(--text-dim);
-}
-.phone-meta { font-size: 0.78rem; color: var(--text-faint); margin-left: auto; }
-
-.phone-note { padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 0.85rem; }
-.phone-note:last-of-type { border-bottom: 0; }
-.phone-note.quiet { color: var(--text-faint); font-style: italic; border-bottom: 0; }
-/* The app name is the least important part - it orients you, it is not the
-   message. Dim and small; the title carries the weight. */
-.phone-note .np {
-  display: inline-block; font-size: 0.68rem; color: var(--text-faint);
-  text-transform: uppercase; letter-spacing: 0.09em; margin-right: 8px;
-}
-.phone-note .nt { color: var(--text); }
-.phone-note .nx { display: block; color: var(--text-dim); font-size: 0.8rem; margin-top: 2px; }
-.phone-filtered { margin-top: 10px; font-size: 0.72rem; color: var(--text-faint); }
-
-/* --- device control ------------------------------------------------------ */
+/* --- device panel ------------------------------------------------------ */
 
 .device-info {
-  display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 14px 0 12px;
-  font-size: 0.8rem; color: var(--text-dim);
+  display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.78rem;
+  color: var(--text-dim); margin-bottom: 14px; font-variant-numeric: tabular-nums;
 }
-.device-screen-wrap { display: flex; justify-content: center; margin-bottom: 14px; }
-.device-screen {
-  max-width: 100%; max-height: 58vh; border-radius: 12px;
-  border: 1px solid var(--border);
-  /* The screenshot is the control surface, so it has to look tappable and
-     must never be dragged off by a long-press image menu. */
-  cursor: crosshair; -webkit-user-select: none; user-select: none;
-  -webkit-touch-callout: none;
-}
-.device-controls { display: flex; flex-direction: column; gap: 10px; }
-.device-typerow { display: flex; gap: 8px; }
-.device-typerow input {
-  flex: 1; padding: 11px 13px; border-radius: 10px;
-  border: 1px solid var(--border); background: var(--surface); color: var(--text);
-}
+.device-info span { display: inline-flex; align-items: center; gap: 5px; }
 
-/* Eight tabs at 393px is ~49px each - below a comfortable thumb target, and
-   the labels start colliding ("Geräte Dateien" ran together on a real
-   screenshot). Scrolling horizontally keeps every tab at a real size instead
-   of shrinking all of them until none are readable. */
-.tabbar {
-  overflow-x: auto; overflow-y: hidden;
-  scrollbar-width: none; -webkit-overflow-scrolling: touch;
+.device-stage {
+  position: relative; border-radius: var(--r); overflow: hidden;
+  background: #000; border: 1px solid var(--edge-soft);
+  box-shadow: var(--e2);
+  max-height: 62vh; margin: 0 auto; display: grid; place-items: center;
 }
-.tabbar::-webkit-scrollbar { display: none; }
-.tab { flex: 0 0 auto; min-width: 62px; padding-left: 4px; padding-right: 4px; }
-
-/* Command output: monospace, scrollable, and never allowed to push the page
-   sideways - a long line from a compiler would otherwise break the layout. */
-.node-output {
-  margin-top: 10px; padding: 12px; border-radius: 10px;
-  background: var(--surface); border: 1px solid var(--border);
-  color: var(--text-dim); font-size: 0.78rem; line-height: 1.5;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  white-space: pre-wrap; word-break: break-word;
-  max-height: 40vh; overflow-y: auto;
+/* Both pictures occupy the same box: the still underneath, the live frames
+   over it. The live layer fades in only once a frame has actually decoded,
+   so the stage never blinks to black while the video starts. */
+.device-stage .layer {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: contain; touch-action: manipulation;
+  opacity: 0; transition: opacity 260ms ease;
 }
-.chip:disabled { opacity: 0.45; cursor: default; }
+.device-stage .layer.on { opacity: 1; }
+.stage-wake {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+  z-index: 4;
+}
+.stage-empty { color: var(--text-faint); font-size: 0.85rem; padding: 40px; }
+.stage-badge {
+  position: absolute; top: 10px; left: 10px; z-index: 2;
+  font-size: 0.62rem; letter-spacing: 0.14em; text-transform: uppercase;
+  padding: 4px 9px; border-radius: 999px;
+  background: rgba(0,0,0,0.55); color: var(--text-faint);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+}
+.stage-badge.live { color: #05070c; background: var(--good); font-weight: 700; }
+.stagebar { display: flex; gap: 8px; margin: 10px 0 14px; flex-wrap: wrap; }
 
-/* Tap feedback. The phone reacts in milliseconds; a fresh screenshot takes
-   seconds. Without a marker at the tap point the gap reads as "nothing
-   happened" and you tap again - which on a real phone is a second real tap. */
-.device-screen-wrap { position: relative; }
 .tap-ripple {
   position: absolute; width: 34px; height: 34px; margin: -17px 0 0 -17px;
-  border-radius: 50%; pointer-events: none;
-  border: 2px solid var(--accent);
-  animation: tapRipple 600ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  border-radius: 50%; border: 2px solid var(--accent); pointer-events: none;
+  animation: ripple 620ms cubic-bezier(0.2,0.7,0.3,1) forwards; z-index: 3;
 }
-@keyframes tapRipple {
+@keyframes ripple {
   from { transform: scale(0.3); opacity: 0.95; }
-  to   { transform: scale(1.9); opacity: 0; }
+  to { transform: scale(1.5); opacity: 0; }
 }
-/* While a new frame is loading, the visible one is the OLD one - dimming it
-   says so instead of pretending it is current. */
-.device-screen.stale { opacity: 0.55; transition: opacity 150ms ease; }
+
+.device-controls { margin-bottom: 6px; }
+.toolpanel:empty { display: none; }
+.toolpanel {
+  border-radius: var(--r-sm); padding: 14px; margin-bottom: 12px;
+  border: 1px solid transparent;
+  background-image: linear-gradient(var(--pane), var(--pane)),
+    linear-gradient(to bottom, var(--edge), transparent 70%);
+  background-origin: border-box; background-clip: padding-box, border-box;
+}
+.toolpanel .hint { margin-bottom: 10px; }
+.kv { font-size: 0.8rem; color: var(--text-dim); line-height: 1.7; }
+.kv b { color: var(--text); font-weight: 600; }
+.list-line {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 9px 0; border-bottom: 1px solid var(--edge-soft);
+  font-size: 0.82rem; color: var(--text-dim);
+}
+.list-line:last-child { border-bottom: none; }
+.list-line .who { color: var(--text); font-weight: 600; }
+.list-line .when { color: var(--text-faint); font-size: 0.72rem; white-space: nowrap; }
+
+/* --- cost tab ---------------------------------------------------------- */
+
+.balance {
+  position: relative; border-radius: 24px; padding: 24px 20px;
+  margin-bottom: 18px; text-align: center; overflow: hidden;
+  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+  border: 1px solid transparent;
+  background-image:
+    linear-gradient(165deg, rgba(24,32,48,0.86), rgba(6,8,13,0.9)),
+    linear-gradient(to bottom, rgba(207,227,255,0.28), transparent 60%);
+  background-origin: border-box; background-clip: padding-box, border-box;
+  box-shadow: var(--e2);
+}
+.balance .amount {
+  font-size: 3rem; font-weight: 200; letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums; line-height: 1;
+  color: var(--accent); text-shadow: 0 0 40px rgba(207,227,255,0.35);
+}
+.balance .amount.low { color: var(--gold); text-shadow: 0 0 40px rgba(232,201,138,0.35); }
+.balance .cap { font-size: 0.68rem; letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--text-faint); margin-bottom: 14px; }
+.balance .sub { font-size: 0.8rem; color: var(--text-dim); margin: 12px 0 18px; }
+.meter {
+  height: 4px; border-radius: 999px; background: rgba(255,255,255,0.08);
+  overflow: hidden; margin: 16px 0 0;
+}
+.meter i { display: block; height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--violet)); }
+.meter.warn i { background: linear-gradient(90deg, var(--gold), var(--bad)); }
+.topup {
+  display: inline-block; text-decoration: none; font-size: 0.85rem; font-weight: 600;
+  color: #05070c; background: var(--accent); border-radius: 999px;
+  padding: 11px 22px; box-shadow: 0 0 26px rgba(207,227,255,0.28);
+}
+
+/* --- tab bar ----------------------------------------------------------- */
+
+.tabbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+  display: flex; border-radius: 0; border-width: 1px 0 0 0;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.tab {
+  flex: 1; background: none; border: none; cursor: pointer; color: var(--text-faint);
+  font: inherit; font-size: 0.62rem; letter-spacing: 0.04em;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 10px 2px; height: var(--tabbar-h);
+  transition: color 200ms ease;
+}
+.tab svg { width: 21px; height: 21px; stroke-width: 1.6; }
+.tab.active { color: var(--accent); }
+.tab.active svg { filter: drop-shadow(0 0 8px rgba(207,227,255,0.55)); }
+.tab span { transition: opacity 200ms ease; }
+
+/* --- sheet ------------------------------------------------------------- */
+
+.sheet-wrap { position: fixed; inset: 0; z-index: 70; display: flex; align-items: flex-end; }
+.sheet-wrap.hidden { display: none; }
+.sheet-scrim { position: absolute; inset: 0; background: rgba(0,0,0,0.6);
+  -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
+.sheet {
+  position: relative; width: 100%; max-height: 82vh; overflow-y: auto;
+  border-radius: 26px 26px 0 0; border-width: 1px 0 0 0;
+  padding: 10px var(--pad) calc(env(safe-area-inset-bottom, 0px) + 22px);
+  box-shadow: var(--e3);
+  animation: rise 280ms cubic-bezier(0.2,0.8,0.25,1);
+}
+@keyframes rise { from { transform: translateY(18px); opacity: 0; } }
+.sheet-grip {
+  width: 38px; height: 4px; border-radius: 999px; background: var(--edge);
+  margin: 4px auto 14px;
+}
+.sheet-item {
+  display: flex; align-items: center; gap: 14px; width: 100%;
+  padding: 15px 6px; background: none; border: none; cursor: pointer;
+  border-bottom: 1px solid var(--edge-soft);
+  font: inherit; font-size: 0.95rem; color: var(--text); text-align: left;
+}
+.sheet-item:last-child { border-bottom: none; }
+.sheet-item .si-sub { margin-left: auto; font-size: 0.75rem; color: var(--text-faint);
+  font-variant-numeric: tabular-nums; }
+.sheet-item.on { color: var(--accent); }
+
+/* --- modal ------------------------------------------------------------- */
+
+.modal { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center;
+  background: rgba(0,0,0,0.72); padding: var(--pad); }
+.modal.hidden { display: none; }
+.modal-box { width: 100%; max-width: 380px; border-radius: 22px; padding: 24px; }
+.modal-box h2 { margin: 0 0 8px; font-size: 1.1rem; }
+.modal-box input {
+  width: 100%; font: inherit; font-size: 0.95rem; color: var(--text);
+  background: var(--pane); border: 1px solid var(--edge-soft);
+  border-radius: var(--r-sm); padding: 12px; margin: 12px 0;
+}
+.modal-box input:focus { outline: none; border-color: var(--accent); }
+
+/* --- entrance ---------------------------------------------------------- */
+
+.reveal { opacity: 0; transform: translateY(10px); }
+.reveal.in { opacity: 1; transform: none;
+  transition: opacity 520ms ease, transform 520ms cubic-bezier(0.2,0.8,0.25,1); }
+
+.hidden { display: none !important; }
+a { color: var(--accent); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .reveal { opacity: 1; transform: none; }
+}
+
+/* fx.js marks staggered entrances with .fx-in and an inline animation-delay;
+   this is the animation it is naming. Kept separate from .reveal (which is
+   the CSS-only variant) so the two cannot half-apply to the same element. */
+.fx-in { animation: fxin 520ms cubic-bezier(0.2,0.8,0.25,1) both; }
+@keyframes fxin { from { opacity: 0; transform: translateY(10px); } }
+
+/* The tab bar highlights "Mehr" while any screen behind it is open, so the
+   bar never shows nothing selected. */
+#more-tab.active { color: var(--accent); }
