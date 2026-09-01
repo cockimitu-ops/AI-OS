@@ -5324,3 +5324,75 @@ class TestLoginQr(unittest.TestCase):
 
     def test_missing_env_file_is_not_a_crash(self):
         self.assertEqual(self.lq.load_env("/nonexistent/.env"), {})
+
+
+class TestProposalFactChecks(unittest.TestCase):
+    """Guards added 2026-09-01 after Tech_Scout proposed dropping
+    `openrouter-labs/free-tier-tracker` into aios_runner.py. That repository
+    does not exist; the digest it reasoned over held one unrelated project.
+    Felix approved it. Nothing broke - but only because the worker was too
+    weak to act on it, which is a coincidence rather than a safety property."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "proposals_fc", os.path.join(HERE, "proposals.py"))
+        cls.pr = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.pr)
+
+    def test_a_nonexistent_repo_is_caught(self):
+        problems = self.pr.check_claims(
+            "openrouter-labs/free-tier-tracker into MODEL_CHAIN",
+            verify=lambda o, n: False)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("free-tier-tracker", problems[0])
+
+    def test_a_real_repo_passes(self):
+        self.assertEqual(
+            self.pr.check_claims("adopt torvalds/linux", verify=lambda o, n: True),
+            [])
+
+    def test_an_unreachable_github_is_not_treated_as_absent(self):
+        """None means "could not check". Reporting it as "does not exist"
+        would make a flaky connection silently delete real proposals - a
+        false positive here is worse than the hallucination it guards
+        against, because the proposal disappears without anyone seeing it."""
+        self.assertEqual(
+            self.pr.check_claims("some-owner/some-repo", verify=lambda o, n: None),
+            [])
+
+    def test_file_paths_are_not_mistaken_for_repositories(self):
+        """"02_Systems/Automation/TaskRunner/webapp/api.py" produced a false
+        "TaskRunner/webapp does not exist" before the path check existed."""
+        for path in ("see 02_Systems/Automation/TaskRunner/webapp/api.py",
+                     "edit scripts/money_board.py",
+                     "in 10_Projects/LocalArbitrage/README.md"):
+            self.assertEqual(self.pr.check_claims(path, verify=lambda o, n: False),
+                             [], path)
+
+    def test_a_refusal_never_becomes_a_reviewable_proposal(self):
+        """Silence is a correct and preferred answer for a scheduled agent -
+        Tech_Scout's own prompt says so. Its refusal arrived as proposal
+        number four in Felix's review list."""
+        for refusal in (
+                "AI_PROPOSAL: — none. The repository longnick/small-pos is a "
+                "POS starter with no fit here.",
+                "AI_PROPOSAL: Keine passenden Kandidaten heute.",
+                "AI_PROPOSAL: none"):
+            self.assertEqual(self.pr.parse(refusal), [], refusal[:40])
+
+    def test_a_real_proposal_still_gets_through(self):
+        self.assertEqual(
+            len(self.pr.parse("AI_PROPOSAL: Baue X in scripts/foo.py ein weil Y")), 1)
+
+    def test_unmarked_output_is_still_kept_as_one_proposal(self):
+        """The fallback exists so a forgotten prefix does not discard an
+        agent's whole run."""
+        self.assertEqual(len(self.pr.parse("Ich schlage vor: mach Z")), 1)
+
+    def test_filtered_refusals_do_not_trigger_the_unmarked_fallback(self):
+        """The specific bug: markers were present, everything they held was
+        filtered, and the fallback then returned the RAW OUTPUT as one
+        proposal - turning a correctly refused "none" back into a reviewable
+        item."""
+        self.assertEqual(self.pr.parse("AI_PROPOSAL: none."), [])

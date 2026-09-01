@@ -25,6 +25,8 @@ Stdlib only: scripts/ runs under /usr/bin/python3 with no venv packages.
 """
 import json
 import os
+import urllib.request
+import urllib.error
 import re
 import time
 
@@ -66,6 +68,86 @@ def _atomic_write(path, text):
     os.replace(tmp, path)
 
 
+# --- fact checks before a proposal reaches Felix --------------------------
+#
+# Written after 2026-09-01, when Tech_Scout proposed dropping
+# `openrouter-labs/free-tier-tracker` into aios_runner.py's MODEL_CHAIN. The
+# repository does not exist. The digest it was told to reason over contained
+# exactly one project, an offline point-of-sale starter, and the invention had
+# a name, a description, a target file and an integration point - the kind of
+# hallucination that reads as competence.
+#
+# The approval gate could not catch it and could not have: a plausible
+# technical claim is not something a human can verify from a Telegram message.
+# Felix approved it. Nothing broke, but only because the worker was too weak
+# to act on it - which is a coincidence, not a safety property.
+#
+# So: claims that are cheaply checkable get checked before they are shown.
+# Deterministic, no model involved.
+
+GITHUB_REPO_RE = re.compile(r"\b([A-Za-z0-9][\w.-]{0,38})/([A-Za-z0-9][\w.-]{0,99})\b")
+# Words that look like owner/repo but are paths, not repositories.
+_NOT_A_REPO = {"and", "or", "the", "a", "an", "km", "eur", "usd",
+               "input", "output", "yes", "no", "n", "s", "w", "e"}
+GITHUB_TIMEOUT = 8
+
+
+def _looks_like_repo(owner, name):
+    if owner.lower() in _NOT_A_REPO or name.lower() in _NOT_A_REPO:
+        return False
+    # File paths are the main false positive: "scripts/money_board.py",
+    # "10_Projects/LocalArbitrage". A real repo name has no dots pointing at
+    # a file extension and no vault-style numeric prefix.
+    if "." in name and name.rsplit(".", 1)[-1].isalpha() and len(name.rsplit(".", 1)[-1]) <= 4:
+        return False
+    if owner[:2].isdigit():
+        return False
+    return True
+
+
+def github_repo_exists(owner, name, timeout=GITHUB_TIMEOUT):
+    """-> True / False / None (could not check).
+
+    None matters: a network failure must not be reported as "does not exist",
+    or a flaky connection starts silently dropping real proposals."""
+    url = f"https://api.github.com/repos/{owner}/{name}"
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "AI-OS-proposal-check",
+        "Accept": "application/vnd.github+json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status == 200
+    except urllib.error.HTTPError as e:
+        return False if e.code == 404 else None
+    except Exception:  # noqa: BLE001 - offline, DNS, rate limit: unknown, not absent
+        return None
+
+
+def check_claims(text, verify=github_repo_exists):
+    """-> list of problems found in a proposal's text. Empty means nothing
+    checkable was wrong."""
+    problems = []
+    seen = set()
+    text = text or ""
+    for match in GITHUB_REPO_RE.finditer(text):
+        owner, name = match.groups()
+        # A candidate embedded in a longer path is a path, not a repository.
+        # "02_Systems/Automation/TaskRunner/webapp/api.py" produced a false
+        # "TaskRunner/webapp does not exist" until this check existed - and a
+        # false positive here silently deletes a real proposal, which is worse
+        # than the hallucination it is meant to catch.
+        before = text[:match.start()]
+        after = text[match.end():]
+        if before.endswith("/") or after.startswith("/"):
+            continue
+        if not _looks_like_repo(owner, name) or (owner, name) in seen:
+            continue
+        seen.add((owner, name))
+        if verify(owner, name) is False:
+            problems.append(f"GitHub-Repo existiert nicht: {owner}/{name}")
+    return problems
+
+
 def parse(output):
     """Agent output -> [{"kind": "ai"|"human", "text": str}].
 
@@ -79,18 +161,57 @@ def parse(output):
     at all - losing an agent's day of thinking to a forgotten prefix would be
     worse than showing Felix one unusually long item."""
     found = []
+    matched_any = False
     for kind, text in PROPOSAL_RE.findall(output or ""):
+        matched_any = True
         text = text.strip()
         if not text:
+            continue
+        # A "none" answer is a real and preferred outcome for a scheduled
+        # agent - Tech_Scout's own prompt says silence beats a weak
+        # suggestion. It should never become a reviewable item, which is
+        # exactly what happened on 2026-09-01: its correct refusal arrived as
+        # proposal number four in Felix's list.
+        if _is_refusal(text):
             continue
         found.append({"kind": (kind or DEFAULT_KIND).lower(),
                       "text": text[:MAX_PROPOSAL_CHARS]})
     if found:
         return found
+    # The fallback exists for output that carries no marker at all - losing an
+    # agent's whole run to a forgotten prefix would be worse than one long
+    # item. It must NOT fire when markers were present and everything they
+    # held was filtered: that turned a correctly-refused "none" back into a
+    # reviewable proposal, which is exactly the bug this filtering was added
+    # to remove.
+    if matched_any:
+        return []
     text = (output or "").strip()
-    if not text:
+    if not text or _is_refusal(text):
         return []
     return [{"kind": DEFAULT_KIND, "text": text[:MAX_PROPOSAL_CHARS]}]
+
+
+REFUSAL_RE = re.compile(
+    r"^\W*(none|keine|nichts|no proposal|kein vorschlag)\b[\s.,;:—-]*",
+    re.I)
+
+
+def _is_refusal(text):
+    """Is this an agent declining rather than proposing?
+
+    Matched at the start only, and required to be essentially the whole
+    message: "none. the repository X is a POS starter but does not fit" is a
+    refusal with reasoning, while a proposal that merely mentions the word
+    none somewhere is not."""
+    stripped = (text or "").strip()
+    m = REFUSAL_RE.match(stripped)
+    if not m:
+        return False
+    remainder = stripped[m.end():].strip()
+    # A refusal may explain itself; it may not smuggle in a proposal. If the
+    # explanation is long enough to be one, keep it and let Felix decide.
+    return len(remainder) < 400
 
 
 def load(path):
@@ -109,9 +230,18 @@ def add(agent, items, now=None):
     pending = load(PENDING_PATH)
     stamp = now or time.strftime("%Y-%m-%d %H:%M")
     for item in items:
+        text = item.get("text", "")
+        # Checked here rather than at review time: this runs once, when the
+        # proposal is written, instead of on every listing - and a proposal
+        # that fails a check should never enter the pending list at all, so
+        # it cannot be approved by someone scrolling quickly.
+        problems = check_claims(text)
+        if problems:
+            print(f"[!] Vorschlag verworfen ({agent}): {'; '.join(problems)}")
+            continue
         pending.append({"agent": agent or "worker",
                         "kind": item.get("kind", DEFAULT_KIND),
-                        "text": item.get("text", ""),
+                        "text": text,
                         "created": stamp})
     _atomic_write(PENDING_PATH, json.dumps(pending, indent=2, ensure_ascii=False))
     return len(items)

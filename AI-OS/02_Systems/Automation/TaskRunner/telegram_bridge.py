@@ -141,8 +141,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             path = os.path.join(INBOX, name)
             body = (agents.directive(item["agent"])
                     if agents.resolve(item.get("agent", "")) else "")
+            # The instruction to EXECUTE is explicit, and it has to be.
+            # Observed 2026-09-01: two approved tasks came back as prose and
+            # as another AI_PROPOSAL rather than as work. The agents were
+            # behaving correctly for their own personas - Tech_Scout's prompt
+            # says to output only proposal lines - so an approved task looked
+            # to them like another proposal round. Nothing was done, and both
+            # were logged as completed.
             body += ("<!-- notify -->\n"
                      "(Approved by Felix from tonight's review.)\n\n"
+                     "DO THIS NOW. This is not a proposal round - Felix has "
+                     "already approved it and is expecting the work to be "
+                     "done. Do NOT reply with AI_PROPOSAL or HUMAN_PROPOSAL; "
+                     "that output is ignored here. Make the actual change, "
+                     "then report in plain words what you changed and where. "
+                     "If it turns out to be impossible or the premise is "
+                     "wrong - a file or repository that does not exist, for "
+                     "instance - say that plainly instead of doing something "
+                     "adjacent.\n\n"
                      f"{item['text']}\n")
             tmp = f"{path}.part"
             with open(tmp, "w", encoding="utf-8") as f:

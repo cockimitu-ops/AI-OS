@@ -1104,6 +1104,16 @@ def _run_task(task_path, filename):
         stored = proposals.add(agent_name, proposals.parse(output))
         print(f"[~] Stored {stored} proposal(s) from {agent_name or 'worker'}")
 
+    # An approved task that answers with another proposal did nothing. It used
+    # to be logged as completed, which is how two approved items on
+    # 2026-09-01 silently accomplished nothing while reporting success. Say so
+    # instead - a task that produced no work is not done.
+    if (not propose and filename.startswith("task_approved_")
+            and proposals.PROPOSAL_RE.search(output or "")):
+        output = ("NICHTS GETAN: Der Agent hat auf einen genehmigten Auftrag "
+                  "erneut mit einem Vorschlag geantwortet, statt ihn "
+                  "auszuführen.\n\n" + output)
+
     _write_log(filename, output)
     os.rename(task_path, os.path.join(COMPLETED, filename))
     if notify and not propose:
