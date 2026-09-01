@@ -337,3 +337,268 @@ body { display: flex; flex-direction: column; }
    the gesture pill, the most obvious "this is a website" tell there is. */
 .topbar { padding-top: calc(12px + env(safe-area-inset-top)); }
 .tabbar { padding-bottom: calc(6px + env(safe-area-inset-bottom)); }
+
+/* ==========================================================================
+   ATMOSPHERE — the "unnötig viel Design" layer
+   Two references: "Can You Grasp Time" (the luminous void) and efecto.app
+   (heavy dither grain over a particle form). Everything below is behind or
+   on top of content and never intercepts a tap.
+   ========================================================================== */
+
+/* The drifting particle field (fx.js). Fixed, so it is one continuous sky
+   behind every screen rather than something that scrolls away. z-index 0
+   with content at 1: it sits above the body's static gradients (which stay
+   as the nebula wash) and below everything readable. */
+#fx-canvas {
+  position: fixed; inset: 0; z-index: 0;
+  pointer-events: none;
+}
+.topbar, #screens, .tabbar { position: relative; z-index: 1; }
+
+/* Dither grain, straight from the efecto reference. An inline SVG
+   feTurbulence as a data URI: generated once by the browser, no image
+   request, no canvas, no per-frame cost. `mix-blend-mode: overlay` makes it
+   bite into the bright areas (the hero glow, the nebula) and stay invisible
+   over pure black - which is exactly how film grain behaves and why it reads
+   as texture rather than as a dirty screen. */
+#fx-grain {
+  position: fixed; inset: 0; z-index: 2;
+  pointer-events: none;
+  opacity: 0.85;
+  mix-blend-mode: soft-light;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.42'/%3E%3C/svg%3E");
+  background-size: 200px 200px;
+}
+
+/* A second, coarser dither pass at very low opacity. Two grains at different
+   scales is what separates "textured" from "noisy JPEG" - the fine layer
+   gives the surface, the coarse one gives it structure. */
+#fx-grain::after {
+  content: ""; position: absolute; inset: 0;
+  opacity: 0.35;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='m'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.35' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23m)' opacity='0.5'/%3E%3C/svg%3E");
+  background-size: 120px 120px;
+}
+
+/* --- hero: a light source, not a card ----------------------------------- */
+
+.hero { overflow: hidden; }
+
+/* A slow sweep of light crossing the card, like the shaft the reference's
+   hand is lit by. 9s apart so it registers as atmosphere you catch out of
+   the corner of your eye, not as a loading shimmer demanding attention. */
+.hero::before {
+  content: ""; position: absolute; inset: -40% -60%;
+  background: linear-gradient(75deg,
+    transparent 42%,
+    rgba(207, 227, 255, 0.13) 50%,
+    transparent 58%);
+  animation: heroSweep 9s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes heroSweep {
+  0%, 62% { transform: translateX(-72%); }
+  100%    { transform: translateX(72%); }
+}
+
+/* The glow behind the card breathes. Very slow and very small - a 6% shift
+   over 7 seconds is felt rather than seen, which is the point. */
+.hero {
+  animation: heroBreathe 7s ease-in-out infinite;
+}
+@keyframes heroBreathe {
+  0%, 100% { box-shadow: 0 0 60px -20px var(--accent-glow); }
+  50%      { box-shadow: 0 0 78px -18px rgba(207, 227, 255, 0.26); }
+}
+
+.hero-label {
+  /* Wide tracking on a tiny uppercase label is the reference's own
+     typographic move (its "x.com/doganuraldesign" caption). */
+  text-shadow: 0 0 18px rgba(207, 227, 255, 0.45);
+}
+
+/* --- entrances ----------------------------------------------------------- */
+
+.fx-in {
+  opacity: 0;
+  animation: fxIn 620ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+@keyframes fxIn {
+  from { opacity: 0; transform: translateY(14px) scale(0.985); filter: blur(6px); }
+  to   { opacity: 1; transform: none;                          filter: blur(0);  }
+}
+
+/* Screen changes crossfade instead of cutting. */
+.screen.active { animation: screenIn 380ms cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes screenIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* --- numbers ------------------------------------------------------------- */
+
+/* A non-zero count glows; a zero stays flat and faint. On this dashboard
+   that difference carries meaning - "0 Briefe raus" should look inert,
+   because it is. */
+.today-row .val:not(.zero) { text-shadow: 0 0 16px rgba(207, 227, 255, 0.35); }
+.today-row .val.warn       { text-shadow: 0 0 18px rgba(232, 201, 138, 0.45); }
+
+/* Tapping a row lights its whole line briefly. */
+.today-row { transition: background 220ms ease, padding-left 220ms ease; border-radius: 10px; }
+.today-row:active {
+  background: linear-gradient(90deg, rgba(207,227,255,0.09), transparent 75%);
+  padding-left: 10px;
+}
+
+/* --- tab bar ------------------------------------------------------------- */
+
+.tab { transition: color 240ms ease, transform 240ms cubic-bezier(0.16,1,0.3,1); }
+.tab:active { transform: scale(0.92); }
+.tab.active svg {
+  filter: drop-shadow(0 0 9px var(--accent-glow));
+  animation: tabPop 420ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes tabPop {
+  0%   { transform: scale(0.8) translateY(2px); }
+  55%  { transform: scale(1.14); }
+  100% { transform: none; }
+}
+
+/* Every motion above is decoration. Someone who has asked their OS not to
+   animate things has not asked for an exception for pretty ones. */
+@media (prefers-reduced-motion: reduce) {
+  .hero, .hero::before, .screen.active, .fx-in, .tab.active svg {
+    animation: none !important;
+  }
+  .fx-in { opacity: 1; }
+}
+
+/* ==========================================================================
+   AMPLIFIED — second pass, after seeing pass one rendered on a real phone.
+   It was present and forgettable. This is the "unnötig viel" the brief
+   actually asked for.
+   ========================================================================== */
+
+/* Rim light on the hero. The reference's subject is defined by light
+   catching its edge against the void, not by an outline - a gradient border
+   does exactly that: bright where the light would fall (top-left), dissolving
+   to nothing on the shadow side. Two layers via background-clip because a
+   plain `border` cannot hold a gradient. */
+.hero {
+  border: 1px solid transparent;
+  /* The opaque #05060a base is load-bearing, not decoration. Without it this
+     rule's gradients replaced the original solid --surface fill entirely and
+     the card went translucent - the particle field drifted straight through
+     the text, which a screenshot caught immediately. A card lit from its own
+     edge has to be a solid object; light passes around it, not through it. */
+  background:
+    linear-gradient(#05060a, #05060a) padding-box,
+    radial-gradient(130% 100% at 50% -10%, rgba(207,227,255,0.12), transparent 68%)
+      padding-box,
+    linear-gradient(150deg,
+      rgba(207,227,255,0.5) 0%,
+      rgba(185,160,255,0.2) 26%,
+      rgba(207,227,255,0.05) 48%,
+      transparent 72%) border-box;
+}
+
+/* An aurora that actually moves, behind the hero content. Slow enough
+   (22s) to never compete with reading, large enough to be unmistakably
+   there - the previous version's 6% box-shadow shift was invisible. */
+.hero::after {
+  content: ""; position: absolute; inset: -60% -30% auto -30%; height: 190%;
+  background:
+    radial-gradient(38% 44% at 28% 32%, rgba(150,190,255,0.20), transparent 70%),
+    radial-gradient(32% 38% at 74% 58%, rgba(185,160,255,0.15), transparent 70%),
+    radial-gradient(26% 30% at 52% 84%, rgba(232,201,138,0.09), transparent 72%);
+  filter: blur(26px);
+  animation: aurora 22s ease-in-out infinite alternate;
+  pointer-events: none; z-index: 0;
+}
+@keyframes aurora {
+  0%   { transform: translate3d(-7%, -4%, 0) rotate(-3deg) scale(1.05); }
+  50%  { transform: translate3d(5%, 3%, 0)  rotate(2deg)  scale(1.14); }
+  100% { transform: translate3d(-3%, 6%, 0) rotate(4deg)  scale(1.02); }
+}
+/* Hero content has to sit above its own aurora and sweep. */
+.hero > * { position: relative; z-index: 1; }
+
+/* --- the numbers become the point --------------------------------------- */
+
+.today-rows { margin-top: 30px; }
+.today-row { padding: 18px 2px; gap: 16px; align-items: center; }
+.today-row .val {
+  /* Big, tabular, and light-weight: a large thin numeral reads as data on a
+     dark field rather than as a shouting headline. */
+  font-size: 2.1rem; font-weight: 300; min-width: 3.6ch;
+  letter-spacing: -0.03em; line-height: 1;
+}
+.today-row .val.zero { color: var(--text-faint); font-weight: 200; }
+.today-row .lbl { font-size: 0.95rem; }
+
+/* --- the greeting becomes a title ---------------------------------------- */
+
+.today-greeting {
+  font-size: 0.72rem; letter-spacing: 0.34em; margin: 22px 0 22px;
+  color: var(--text-dim);
+  /* A hairline that fades out to the right, like the caption rules in the
+     reference - a full-width divider would cut the void in half. */
+  padding-bottom: 14px;
+  border-bottom: 1px solid transparent;
+  border-image: linear-gradient(90deg, rgba(207,227,255,0.28), transparent 78%) 1;
+}
+
+/* --- vignette ------------------------------------------------------------ */
+
+/* Darkens the corners so the centre of the screen reads as lit. This is what
+   makes a black background feel like depth instead of like an off pixel, and
+   it is the single cheapest "expensive-looking" trick there is. Sits under
+   the grain, over the particles. */
+#fx-grain::before {
+  content: ""; position: absolute; inset: 0;
+  background: radial-gradient(120% 78% at 50% 42%,
+    transparent 44%, rgba(0,0,0,0.5) 82%, rgba(0,0,0,0.78) 100%);
+  mix-blend-mode: normal;
+}
+
+/* --- topbar ------------------------------------------------------------- */
+
+.brand {
+  letter-spacing: 0.22em; font-size: 0.92rem; font-weight: 600;
+  text-shadow: 0 0 22px rgba(207,227,255,0.5);
+}
+.topbar { border-bottom: 1px solid transparent;
+  border-image: linear-gradient(90deg, rgba(207,227,255,0.22), transparent 88%) 1; }
+
+/* The connection dot gets a pulse - the one live, breathing thing in the
+   chrome, so "is it connected" is answerable without reading anything. */
+.dot.ok { box-shadow: 0 0 12px var(--good); animation: dotPulse 2.6s ease-in-out infinite; }
+@keyframes dotPulse {
+  0%, 100% { opacity: 1;    box-shadow: 0 0 12px var(--good); }
+  50%      { opacity: 0.55; box-shadow: 0 0 4px var(--good); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero::after, .dot.ok { animation: none !important; }
+}
+
+/* Atmosphere is dialled back on the screens whose job is reading. On Today
+   and Chat the particle field IS the design - lots of open space, little
+   text, and it carries the whole reference. On a 100-row lead list or the
+   flip log it competes with the thing Felix actually has to read to make
+   money, and a bright mote landing behind a phone number is a real cost for
+   a decorative gain. Same field, same motion, just quieter where it would
+   otherwise be in the way. */
+body[data-screen="screen-dmarc"] #fx-canvas,
+body[data-screen="screen-flips"] #fx-canvas,
+body[data-screen="screen-money"] #fx-canvas,
+body[data-screen="screen-downloads"] #fx-canvas {
+  opacity: 0.35;
+}
+body[data-screen="screen-dmarc"] #fx-grain,
+body[data-screen="screen-flips"] #fx-grain,
+body[data-screen="screen-money"] #fx-grain,
+body[data-screen="screen-downloads"] #fx-grain {
+  opacity: 0.5;
+}
+#fx-canvas, #fx-grain { transition: opacity 420ms ease; }

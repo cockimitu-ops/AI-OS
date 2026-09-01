@@ -1,9 +1,9 @@
 // Service worker: cache the app shell only. /api/* is never cached - a
 // dashboard or chat reply served from a stale cache would be worse than no
 // offline support at all, since it would look current and not be.
-const SHELL_CACHE = "aios-shell-v3";
+const SHELL_CACHE = "aios-shell-v4";
 const SHELL_FILES = [
-  "./", "./index.html", "./app.js", "./style.css", "./manifest.json",
+  "./", "./index.html", "./app.js", "./fx.js", "./style.css", "./manifest.json",
   "./icons/icon-192.png", "./icons/icon-512.png",
 ];
 

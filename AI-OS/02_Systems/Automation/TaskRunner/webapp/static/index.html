@@ -5,12 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>AI-OS</title>
 <link rel="manifest" href="manifest.json">
-<meta name="theme-color" content="#0f1115">
+<meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+
+<canvas id="fx-canvas" aria-hidden="true"></canvas>
 
 <header class="topbar">
   <span class="brand">AI-OS</span>
@@ -125,6 +127,12 @@
   </div>
 </div>
 
+<div id="fx-grain" aria-hidden="true"></div>
+
+<!-- fx.js before app.js: app.js calls window.fxReveal/fxCountUp/fxTap while
+     rendering, so they have to exist by then. Both are plain scripts, so
+     this order is the load order. -->
+<script src="fx.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

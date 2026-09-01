@@ -159,10 +159,15 @@ function loadActiveScreen() {
 
 document.querySelectorAll(".tab").forEach((btn) => {
   btn.addEventListener("click", () => {
+    if (window.fxTap) window.fxTap();
     document.querySelectorAll(".tab").forEach((b) => b.classList.remove("active"));
     document.querySelectorAll(".screen").forEach((s) => s.classList.remove("active"));
     btn.classList.add("active");
     document.getElementById(btn.dataset.screen).classList.add("active");
+    // Lets CSS calm the atmosphere per screen - see [data-screen] in
+    // style.css. Set here rather than read from .screen.active so the
+    // stylesheet never has to know how the tab bar works.
+    document.body.dataset.screen = btn.dataset.screen;
     // Live reads every time a tab opens, not cached - matches the backend's
     // own "no cache, always live" design (see api.py). A dashboard showing
     // stale numbers would defeat the point of having one.
@@ -282,8 +287,23 @@ async function loadToday() {
         <span class="chev">›</span>
       </div>`).join("");
     rowsEl.querySelectorAll(".today-row").forEach((el) => {
-      el.addEventListener("click", () => switchTo(el.dataset.to));
+      el.addEventListener("click", () => {
+        if (window.fxTap) window.fxTap();
+        switchTo(el.dataset.to);
+      });
     });
+
+    // Hero first, then the rows behind it in sequence - the eye lands on the
+    // one thing that matters before the supporting numbers arrive.
+    if (window.fxReveal) {
+      window.fxReveal(heroEl, ".hero", 0);
+      window.fxReveal(rowsEl, ".today-row", 65);
+    }
+    if (window.fxCountUp) {
+      rowsEl.querySelectorAll(".today-row .val").forEach((el) => {
+        window.fxCountUp(el, el.textContent.trim());
+      });
+    }
 
     const last = d.sniper?.last_run;
     quietEl.textContent = last
@@ -525,6 +545,16 @@ function renderCapped(listEl, items, toHtml, opts = {}) {
       ? `<button class="show-more-btn" id="list-show-more">Mehr anzeigen (${remaining} weitere)</button>`
       : "");
     if (opts.afterRender) opts.afterRender(listEl);
+    // Only the newly revealed slice animates in. Re-staggering the whole
+    // list on every "show more" would replay the entrance for rows the user
+    // has already been looking at.
+    if (window.fxReveal) {
+      const fresh = Array.from(listEl.querySelectorAll(".card")).slice(shown - pageSize);
+      fresh.forEach((el, i) => {
+        el.classList.add("fx-in");
+        el.style.animationDelay = `${i * 45}ms`;
+      });
+    }
     const moreBtn = document.getElementById("list-show-more");
     if (moreBtn) moreBtn.addEventListener("click", () => {
       shown += pageSize;
@@ -662,6 +692,9 @@ if ("serviceWorker" in navigator) {
 }
 
 bootstrapTokenFromUrl();
+
+document.body.dataset.screen =
+  document.querySelector(".screen.active")?.id || "screen-today";
 
 if (!getToken()) {
   showTokenModal();
