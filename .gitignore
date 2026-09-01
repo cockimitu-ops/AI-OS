@@ -55,3 +55,10 @@ AI-OS/02_Systems/Automation/TaskRunner/uploads/*
 # Study ingestion runtime state: which notes have been processed already.
 AI-OS/02_Systems/Automation/TaskRunner/study/*
 !AI-OS/02_Systems/Automation/TaskRunner/study/.gitkeep
+
+# Secure Content Protocol: project docs stay out of the committed, Notion-synced
+# vault by default. The threat model in that folder names its own documentation
+# as a leak vector - committing it would contradict the project's first
+# requirement. Reversible on request; the folder still exists locally and is
+# still covered by the vault backup.
+AI-OS/10_Projects/SecureContentProtocol/
