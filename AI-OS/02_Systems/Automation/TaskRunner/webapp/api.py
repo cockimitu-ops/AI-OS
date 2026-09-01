@@ -28,6 +28,7 @@ import memory
 import money_board
 import dmarc_prospector
 import flip_log
+import phone
 import phone_root
 import proposals
 import snipe_rank
@@ -102,6 +103,115 @@ def get_phone(_body):
         "notification_total": len(notes),
         "filtered": len(notes) - len(signal),
     }
+
+
+# --- device control ------------------------------------------------------
+
+SCREENSHOT_DIR = os.path.join(TASK_RUNNER_DIR, "phone", "screenshots")
+
+# Two phones, two capability levels. The module is what differs - everything
+# below is written against whichever one this table names, so adding a third
+# device is a row here rather than a branch everywhere.
+DEVICES = {
+    "poco": {"label": "Poco X3 Pro", "module": phone_root, "rooted": True},
+    "nothing": {"label": "Nothing Phone 2a", "module": phone, "rooted": False},
+}
+
+# Actions the panel may perform. An allowlist, not a passthrough: the request
+# body reaches a device with root, and "whatever the client sent" is not an
+# acceptable definition of what may run there. Destructive verbs are absent
+# entirely rather than gated, because a web button is exactly the wrong place
+# to put a factory reset.
+DEVICE_ACTIONS = {"screenshot", "tap", "swipe", "key", "text", "open", "status"}
+
+
+def _device(name):
+    entry = DEVICES.get(name)
+    if not entry:
+        raise ValueError(f"unknown device: {name!r}")
+    return entry
+
+
+def get_devices(_body):
+    """Every device and whether it is currently reachable.
+
+    Each is probed independently and a failure is reported per device: one
+    phone being off must not blank the panel for the other."""
+    out = []
+    for key, entry in DEVICES.items():
+        row = {"id": key, "label": entry["label"], "rooted": entry["rooted"]}
+        try:
+            state = entry["module"].status()
+            size = entry["module"].screen_size()
+            row.update({
+                "reachable": True,
+                "battery": state.get("battery"),
+                "screen_on": state.get("screen_on"),
+                "current_app": state.get("current_app"),
+                "width": size[0] if size else None,
+                "height": size[1] if size else None,
+            })
+        except Exception as e:  # noqa: BLE001 - a device being away is normal
+            row.update({"reachable": False, "reason": str(e)[:140]})
+        out.append(row)
+    return 200, {"devices": out}
+
+
+def post_device_action(body):
+    """Perform one allowlisted action on one device."""
+    body = body or {}
+    action = (body.get("action") or "").strip()
+    if action not in DEVICE_ACTIONS:
+        return 400, {"error": f"unknown action: {action!r}"}
+    try:
+        entry = _device((body.get("device") or "").strip())
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    mod = entry["module"]
+
+    def _num(name):
+        try:
+            return int(body.get(name))
+        except (TypeError, ValueError):
+            return None
+
+    try:
+        if action == "status":
+            return 200, {"ok": True, "status": mod.status()}
+
+        if action == "screenshot":
+            path = mod.screenshot()
+            size = mod.screen_size()
+            # A cache-busting name, because the browser would otherwise show
+            # the previous screen after every refresh - which looks exactly
+            # like a frozen phone.
+            return 200, {"ok": True,
+                         "url": f"/device-screen/{os.path.basename(path)}",
+                         "width": size[0] if size else None,
+                         "height": size[1] if size else None}
+
+        if action == "tap":
+            x, y = _num("x"), _num("y")
+            if x is None or y is None:
+                return 400, {"error": "tap needs x and y"}
+            mod.tap(x, y)
+        elif action == "swipe":
+            coords = [_num(k) for k in ("x1", "y1", "x2", "y2")]
+            if any(c is None for c in coords):
+                return 400, {"error": "swipe needs x1,y1,x2,y2"}
+            mod.swipe(*coords, ms=_num("ms") or 300)
+        elif action == "key":
+            mod.key((body.get("key") or "").strip())
+        elif action == "text":
+            value = body.get("text") or ""
+            if not value:
+                return 400, {"error": "text is empty"}
+            mod.type_text(value[:500])
+        elif action == "open":
+            mod.open_app((body.get("package") or "").strip())
+        return 200, {"ok": True}
+    except Exception as e:  # noqa: BLE001 - surface the device's own message
+        return 200, {"ok": False, "error": str(e)[:200]}
 
 
 # --- snipes --------------------------------------------------------------

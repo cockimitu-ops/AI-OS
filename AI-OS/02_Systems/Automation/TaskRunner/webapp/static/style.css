@@ -669,3 +669,36 @@ body[data-screen="screen-downloads"] #fx-grain {
 .phone-note .nt { color: var(--text); }
 .phone-note .nx { display: block; color: var(--text-dim); font-size: 0.8rem; margin-top: 2px; }
 .phone-filtered { margin-top: 10px; font-size: 0.72rem; color: var(--text-faint); }
+
+/* --- device control ------------------------------------------------------ */
+
+.device-info {
+  display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 14px 0 12px;
+  font-size: 0.8rem; color: var(--text-dim);
+}
+.device-screen-wrap { display: flex; justify-content: center; margin-bottom: 14px; }
+.device-screen {
+  max-width: 100%; max-height: 58vh; border-radius: 12px;
+  border: 1px solid var(--border);
+  /* The screenshot is the control surface, so it has to look tappable and
+     must never be dragged off by a long-press image menu. */
+  cursor: crosshair; -webkit-user-select: none; user-select: none;
+  -webkit-touch-callout: none;
+}
+.device-controls { display: flex; flex-direction: column; gap: 10px; }
+.device-typerow { display: flex; gap: 8px; }
+.device-typerow input {
+  flex: 1; padding: 11px 13px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+}
+
+/* Eight tabs at 393px is ~49px each - below a comfortable thumb target, and
+   the labels start colliding ("Geräte Dateien" ran together on a real
+   screenshot). Scrolling horizontally keeps every tab at a real size instead
+   of shrinking all of them until none are readable. */
+.tabbar {
+  overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none; -webkit-overflow-scrolling: touch;
+}
+.tabbar::-webkit-scrollbar { display: none; }
+.tab { flex: 0 0 auto; min-width: 62px; padding-left: 4px; padding-right: 4px; }

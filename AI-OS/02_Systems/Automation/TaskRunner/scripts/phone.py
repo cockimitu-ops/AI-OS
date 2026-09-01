@@ -253,6 +253,13 @@ def installed_apps():
                   for line in out.splitlines() if line.startswith("package:"))
 
 
+def screen_size():
+    """-> (width, height) in device pixels, or None. Same purpose as the
+    rooted module's: mapping a tap on a scaled screenshot back to reality."""
+    m = re.search(r"Physical size:\s*(\d+)x(\d+)", _adb("shell", "wm", "size"))
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
 def status():
     """Everything readable in one call, for the assistant's own use."""
     connect()

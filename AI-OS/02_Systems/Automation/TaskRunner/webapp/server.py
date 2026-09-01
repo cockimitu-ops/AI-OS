@@ -48,6 +48,8 @@ TOKEN = os.environ.get("AIOS_WEB_TOKEN", "")
 API_ROUTES = {
     ("GET", "/api/today"): api.get_today,
     ("GET", "/api/phone"): api.get_phone,
+    ("GET", "/api/devices"): api.get_devices,
+    ("POST", "/api/device-action"): api.post_device_action,
     # POST because they take a query body; both are reads and change nothing.
     ("POST", "/api/snipes"): api.get_snipes,
     ("POST", "/api/vault-search"): api.get_vault_search,
@@ -170,6 +172,27 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(500, {"error": "internal error"})
                 return
             self._send_json(status, payload)
+            return
+        if method == "GET" and parsed.path.startswith("/device-screen/"):
+            # A live picture of whatever is on Felix's phone screen - at least
+            # as sensitive as the generated reports below, so gated the same
+            # way rather than left open like the app's own static files.
+            if not self._authorized():
+                self.send_error(401, "unauthorized")
+                return
+            name = os.path.basename(parsed.path)
+            full = os.path.join(api.SCREENSHOT_DIR, name)
+            if not os.path.isfile(full) or not name.endswith(".png"):
+                self.send_error(404)
+                return
+            with open(full, "rb") as f:
+                body = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
             return
         if method == "GET" and parsed.path.startswith("/downloads/"):
             # Unlike the rest of static/ (app code, no secrets), a generated

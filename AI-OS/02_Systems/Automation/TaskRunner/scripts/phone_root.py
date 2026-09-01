@@ -409,6 +409,73 @@ def current_app():
     return m.group(1) if m else None
 
 
+# --- input ----------------------------------------------------------------
+# These were missing entirely until the device panel's buttons were tried
+# against a real phone: this module was built around filesystem, SMS and
+# settings access, and simply never got the input verbs the unrooted module
+# already had. Nothing in the code failed - the functions just were not there.
+
+# Every input verb runs as ROOT, and that is not incidental. MIUI blocks event
+# injection from the adb shell user - `input keyevent` returns
+# "SecurityException: Injecting input events requires INJECT_EVENTS" - the same
+# family of restriction that blocks adb app installs on this ROM. Through `su`
+# it works. Verified live 2026-09-01: identical command, denied as shell,
+# accepted as root, screen went from Asleep to Awake. This is one of the few
+# places where rooting this phone buys a capability outright rather than just
+# more convenience.
+KEYS = {"back": 4, "home": 3, "recents": 187, "power": 26, "enter": 66,
+        "volume_up": 24, "volume_down": 25, "wake": 224, "sleep": 223,
+        "menu": 82, "delete": 67, "tab": 61, "search": 84}
+
+
+def tap(x, y):
+    sh(f"input tap {int(x)} {int(y)}", root=True)
+    return True
+
+
+def swipe(x1, y1, x2, y2, ms=300):
+    sh(f"input swipe {int(x1)} {int(y1)} {int(x2)} {int(y2)} {int(ms)}", root=True)
+    return True
+
+
+def key(name):
+    if name not in KEYS:
+        raise PhoneError(f"unknown key {name!r}; known: {', '.join(sorted(KEYS))}")
+    sh(f"input keyevent {KEYS[name]}", root=True)
+    return True
+
+
+def type_text(text):
+    """`input text` cannot take a raw space, and an unescaped one silently
+    truncates the rest of the string rather than erroring. Quoted through the
+    same _q() the rest of this module uses, so a semicolon in the text is a
+    character and not a command on the device."""
+    if not text:
+        return False
+    sh("input text " + _q(text.replace(" ", "%s")), root=True)
+    return True
+
+
+def open_app(package):
+    """Launch by package. monkey rather than `am start`: it resolves the
+    launcher activity itself, so the caller does not need to know the activity
+    name for every app."""
+    _check_package(package)
+    sh(f"monkey -p {package} -c android.intent.category.LAUNCHER 1", root=True)
+    return True
+
+
+def screen_size():
+    """-> (width, height) in device pixels, or None.
+
+    Needed to map a tap on a scaled screenshot back to real coordinates: the
+    web client shows the screen at whatever width the phone browser gives it,
+    and a tap at 40% across has to become 40% of 1080, not 40% of the CSS
+    width."""
+    m = re.search(r"Physical size:\s*(\d+)x(\d+)", sh("wm size"))
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
 def status():
     info = device_info()
     info["battery"] = battery()

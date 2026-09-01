@@ -3651,6 +3651,57 @@ class TestWebappApi(unittest.TestCase):
         self.assertEqual(payload["filtered"], 2)
         self.assertEqual(payload["notification_total"], 3)
 
+    def test_device_action_allowlists_verbs(self):
+        """The request body reaches a phone with root. "Whatever the client
+        sent" is not an acceptable definition of what may run there, and the
+        destructive verbs are absent from the panel entirely rather than
+        gated - a web button is the wrong place for a factory reset."""
+        for evil in ("uninstall", "wipe_package_data", "reboot", "sh", ""):
+            status, _ = self.api.post_device_action(
+                {"device": "poco", "action": evil})
+            self.assertEqual(status, 400, evil)
+        self.assertNotIn("uninstall", self.api.DEVICE_ACTIONS)
+        self.assertNotIn("reboot", self.api.DEVICE_ACTIONS)
+
+    def test_device_action_rejects_an_unknown_device(self):
+        status, _ = self.api.post_device_action(
+            {"device": "../../etc", "action": "status"})
+        self.assertEqual(status, 400)
+
+    def test_tap_requires_real_coordinates(self):
+        for bad in ({}, {"x": "abc", "y": 5}, {"x": 5}):
+            status, _ = self.api.post_device_action(
+                dict({"device": "poco", "action": "tap"}, **bad))
+            self.assertEqual(status, 400)
+
+    def test_devices_report_reachability_independently(self):
+        """One phone being off must not blank the panel for the other."""
+        original = dict(self.api.DEVICES)
+        class Up:
+            @staticmethod
+            def status(): return {"battery": {"level": 50}, "screen_on": True,
+                                  "current_app": "x"}
+            @staticmethod
+            def screen_size(): return (1080, 2400)
+        class Down:
+            @staticmethod
+            def status(): raise RuntimeError("weg")
+            @staticmethod
+            def screen_size(): return None
+        self.api.DEVICES = {
+            "a": {"label": "A", "module": Up, "rooted": True},
+            "b": {"label": "B", "module": Down, "rooted": False},
+        }
+        try:
+            status, payload = self.api.get_devices({})
+        finally:
+            self.api.DEVICES = original
+        self.assertEqual(status, 200)
+        by_id = {d["id"]: d for d in payload["devices"]}
+        self.assertTrue(by_id["a"]["reachable"])
+        self.assertFalse(by_id["b"]["reachable"])
+        self.assertEqual(by_id["a"]["width"], 1080)
+
     def test_dmarc_leads_shape(self):
         status, payload = self.api.get_dmarc_leads({})
         self.assertEqual(status, 200)

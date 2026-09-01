@@ -150,6 +150,7 @@ const SCREEN_LOADERS = {
   "screen-downloads": loadFilesScreen,
   "screen-today": loadToday,
   "screen-snipes": loadSnipes,
+  "screen-devices": loadDevices,
 };
 
 function loadActiveScreen() {
@@ -470,6 +471,149 @@ async function loadDmarcLeads() {
   } catch (err) {
     setConnDot("err");
     tableEl.innerHTML = `<div class="empty-state">Fehler beim Laden: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+// --- device control --------------------------------------------------------
+
+let deviceState = { id: null, list: [], width: 1080, height: 2400 };
+
+function deviceSay(msg, bad) {
+  const el = document.getElementById("device-status");
+  el.textContent = msg || "";
+  el.style.color = bad ? "var(--bad)" : "var(--text-faint)";
+}
+
+async function deviceAction(payload) {
+  return api("/api/device-action", {
+    method: "POST",
+    body: JSON.stringify({ device: deviceState.id, ...payload }),
+  });
+}
+
+async function loadDevices() {
+  const tabsEl = document.getElementById("device-tabs");
+  const infoEl = document.getElementById("device-info");
+  try {
+    const data = await api("/api/devices");
+    setConnDot("ok");
+    deviceState.list = data.devices || [];
+    if (!deviceState.id || !deviceState.list.some((d) => d.id === deviceState.id)) {
+      // Default to a device that is actually there, so the panel opens on
+      // something usable instead of on whichever happens to be listed first.
+      deviceState.id = (deviceState.list.find((d) => d.reachable)
+        || deviceState.list[0] || {}).id;
+    }
+    tabsEl.innerHTML = deviceState.list.map((d) => `
+      <button class="chip ${d.id === deviceState.id ? "on" : ""}" data-dev="${d.id}">
+        ${escapeHtml(d.label)}${d.reachable ? "" : " · offline"}
+      </button>`).join("");
+    tabsEl.querySelectorAll(".chip").forEach((el) => el.addEventListener("click", () => {
+      if (window.fxTap) window.fxTap();
+      deviceState.id = el.dataset.dev;
+      loadDevices();
+    }));
+
+    const dev = deviceState.list.find((d) => d.id === deviceState.id) || {};
+    if (!dev.reachable) {
+      infoEl.innerHTML = `<div class="empty-state">${escapeHtml(dev.reason || "nicht erreichbar")}</div>`;
+      document.getElementById("device-screen-wrap").innerHTML = "";
+      document.getElementById("device-controls").innerHTML = "";
+      return;
+    }
+    deviceState.width = dev.width || 1080;
+    deviceState.height = dev.height || 2400;
+    const b = dev.battery || {};
+    infoEl.innerHTML = `<span>${b.level ?? "?"}%${b.charging ? " lädt" : ""}</span>
+      <span>${dev.screen_on ? "Bildschirm an" : "Bildschirm aus"}</span>
+      <span>${escapeHtml(dev.current_app || "—")}</span>
+      <span>${dev.rooted ? "root" : "ohne root"}</span>`;
+    renderDeviceControls();
+    await refreshDeviceScreen();
+  } catch (err) {
+    setConnDot("err");
+    infoEl.innerHTML = `<div class="empty-state">Fehler: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function renderDeviceControls() {
+  const el = document.getElementById("device-controls");
+  el.innerHTML = `
+    <div class="chip-row">
+      <button class="chip" data-key="back">Zurück</button>
+      <button class="chip" data-key="home">Home</button>
+      <button class="chip" data-key="recents">Apps</button>
+      <button class="chip" data-key="wake">Wecken</button>
+      <button class="chip" data-key="sleep">Sperren</button>
+      <button class="chip" id="dev-refresh">Neu laden</button>
+    </div>
+    <div class="device-typerow">
+      <input id="dev-text" type="text" placeholder="Text aufs Handy tippen..." autocomplete="off">
+      <button class="upload-send" id="dev-send">Senden</button>
+    </div>`;
+  el.querySelectorAll("[data-key]").forEach((b) => b.addEventListener("click", async () => {
+    if (window.fxTap) window.fxTap();
+    deviceSay(`${b.textContent}...`);
+    const r = await deviceAction({ action: "key", key: b.dataset.key });
+    deviceSay(r.ok ? "" : r.error, !r.ok);
+    // The screen almost always changed after a key, so re-grab it rather
+    // than leaving a stale picture that looks like nothing happened.
+    await refreshDeviceScreen();
+  }));
+  el.querySelector("#dev-refresh").addEventListener("click", refreshDeviceScreen);
+  const send = async () => {
+    const input = document.getElementById("dev-text");
+    if (!input.value.trim()) return;
+    deviceSay("tippe...");
+    const r = await deviceAction({ action: "text", text: input.value });
+    input.value = "";
+    deviceSay(r.ok ? "" : r.error, !r.ok);
+    await refreshDeviceScreen();
+  };
+  el.querySelector("#dev-send").addEventListener("click", send);
+  el.querySelector("#dev-text").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") send();
+  });
+}
+
+async function refreshDeviceScreen() {
+  const wrap = document.getElementById("device-screen-wrap");
+  deviceSay("Bildschirm holen...");
+  try {
+    const r = await deviceAction({ action: "screenshot" });
+    if (!r.ok) { deviceSay(r.error, true); return; }
+    deviceState.width = r.width || deviceState.width;
+    deviceState.height = r.height || deviceState.height;
+    // Fetched as a blob with the auth header, not set as a plain src: an
+    // <img> request carries no Authorization header, so the gated endpoint
+    // answers 401 and the browser shows a broken image. Same reason
+    // downloadFile() does it this way - caught here by screenshotting the
+    // panel rather than by reading the code.
+    const res = await fetch(r.url, { headers: { Authorization: `Bearer ${getToken()}` } });
+    if (!res.ok) { deviceSay(`Bild ${res.status}`, true); return; }
+    const blob = await res.blob();
+    // Revoke the previous one: a screenshot every few seconds would otherwise
+    // leak a megabyte at a time for as long as the panel stays open.
+    if (deviceState.blobUrl) URL.revokeObjectURL(deviceState.blobUrl);
+    deviceState.blobUrl = URL.createObjectURL(blob);
+    wrap.innerHTML = `<img id="dev-img" class="device-screen" src="${deviceState.blobUrl}" alt="Bildschirm">`;
+    deviceSay("");
+    const img = document.getElementById("dev-img");
+    img.addEventListener("click", async (e) => {
+      // Map the click back to device pixels. The image is displayed at
+      // whatever width the phone browser gives it, so a tap 40% across has
+      // to become 40% of 1080 - not 40% of the CSS width.
+      const rect = img.getBoundingClientRect();
+      const x = Math.round(((e.clientX - rect.left) / rect.width) * deviceState.width);
+      const y = Math.round(((e.clientY - rect.top) / rect.height) * deviceState.height);
+      if (window.fxTap) window.fxTap();
+      deviceSay(`tippe ${x},${y}...`);
+      const t = await deviceAction({ action: "tap", x, y });
+      deviceSay(t.ok ? "" : t.error, !t.ok);
+      await refreshDeviceScreen();
+    });
+  } catch (err) {
+    deviceSay(err.message, true);
   }
 }
 
