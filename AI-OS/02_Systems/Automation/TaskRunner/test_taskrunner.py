@@ -4756,3 +4756,104 @@ class TestSnipeRank(unittest.TestCase):
 
     def test_empty_input_is_not_a_crash(self):
         self.assertEqual(self.sr.rank([]), [])
+
+
+class TestPhoneControl(unittest.TestCase):
+    """Unrooted phone control over the tailnet (added 2026-09-01). None of
+    these tests need a real device: they cover the parsing and the safety
+    boundaries, which are the parts that would fail quietly."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "phone", os.path.join(HERE, "scripts", "phone.py"))
+        cls.ph = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.ph)
+
+    def test_targets_the_tailnet_address_not_a_lan_one(self):
+        """A LAN address changes with every network he joins; the tailnet one
+        is the same from home, from campus, or from a train."""
+        self.assertTrue(self.ph.PHONE_HOST.startswith("100."))
+        self.assertEqual(self.ph.SERIAL, f"{self.ph.PHONE_HOST}:{self.ph.PHONE_PORT}")
+
+    def test_no_destructive_verb_is_exposed(self):
+        """adb can wipe the device. This module deliberately offers a named,
+        narrow set of actions rather than a generic shell passthrough - an LLM
+        driving a phone should not be one malformed instruction away from a
+        factory reset."""
+        exposed = {n for n in dir(self.ph) if not n.startswith("_")}
+        for forbidden in ("uninstall", "wipe", "factory_reset", "shell",
+                          "reboot", "run_adb", "exec"):
+            self.assertNotIn(forbidden, exposed)
+
+    def test_open_app_rejects_a_package_that_is_not_a_package(self):
+        """The package name reaches a shell command, so anything that is not
+        a plain package name must be refused before it gets there."""
+        for evil in ("com.x; rm -rf /", "$(id)", "a b", "", "../../etc"):
+            with self.assertRaises(self.ph.PhoneError):
+                self.ph.open_app(evil)
+
+    def test_unknown_key_is_refused_with_the_known_ones_listed(self):
+        with self.assertRaises(self.ph.PhoneError) as ctx:
+            self.ph.key("selfdestruct")
+        self.assertIn("home", str(ctx.exception))
+
+    def test_is_available_degrades_instead_of_raising(self):
+        """Callers that want to skip the phone when it is away - the morning
+        brief, say - must not have to wrap it in try/except."""
+        original = self.ph.connect
+        self.ph.connect = lambda: (_ for _ in ()).throw(self.ph.PhoneError("no"))
+        try:
+            self.assertFalse(self.ph.is_available())
+        finally:
+            self.ph.connect = original
+
+    def test_typed_text_escapes_spaces_and_shell_characters(self):
+        """`input text` cannot take a raw space, and an unescaped one silently
+        truncates the rest of the string rather than erroring."""
+        sent = {}
+        original = self.ph._adb
+        self.ph._adb = lambda *a, **k: sent.update(args=a) or ""
+        try:
+            self.ph.type_text('hallo welt; echo "x"')
+        finally:
+            self.ph._adb = original
+        payload = sent["args"][-1]
+        self.assertNotIn(" ", payload)
+        self.assertIn("%s", payload)
+        self.assertIn("\\;", payload)
+
+    def test_notification_parsing_deduplicates_reposts(self):
+        """An ongoing notification is re-posted on every update and appears
+        many times in one dump - triage would otherwise show the same music
+        player twenty times."""
+        dump = (
+            "  NotificationRecord(pkg=com.whatsapp id=1)\n"
+            "      android.title=String (Mutti)\n"
+            "      android.text=String (Rufst du mal an?)\n"
+            "  NotificationRecord(pkg=com.whatsapp id=1)\n"
+            "      android.title=String (Mutti)\n"
+            "      android.text=String (Rufst du mal an?)\n"
+            "  NotificationRecord(pkg=com.spotify id=2)\n"
+            "      android.title=String (Now playing)\n"
+            "      android.text=String (Some song)\n")
+        original = self.ph._adb
+        self.ph._adb = lambda *a, **k: dump
+        try:
+            found = self.ph.notifications()
+        finally:
+            self.ph._adb = original
+        self.assertEqual(len(found), 2)
+        self.assertEqual(found[0]["package"], "com.whatsapp")
+        self.assertEqual(found[0]["title"], "Mutti")
+
+    def test_a_screenshot_that_is_not_a_png_is_refused(self):
+        """screencap through a plain shell pipe mangles binary on some builds
+        and produces a subtly corrupt PNG - better to fail than to save it."""
+        original = self.ph._adb
+        self.ph._adb = lambda *a, **k: b"<!DOCTYPE html>error"
+        try:
+            with self.assertRaises(self.ph.PhoneError):
+                self.ph.screenshot()
+        finally:
+            self.ph._adb = original

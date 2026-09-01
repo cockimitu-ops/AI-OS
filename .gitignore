@@ -63,3 +63,6 @@ AI-OS/02_Systems/Automation/TaskRunner/study/*
 # still covered by the vault backup.
 AI-OS/10_Projects/SecureContentProtocol/
 AI-OS/02_Systems/Automation/TaskRunner/watches/finds.json
+
+# Phone screenshots: whatever is on Felix's screen at the time.
+AI-OS/02_Systems/Automation/TaskRunner/phone/screenshots/
