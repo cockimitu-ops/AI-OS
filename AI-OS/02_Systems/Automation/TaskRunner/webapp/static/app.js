@@ -554,11 +554,13 @@ function renderDeviceControls() {
     </div>`;
   el.querySelectorAll("[data-key]").forEach((b) => b.addEventListener("click", async () => {
     if (window.fxTap) window.fxTap();
-    deviceSay(`${b.textContent}...`);
+    b.classList.add("on");
+    deviceSay(b.textContent);
     const r = await deviceAction({ action: "key", key: b.dataset.key });
-    deviceSay(r.ok ? "" : r.error, !r.ok);
-    // The screen almost always changed after a key, so re-grab it rather
-    // than leaving a stale picture that looks like nothing happened.
+    b.classList.remove("on");
+    if (!r.ok) { deviceSay(r.error, true); return; }
+    // The button has already released, so the remaining wait reads as the
+    // picture loading rather than as the button not working.
     await refreshDeviceScreen();
   }));
   el.querySelector("#dev-refresh").addEventListener("click", refreshDeviceScreen);
@@ -577,8 +579,26 @@ function renderDeviceControls() {
   });
 }
 
+function showTapRipple(x, y) {
+  const wrap = document.getElementById("device-screen-wrap");
+  if (!wrap) return;
+  const dot = document.createElement("span");
+  dot.className = "tap-ripple";
+  dot.style.left = `${x}px`;
+  dot.style.top = `${y}px`;
+  wrap.appendChild(dot);
+  // Removed by timer, not by animationend: if the image is replaced
+  // mid-animation that event never fires and the marker would stay forever.
+  setTimeout(() => dot.remove(), 650);
+}
+
 async function refreshDeviceScreen() {
   const wrap = document.getElementById("device-screen-wrap");
+  // Dim the old frame while a new one loads. With a multi-second round trip
+  // the picture on screen IS the old one, and it should say so rather than
+  // pretending to be current.
+  const prev = document.getElementById("dev-img");
+  if (prev) prev.classList.add("stale");
   deviceSay("Bildschirm holen...");
   try {
     const r = await deviceAction({ action: "screenshot" });
@@ -608,9 +628,14 @@ async function refreshDeviceScreen() {
       const x = Math.round(((e.clientX - rect.left) / rect.width) * deviceState.width);
       const y = Math.round(((e.clientY - rect.top) / rect.height) * deviceState.height);
       if (window.fxTap) window.fxTap();
-      deviceSay(`tippe ${x},${y}...`);
+      // Immediate feedback at the tap point. The phone reacts in
+      // milliseconds; a fresh screenshot takes seconds. Without a marker the
+      // gap reads as "nothing happened" and you tap again - which on a real
+      // phone is a second real tap. Felix's exact complaint.
+      showTapRipple(e.clientX - rect.left, e.clientY - rect.top);
+      deviceSay(`tippe ${x},${y}`);
       const t = await deviceAction({ action: "tap", x, y });
-      deviceSay(t.ok ? "" : t.error, !t.ok);
+      if (!t.ok) { deviceSay(t.error, true); return; }
       await refreshDeviceScreen();
     });
   } catch (err) {

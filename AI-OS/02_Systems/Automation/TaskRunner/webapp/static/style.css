@@ -714,3 +714,21 @@ body[data-screen="screen-downloads"] #fx-grain {
   max-height: 40vh; overflow-y: auto;
 }
 .chip:disabled { opacity: 0.45; cursor: default; }
+
+/* Tap feedback. The phone reacts in milliseconds; a fresh screenshot takes
+   seconds. Without a marker at the tap point the gap reads as "nothing
+   happened" and you tap again - which on a real phone is a second real tap. */
+.device-screen-wrap { position: relative; }
+.tap-ripple {
+  position: absolute; width: 34px; height: 34px; margin: -17px 0 0 -17px;
+  border-radius: 50%; pointer-events: none;
+  border: 2px solid var(--accent);
+  animation: tapRipple 600ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+@keyframes tapRipple {
+  from { transform: scale(0.3); opacity: 0.95; }
+  to   { transform: scale(1.9); opacity: 0; }
+}
+/* While a new frame is loading, the visible one is the OLD one - dimming it
+   says so instead of pretending it is current. */
+.device-screen.stale { opacity: 0.55; transition: opacity 150ms ease; }

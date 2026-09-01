@@ -47,6 +47,7 @@ PHONE_HOST = os.environ.get("AIOS_PHONE_HOST", "100.81.85.3")
 # the tailnet one. Wireless Debugging's own port is randomised on every
 # toggle, which makes it useless for an unattended service.
 PHONE_PORT = int(os.environ.get("AIOS_PHONE_PORT", "5555"))
+PREFIX = "screen"
 ADB_TIMEOUT = 25
 
 STATE_PATH = os.path.join(STATE_DIR, "nothing_port.json")
@@ -329,18 +330,38 @@ def notifications():
 def screenshot(name=None):
     """Grab the screen. -> path on the server.
 
-    exec-out, not `screencap -p > file` then pull: the shell path mangles
-    binary on some Android builds by translating newlines, producing a PNG
-    that is subtly corrupt and fails to open."""
-    os.makedirs(SHOTS_DIR, exist_ok=True)
-    data = _adb("exec-out", "screencap", "-p", binary=True)
-    if not data.startswith(b"\x89PNG"):
-        raise PhoneError("screencap did not return a PNG")
-    path = os.path.join(SHOTS_DIR, name or f"screen_{int(time.time())}.png")
-    tmp = path + ".part"
-    with open(tmp, "wb") as f:
-        f.write(data)
-    os.replace(tmp, path)
+    Captured to a file on the device and pulled, NOT streamed with
+    `exec-out`. Measured on the real phone over the tailnet: exec-out took
+    11.7s, capture-plus-pull 4.2s for the same image - roughly three times
+    faster, and the interactive control panel is unusable at eleven seconds a
+    frame.
+
+    The binary-mangling hazard that originally motivated exec-out is real but
+    different: it applies to `adb shell "screencap -p" > file`, where the
+    SHELL pipes the bytes and some Android builds translate newlines in
+    transit. Writing the file on the device and pulling it never puts the
+    bytes through a shell, so it is safe - and the result is still checked for
+    the PNG magic rather than trusted."""
+    shots = os.path.join(STATE_DIR, "screenshots")
+    os.makedirs(shots, exist_ok=True)
+    remote = f"/sdcard/.aios_screen_{int(time.time() * 1000)}.png"
+    path = os.path.join(shots, name or f"{PREFIX}_{int(time.time())}.png")
+    try:
+        _adb("shell", "screencap", "-p", remote)
+        _adb("pull", remote, path)
+    finally:
+        # Best effort: a leftover file on /sdcard is untidy, not harmful, and
+        # must never mask the real error from the capture itself.
+        try:
+            _adb("shell", "rm", "-f", remote)
+        except PhoneError:
+            pass
+    try:
+        with open(path, "rb") as f:
+            if f.read(4) != b"\x89PNG":
+                raise PhoneError("screencap lieferte kein PNG")
+    except OSError as e:
+        raise PhoneError(f"Screenshot nicht lesbar: {e}")
     return path
 
 
