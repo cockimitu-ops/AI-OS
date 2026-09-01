@@ -4644,3 +4644,115 @@ class TestPhotoNotes(unittest.TestCase):
     def test_no_vision_mode_never_reaches_the_model(self):
         text, how = self.pn.text_from_image("/nonexistent/x.png", allow_vision=False)
         self.assertEqual((text, how), ("", "failed"))
+
+
+class TestSnipeRank(unittest.TestCase):
+    """Sniper find ranking (added 2026-09-01). The tier is a TRIAGE order -
+    which listing to open first - and deliberately not a valuation.
+    LocalArbitrage's Valuation_Method.md opens with its own rule in bold:
+    "AI does not estimate resale prices. Sold listings do." These tests guard
+    that this feature stays on the right side of that line."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "snipe_rank", os.path.join(HERE, "scripts", "snipe_rank.py"))
+        cls.sr = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.sr)
+
+    def _find(self, **kw):
+        base = {"id": "1", "title": "Bohrmaschine", "desc": "", "price": 50,
+                "distance": 20, "watch": "werkzeug",
+                "found_at": datetime.now(timezone.utc).isoformat()}
+        base.update(kw)
+        return base
+
+    def test_free_outranks_cheap(self):
+        """"Zu verschenken" is categorically different from cheap - the
+        project README calls it the single strongest signal the tool exists
+        to catch."""
+        free = self.sr.score(self._find(price=0))[0]
+        cheap = self.sr.score(self._find(price=20))[0]
+        self.assertGreater(free, cheap)
+
+    def test_a_missing_price_is_a_signal_not_missing_data(self):
+        """No stated price is the seller-doesn't-know case. It must score
+        ABOVE a mid-range asking price, not be treated as unknown."""
+        self.assertGreater(self.sr.score(self._find(price=None))[0],
+                           self.sr.score(self._find(price=100))[0])
+
+    def test_urgency_already_in_the_watch_name_is_not_counted_twice(self):
+        """Found on the first run against real listings: the `aufloesung`
+        watch searches for "Haushaltsauflösung", which is also a top-weighted
+        urgency keyword - so every one of its listings collected the bonus for
+        containing the term it was selected by, and that watch swept the whole
+        top of the board regardless of individual quality."""
+        in_watch = self.sr.score(self._find(
+            title="Haushaltsauflösung", watch="aufloesung"))[0]
+        elsewhere = self.sr.score(self._find(
+            title="Haushaltsauflösung", watch="werkzeug"))[0]
+        self.assertLess(in_watch, elsewhere)
+
+    def test_umlaut_folding_matches_the_watch_filename(self):
+        """The watch file is aufloesung.md and the ad says Haushaltsauflösung
+        - without folding, the two never compare equal and the double-count
+        stays."""
+        self.assertTrue(self.sr._implied_by_watch("haushaltsauflösung", "aufloesung"))
+        self.assertFalse(self.sr._implied_by_watch("umzug", "aufloesung"))
+
+    def test_risk_words_lower_priority_without_disqualifying(self):
+        """A broken phone is the entire point of one of the watches, so
+        "defekt" must reduce rank, not remove the listing."""
+        risky = self.sr.score(self._find(desc="defekt, bastler"))
+        self.assertGreater(risky[0], 0)
+        self.assertLess(risky[0], self.sr.score(self._find())[0])
+
+    def test_distance_none_means_in_town_not_unknown(self):
+        """No distance shown means the ad is in the search town itself -
+        the closest there is. Scoring it as unknown would bury the nearest
+        listings."""
+        self.assertGreater(self.sr.score(self._find(distance=None))[0],
+                           self.sr.score(self._find(distance=40))[0])
+
+    def test_fresher_listings_rank_higher(self):
+        """The whole edge is messaging first."""
+        old = datetime.now(timezone.utc) - timedelta(days=5)
+        self.assertGreater(self.sr.score(self._find())[0],
+                           self.sr.score(self._find(found_at=old.isoformat()))[0])
+
+    def test_score_is_bounded_and_always_has_a_tier(self):
+        extreme = self._find(price=0, distance=None,
+                             title="muss weg umzug haushaltsauflösung sofort",
+                             desc="heute noch räumung nachlass", watch="x")
+        points, tier, _ = self.sr.score(extreme)
+        self.assertLessEqual(points, 100)
+        self.assertGreaterEqual(points, 0)
+        self.assertIn(tier, ["S", "A", "B", "C", "D"])
+
+    def test_every_score_carries_auditable_reasons(self):
+        """A ranking Felix cannot audit is one he is right not to trust."""
+        _, _, reasons = self.sr.score(self._find(price=0, distance=5))
+        self.assertTrue(reasons)
+        self.assertTrue(all(isinstance(r, str) and r for r in reasons))
+
+    def test_price_filter_keeps_listings_with_no_price(self):
+        """Dropping them would filter out exactly what the sniper is for."""
+        rows = self.sr.rank([self._find(id="a", price=None),
+                             self._find(id="b", price=500)], max_price=50)
+        self.assertEqual([r["id"] for r in rows], ["a"])
+
+    def test_filters_apply_after_scoring(self):
+        """So a tier filter means what it says, rather than 'best of whatever
+        survived the other filters'."""
+        rows = self.sr.rank([self._find(id="a", price=0),
+                             self._find(id="b", price=200, distance=90)],
+                            tier="S")
+        self.assertTrue(all(r["tier"] == "S" for r in rows))
+
+    def test_ranking_is_highest_first(self):
+        rows = self.sr.rank([self._find(id="lo", price=200, distance=80),
+                             self._find(id="hi", price=0, distance=3)])
+        self.assertEqual(rows[0]["id"], "hi")
+
+    def test_empty_input_is_not_a_crash(self):
+        self.assertEqual(self.sr.rank([]), [])

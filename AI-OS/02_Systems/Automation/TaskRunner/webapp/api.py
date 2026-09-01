@@ -29,6 +29,7 @@ import money_board
 import dmarc_prospector
 import flip_log
 import proposals
+import snipe_rank
 import study_agent
 import vault_write
 
@@ -58,6 +59,53 @@ ALLOWED_UPLOAD_EXT = (".txt", ".zip", ".csv", ".json", ".md",
                       # on his phone, he photographs slides and boards).
                       ".jpg", ".jpeg", ".png", ".heic", ".webp", ".pdf")
 UNSAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._ ()\u00c0-\u024f-]")
+
+
+# --- snipes --------------------------------------------------------------
+
+SNIPE_LIMIT = 60
+
+
+def get_snipes(body):
+    """Sniper finds, ranked into tiers, with filters.
+
+    The tier is a TRIAGE order - which listing to open first - and explicitly
+    not a valuation. LocalArbitrage's Valuation_Method.md opens with its own
+    rule in bold: "AI does not estimate resale prices. Sold listings do." A
+    tier here says "look at this before the others", never "this is worth more
+    than it costs"; the resale number still comes from sold comps, by hand.
+    Every score ships with the reasons that produced it, because a ranking
+    Felix cannot audit is one he is right not to trust."""
+    body = body or {}
+    tier = body.get("tier") or None
+    if isinstance(tier, str):
+        tier = [t for t in tier.split(",") if t.strip()]
+
+    def _int(name):
+        value = body.get(name)
+        try:
+            return int(value) if value not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+
+    rows = snipe_rank.rank(
+        watch=body.get("watch") or None,
+        tier=tier,
+        max_price=_int("max_price"),
+        max_distance=_int("max_distance"),
+        limit=min(_int("limit") or SNIPE_LIMIT, SNIPE_LIMIT),
+    )
+    counts = {}
+    for row in snipe_rank.rank():
+        counts[row["tier"]] = counts.get(row["tier"], 0) + 1
+    return 200, {
+        "snipes": rows,
+        "watches": snipe_rank.watches(),
+        # Unfiltered tier totals, so the filter chips can show what exists
+        # rather than what survived the current filter.
+        "tier_counts": counts,
+        "total": sum(counts.values()),
+    }
 
 
 # --- vault ---------------------------------------------------------------

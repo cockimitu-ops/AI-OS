@@ -62,3 +62,4 @@ AI-OS/02_Systems/Automation/TaskRunner/study/*
 # requirement. Reversible on request; the folder still exists locally and is
 # still covered by the vault backup.
 AI-OS/10_Projects/SecureContentProtocol/
+AI-OS/02_Systems/Automation/TaskRunner/watches/finds.json

@@ -149,6 +149,7 @@ const SCREEN_LOADERS = {
   "screen-flips": loadFlipLog,
   "screen-downloads": loadFilesScreen,
   "screen-today": loadToday,
+  "screen-snipes": loadSnipes,
 };
 
 function loadActiveScreen() {
@@ -391,6 +392,94 @@ async function loadDmarcLeads() {
   } catch (err) {
     setConnDot("err");
     tableEl.innerHTML = `<div class="empty-state">Fehler beim Laden: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+// --- snipes ----------------------------------------------------------------
+
+// Filter state lives here rather than in the DOM so a re-render (which
+// replaces the whole list) cannot lose it.
+const snipeFilters = { tier: null, watch: null, max_price: null, max_distance: null };
+
+const TIER_ORDER = ["S", "A", "B", "C", "D"];
+
+async function loadSnipes() {
+  const filtersEl = document.getElementById("snipe-filters");
+  const listEl = document.getElementById("snipe-list");
+  try {
+    const data = await api("/api/snipes", {
+      method: "POST",
+      body: JSON.stringify(snipeFilters),
+    });
+    setConnDot("ok");
+
+    // Tier chips show UNFILTERED totals - what exists, not what survived the
+    // current filter. A chip that reads "S 0" because S is filtered out would
+    // be telling you the opposite of the truth.
+    const counts = data.tier_counts || {};
+    const chips = TIER_ORDER
+      .filter((t) => counts[t])
+      .map((t) => `<button class="chip tier-${t} ${snipeFilters.tier === t ? "on" : ""}" data-tier="${t}">${t} · ${counts[t]}</button>`)
+      .join("");
+    const watchChips = (data.watches || [])
+      .map((w) => `<button class="chip ${snipeFilters.watch === w ? "on" : ""}" data-watch="${escapeHtml(w)}">${escapeHtml(w)}</button>`)
+      .join("");
+    filtersEl.innerHTML = `
+      <div class="chip-row">${chips}</div>
+      <div class="chip-row">${watchChips}</div>
+      <div class="chip-row">
+        <button class="chip ${snipeFilters.max_distance === 15 ? "on" : ""}" data-dist="15">≤15 km</button>
+        <button class="chip ${snipeFilters.max_price === 30 ? "on" : ""}" data-price="30">≤30 €</button>
+        <button class="chip clear">Filter zurücksetzen</button>
+      </div>`;
+
+    // Toggle semantics: tapping an active filter clears it. On a phone that
+    // is the only way to undo a filter without hunting for a reset button.
+    filtersEl.querySelectorAll(".chip").forEach((el) => {
+      el.addEventListener("click", () => {
+        if (window.fxTap) window.fxTap();
+        if (el.classList.contains("clear")) {
+          Object.keys(snipeFilters).forEach((k) => { snipeFilters[k] = null; });
+        } else if (el.dataset.tier) {
+          snipeFilters.tier = snipeFilters.tier === el.dataset.tier ? null : el.dataset.tier;
+        } else if (el.dataset.watch) {
+          snipeFilters.watch = snipeFilters.watch === el.dataset.watch ? null : el.dataset.watch;
+        } else if (el.dataset.dist) {
+          snipeFilters.max_distance = snipeFilters.max_distance ? null : Number(el.dataset.dist);
+        } else if (el.dataset.price) {
+          snipeFilters.max_price = snipeFilters.max_price ? null : Number(el.dataset.price);
+        }
+        loadSnipes();
+      });
+    });
+
+    if (!data.snipes.length) {
+      listEl.innerHTML = `<div class="empty-state">${data.total ? "Nichts passt zu diesen Filtern." : "Noch keine Funde."}</div>`;
+      return;
+    }
+
+    listEl.innerHTML = data.snipes.map((s) => {
+      const price = s.price === 0 ? "zu verschenken"
+        : (s.price === null || s.price === undefined ? "kein Preis" : s.price + " €");
+      const dist = s.distance === null || s.distance === undefined ? "im Ort" : s.distance + " km";
+      return `
+        <a class="data-row snipe" href="${escapeHtml(s.url)}" target="_blank" rel="noopener noreferrer">
+          <div class="snipe-head">
+            <span class="tier-badge tier-${s.tier}">${s.tier}</span>
+            <span class="title">${escapeHtml(s.title)}</span>
+          </div>
+          <div class="meta">
+            <span class="${s.price === 0 ? "free" : ""}">${escapeHtml(price)}</span>
+            <span>${escapeHtml(dist)}</span>
+            <span>${escapeHtml(s.watch || "")}</span>
+          </div>
+          <div class="reasons">${escapeHtml((s.reasons || []).join(" · "))}</div>
+        </a>`;
+    }).join("");
+    if (window.fxReveal) window.fxReveal(listEl, ".data-row", 35);
+  } catch (err) {
+    setConnDot("err");
+    listEl.innerHTML = `<div class="empty-state">Fehler: ${escapeHtml(err.message)}</div>`;
   }
 }
 

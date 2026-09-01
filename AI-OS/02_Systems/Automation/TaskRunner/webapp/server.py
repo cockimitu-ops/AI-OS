@@ -48,6 +48,7 @@ TOKEN = os.environ.get("AIOS_WEB_TOKEN", "")
 API_ROUTES = {
     ("GET", "/api/today"): api.get_today,
     # POST because they take a query body; both are reads and change nothing.
+    ("POST", "/api/snipes"): api.get_snipes,
     ("POST", "/api/vault-search"): api.get_vault_search,
     ("POST", "/api/vault-page"): api.get_vault_page,
     ("GET", "/api/money-board"): api.get_money_board,

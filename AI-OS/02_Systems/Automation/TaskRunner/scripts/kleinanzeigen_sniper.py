@@ -44,6 +44,15 @@ from send_telegram_notification import send as send_telegram  # noqa: E402
 
 WATCHES_DIR = os.path.join(TASK_RUNNER_DIR, "watches")
 STATE_PATH = os.path.join(WATCHES_DIR, "state.json")
+# Matched listings, kept so they can be browsed and ranked later. state.json
+# only ever held IDs, which is all an alert needs - but an alert is gone the
+# moment it scrolls off Telegram, and a listing Felix could not act on at
+# 09:00 is often still worth seeing at 18:00.
+FINDS_PATH = os.path.join(WATCHES_DIR, "finds.json")
+# Bounded: the sniper runs every 3 minutes, and an unbounded find log would
+# grow forever for a phone screen that shows a couple of dozen rows.
+FINDS_KEEP = 300
+FINDS_RETENTION_DAYS = 14
 
 BASE = "https://www.kleinanzeigen.de"
 UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -326,6 +335,40 @@ def format_alert(listing, watch_name):
 
 # --- state -------------------------------------------------------------------
 
+def load_finds():
+    """Matched listings, newest first. Never raises: a corrupt find log means
+    an empty list, not a sniper that stops running."""
+    try:
+        with open(FINDS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def save_finds(new_finds):
+    """Prepend, dedupe by ad id, age out, cap. Same atomic .part rename the
+    rest of this project uses - the web client reads this file live and must
+    never see a half-written one."""
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(days=FINDS_RETENTION_DAYS)).isoformat()
+    merged, seen_ids = [], set()
+    for item in list(new_finds) + load_finds():
+        if item.get("id") in seen_ids:
+            continue
+        if (item.get("found_at") or "") < cutoff:
+            continue
+        seen_ids.add(item.get("id"))
+        merged.append(item)
+    merged = merged[:FINDS_KEEP]
+    os.makedirs(WATCHES_DIR, exist_ok=True)
+    tmp = FINDS_PATH + ".part"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(merged, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, FINDS_PATH)
+    return merged
+
+
 def load_state():
     try:
         with open(STATE_PATH, encoding="utf-8") as f:
@@ -377,7 +420,7 @@ def fetch(url):
         return resp.read().decode("utf-8", "replace")
 
 
-def run(dry_run=False, only=None, reseed=False):
+def run(dry_run=False, only=None, reseed=False, backfill=False):
     if not os.path.isdir(WATCHES_DIR):
         print(f"No watches dir at {WATCHES_DIR}", file=sys.stderr)
         return 1
@@ -399,6 +442,7 @@ def run(dry_run=False, only=None, reseed=False):
     stats = state["stats"]
     now_iso = datetime.now(timezone.utc).isoformat()
     alerts, failures, first = [], [], False
+    finds = []
     scanned = new_ads = 0
 
     for i, fname in enumerate(files):
@@ -443,7 +487,19 @@ def run(dry_run=False, only=None, reseed=False):
             if seeding or not matches(listing, cfg):
                 continue
             alerts.append(format_alert(listing, watch_name))
+            finds.append(dict(listing, watch=watch_name, found_at=now_iso))
             hits += 1
+
+        # Backfill records every CURRENT match, not just unseen ones, and
+        # sends nothing. Without it the find log can only fill from brand new
+        # ads, so any state reset - or simply adding the log after the fact,
+        # which is exactly what happened here - leaves the tier list empty for
+        # days while perfectly good listings sit on the site unrecorded.
+        if backfill:
+            for listing in listings:
+                if matches(listing, cfg):
+                    finds.append(dict(listing, watch=watch_name,
+                                      found_at=now_iso, backfilled=True))
 
         if seeding:
             first = True
@@ -458,6 +514,12 @@ def run(dry_run=False, only=None, reseed=False):
         stats["listings"] += scanned
         stats["new_ads"] += new_ads
         stats["alerts"] += len(alerts)
+
+    if finds and not dry_run:
+        saved = save_finds(finds)
+        if backfill:
+            print(f"backfill: {len(finds)} matching listing(s) recorded, "
+                  f"{len(saved)} in the log")
 
     if dry_run:
         print("\n--- DRY RUN, nothing sent, state not written ---")
@@ -510,5 +572,8 @@ if __name__ == "__main__":
     ap.add_argument("--dry-run", action="store_true", help="print instead of sending; do not write state")
     ap.add_argument("--only", help="run a single watch file, e.g. --only monitore")
     ap.add_argument("--reseed", action="store_true", help="mark everything currently listed as seen, alert on nothing")
+    ap.add_argument("--backfill", action="store_true",
+                    help="record every current match to the find log without alerting")
     args = ap.parse_args()
-    sys.exit(run(dry_run=args.dry_run, only=args.only, reseed=args.reseed))
+    sys.exit(run(dry_run=args.dry_run, only=args.only, reseed=args.reseed,
+                 backfill=args.backfill))
