@@ -702,3 +702,15 @@ body[data-screen="screen-downloads"] #fx-grain {
 }
 .tabbar::-webkit-scrollbar { display: none; }
 .tab { flex: 0 0 auto; min-width: 62px; padding-left: 4px; padding-right: 4px; }
+
+/* Command output: monospace, scrollable, and never allowed to push the page
+   sideways - a long line from a compiler would otherwise break the layout. */
+.node-output {
+  margin-top: 10px; padding: 12px; border-radius: 10px;
+  background: var(--surface); border: 1px solid var(--border);
+  color: var(--text-dim); font-size: 0.78rem; line-height: 1.5;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 40vh; overflow-y: auto;
+}
+.chip:disabled { opacity: 0.45; cursor: default; }

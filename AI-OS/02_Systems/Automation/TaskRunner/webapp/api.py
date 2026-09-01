@@ -227,6 +227,73 @@ def post_job_result(body):
     return 200, {"ok": True}
 
 
+def post_node_run(body):
+    """Queue a shell command for one node and return a ticket.
+
+    This is remote access to Felix's laptop through the web client. It is
+    genuinely that - an arbitrary command on his own machine, behind his own
+    token, on his own network. Worth being plain about rather than dressing
+    up: whoever holds the token can run code on any online node.
+
+    Queued rather than executed: the server never reaches into the laptop, the
+    laptop asks for work. So this returns immediately with a ticket and the
+    client polls, which also means a command survives the laptop being asleep
+    - it runs when the machine comes back rather than failing now."""
+    body = body or {}
+    node = (body.get("node") or "").strip()
+    command = (body.get("command") or "").strip()
+    if not re.fullmatch(r"[\w-]{1,40}", node):
+        return 400, {"error": "invalid node"}
+    if not command:
+        return 400, {"error": "kein Befehl"}
+
+    known = {n["id"]: n for n in _nodes_state()}
+    if node not in known:
+        return 400, {"error": f"unbekannter Knoten: {node}"}
+    if not known[node]["online"]:
+        return 400, {"error": f"{node} ist offline (zuletzt vor "
+                              f"{known[node]['seen_ago']}s gesehen)"}
+
+    job_id = f"run_{node}_{int(time.time() * 1000)}.json"
+    queued = os.path.join(JOBS_DIR, "queued")
+    os.makedirs(queued, exist_ok=True)
+    job = {
+        "id": job_id,
+        "kind": "shell",
+        # Pinned to the node Felix picked. Without this the job would go to
+        # whichever node claimed it first, and "run this on the laptop" would
+        # sometimes silently run on the server.
+        "needs": node,
+        "payload": {"command": command,
+                    "timeout": min(int(body.get("timeout") or 300), 900)},
+        "queued_at": time.time(),
+    }
+    tmp = os.path.join(queued, job_id + ".part")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(job, f, ensure_ascii=False)
+    os.replace(tmp, os.path.join(queued, job_id))
+    return 200, {"ok": True, "job_id": job_id}
+
+
+def get_node_result(body):
+    """Collect a queued command's output, or report that it is still waiting."""
+    job_id = ((body or {}).get("job_id") or "").strip()
+    if not re.fullmatch(r"[\w.-]{1,80}\.json", job_id):
+        return 400, {"error": "invalid job_id"}
+    done = os.path.join(JOBS_DIR, "done", job_id)
+    if os.path.exists(done):
+        job = _load_json(done)
+        return 200, {"ready": True, "ok": job.get("ok"),
+                     "output": job.get("output", ""),
+                     "node": job.get("claimed_by")}
+    running = os.path.exists(os.path.join(JOBS_DIR, "running", job_id))
+    queued = os.path.exists(os.path.join(JOBS_DIR, "queued", job_id))
+    if not running and not queued:
+        return 200, {"ready": False, "lost": True,
+                     "error": "Job nicht mehr auffindbar"}
+    return 200, {"ready": False, "state": "läuft" if running else "wartet"}
+
+
 # --- device control ------------------------------------------------------
 
 SCREENSHOT_DIR = os.path.join(TASK_RUNNER_DIR, "phone", "screenshots")

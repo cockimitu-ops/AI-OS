@@ -529,6 +529,7 @@ async function loadDevices() {
       <span>${escapeHtml(dev.current_app || "—")}</span>
       <span>${dev.rooted ? "root" : "ohne root"}</span>`;
     renderDeviceControls();
+    loadNodeRunner();
     await refreshDeviceScreen();
   } catch (err) {
     setConnDot("err");
@@ -614,6 +615,72 @@ async function refreshDeviceScreen() {
     });
   } catch (err) {
     deviceSay(err.message, true);
+  }
+}
+
+// --- remote command on a compute node ---------------------------------------
+
+let nodeState = { id: null };
+
+async function loadNodeRunner() {
+  const listEl = document.getElementById("node-list");
+  if (!listEl) return;
+  try {
+    const data = await api("/api/nodes");
+    const nodes = data.nodes || [];
+    if (!nodeState.id || !nodes.some((n) => n.id === nodeState.id && n.online)) {
+      nodeState.id = (nodes.find((n) => n.online) || {}).id || null;
+    }
+    listEl.innerHTML = nodes.map((n) => `
+      <button class="chip ${n.id === nodeState.id ? "on" : ""}" data-node="${escapeHtml(n.id)}"
+              ${n.online ? "" : "disabled"}>
+        ${escapeHtml(n.id)} · ${n.cores ?? "?"}K${n.online ? "" : " offline"}
+      </button>`).join("") || `<span class="hint">Keine Knoten.</span>`;
+    listEl.querySelectorAll(".chip").forEach((el) => el.addEventListener("click", () => {
+      if (el.disabled) return;
+      if (window.fxTap) window.fxTap();
+      nodeState.id = el.dataset.node;
+      loadNodeRunner();
+    }));
+  } catch (err) {
+    listEl.innerHTML = `<span class="hint">Fehler: ${escapeHtml(err.message)}</span>`;
+  }
+}
+
+async function runOnNode() {
+  const input = document.getElementById("node-cmd");
+  const out = document.getElementById("node-output");
+  const cmd = input.value.trim();
+  if (!cmd) return;
+  if (!nodeState.id) { out.textContent = "Kein Knoten ausgewählt."; return; }
+  out.textContent = `[${nodeState.id}] wird eingereiht...`;
+  try {
+    const queued = await api("/api/node-run", {
+      method: "POST",
+      body: JSON.stringify({ node: nodeState.id, command: cmd }),
+    });
+    input.value = "";
+    // Polled, not awaited in one request: the command may sit in the queue
+    // while the laptop is asleep, and a browser will not hold a request open
+    // that long - the same failure the chat had.
+    let wait = 800;
+    for (;;) {
+      await new Promise((r) => setTimeout(r, wait));
+      wait = Math.min(wait * 1.3, 4000);
+      const res = await api("/api/node-result", {
+        method: "POST",
+        body: JSON.stringify({ job_id: queued.job_id }),
+      });
+      if (res.ready) {
+        out.textContent = (res.ok ? "" : "[fehlgeschlagen] ")
+          + (res.output || "(keine Ausgabe)");
+        return;
+      }
+      if (res.lost) { out.textContent = res.error; return; }
+      out.textContent = `[${nodeState.id}] ${res.state}...`;
+    }
+  } catch (err) {
+    out.textContent = `Fehler: ${err.message}`;
   }
 }
 
@@ -994,6 +1061,11 @@ document.getElementById("install-btn").addEventListener("click", async () => {
 
 window.addEventListener("appinstalled", () => {
   document.getElementById("install-btn").classList.add("hidden");
+});
+
+document.getElementById("node-send")?.addEventListener("click", runOnNode);
+document.getElementById("node-cmd")?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") runOnNode();
 });
 
 // --- boot ------------------------------------------------------------------

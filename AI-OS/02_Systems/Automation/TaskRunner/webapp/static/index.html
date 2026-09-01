@@ -73,6 +73,18 @@
     <div id="device-screen-wrap" class="device-screen-wrap"></div>
     <div id="device-controls" class="device-controls"></div>
     <p id="device-status" class="hint"></p>
+
+    <h2 class="section-title">Rechner-Fernzugriff</h2>
+    <p class="hint">Befehl auf einem Knoten ausführen. Läuft über die
+      Job-Warteschlange — der Befehl wartet, wenn der Rechner gerade schläft,
+      statt fehlzuschlagen.</p>
+    <div id="node-list" class="chip-row"></div>
+    <div class="device-typerow">
+      <input id="node-cmd" type="text" placeholder="Befehl..." autocomplete="off"
+             autocapitalize="off" spellcheck="false">
+      <button class="upload-send" id="node-send">Ausführen</button>
+    </div>
+    <pre id="node-output" class="node-output"></pre>
   </section>
 
   <section id="screen-downloads" class="screen">

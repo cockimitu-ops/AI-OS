@@ -63,6 +63,8 @@ API_ROUTES = {
     ("GET", "/api/phone"): api.get_phone,
     ("GET", "/api/devices"): api.get_devices,
     ("GET", "/api/nodes"): api.get_nodes,
+    ("POST", "/api/node-run"): api.post_node_run,
+    ("POST", "/api/node-result"): api.get_node_result,
     ("POST", "/api/node-register"): api.post_node_register,
     ("POST", "/api/job-claim"): api.post_job_claim,
     ("POST", "/api/job-result"): api.post_job_result,

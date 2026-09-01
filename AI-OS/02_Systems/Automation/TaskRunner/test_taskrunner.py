@@ -5488,6 +5488,49 @@ class TestNodeQueue(unittest.TestCase):
         with open(done, encoding="utf-8") as f:
             self.assertEqual(json.load(f)["output"], "fertig")
 
+    def test_run_is_pinned_to_the_chosen_node(self):
+        """Without pinning, "run this on the laptop" goes to whichever node
+        claims it first - which would sometimes silently be the server."""
+        self.api.post_node_register({"id": "laptop"})
+        status, payload = self.api.post_node_run(
+            {"node": "laptop", "command": "echo hi"})
+        self.assertEqual(status, 200)
+        queued = os.path.join(self.api.JOBS_DIR, "queued", payload["job_id"])
+        with open(queued, encoding="utf-8") as f:
+            job = json.load(f)
+        self.assertEqual(job["needs"], "laptop")
+        self.assertEqual(job["payload"]["command"], "echo hi")
+
+    def test_run_refuses_an_offline_node(self):
+        """Better to say so than to queue a command that sits until the
+        machine happens to come back."""
+        self.api.post_node_register({"id": "laptop"})
+        path = os.path.join(self.api.NODES_DIR, "laptop.json")
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        data["last_seen"] = time.time() - (self.api.NODE_STALE_S + 60)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        status, payload = self.api.post_node_run(
+            {"node": "laptop", "command": "echo hi"})
+        self.assertEqual(status, 400)
+        self.assertIn("offline", payload["error"])
+
+    def test_run_validates_node_and_command(self):
+        for bad in ({"node": "../etc", "command": "x"},
+                    {"node": "laptop", "command": ""},
+                    {"node": "unknown-node", "command": "x"}):
+            self.assertEqual(self.api.post_node_run(bad)[0], 400, str(bad))
+
+    def test_run_timeout_is_capped(self):
+        """A command with no ceiling can pin a node indefinitely."""
+        self.api.post_node_register({"id": "laptop"})
+        _, payload = self.api.post_node_run(
+            {"node": "laptop", "command": "sleep 1", "timeout": 99999})
+        with open(os.path.join(self.api.JOBS_DIR, "queued", payload["job_id"]),
+                  encoding="utf-8") as f:
+            self.assertLessEqual(json.load(f)["payload"]["timeout"], 900)
+
     def test_job_id_cannot_escape_the_jobs_directory(self):
         for evil in ("../../etc/passwd", "/etc/shadow.json", "no-extension"):
             status, _ = self.api.post_job_result({"job_id": evil, "ok": True})
