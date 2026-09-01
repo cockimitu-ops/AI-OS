@@ -3405,6 +3405,45 @@ class TestWebappApi(unittest.TestCase):
             finally:
                 self.api.TASK_RUNNER_DIR = original
 
+    def test_vault_search_finds_a_real_page(self):
+        """Searches the live Markdown files, not a Notion copy. The old MCP
+        server queried Notion, which never had the money board, the leads or
+        the flip log in it at all - it would have described a system that no
+        longer exists."""
+        status, payload = self.api.get_vault_search({"query": "Gewerbeanmeldung"})
+        self.assertEqual(status, 200)
+        self.assertGreater(payload["total"], 0)
+        self.assertIn("snippet", payload["hits"][0])
+
+    def test_vault_search_rejects_a_too_short_query(self):
+        self.assertEqual(self.api.get_vault_search({"query": "a"})[0], 400)
+        self.assertEqual(self.api.get_vault_search({})[0], 400)
+
+    def test_vault_search_is_bounded(self):
+        """These are read by MCP clients whose cost model is tokens - an
+        unbounded grep over 280+ files would hand a model tens of thousands
+        of tokens to answer one question."""
+        _, payload = self.api.get_vault_search({"query": "the", "limit": 999})
+        self.assertLessEqual(len(payload["hits"]), self.api.VAULT_MAX_HITS)
+
+    def test_vault_page_by_bare_name_and_by_path(self):
+        for name in ("Knowledge_Core", "07_Context/Knowledge_Core.md"):
+            status, payload = self.api.get_vault_page({"page": name})
+            self.assertEqual(status, 200, name)
+            self.assertIn("Knowledge Core", payload["content"])
+
+    def test_vault_page_cannot_escape_the_vault(self):
+        """Same containment rule vault_write.py holds for writes: resolve the
+        path first, then verify it is still inside the vault, so an endpoint
+        meant for notes cannot be used to read an SSH key back out."""
+        for evil in ("../../.ssh/id_rsa", "../../../etc/passwd", "/etc/passwd"):
+            status, _ = self.api.get_vault_page({"page": evil})
+            self.assertEqual(status, 404, evil)
+
+    def test_vault_page_missing_is_404_not_a_crash(self):
+        self.assertEqual(self.api.get_vault_page({"page": "Nope_Does_Not_Exist"})[0], 404)
+        self.assertEqual(self.api.get_vault_page({})[0], 400)
+
     def test_dmarc_leads_shape(self):
         status, payload = self.api.get_dmarc_leads({})
         self.assertEqual(status, 200)

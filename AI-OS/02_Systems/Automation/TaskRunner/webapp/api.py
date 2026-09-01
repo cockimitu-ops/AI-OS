@@ -30,6 +30,7 @@ import dmarc_prospector
 import flip_log
 import proposals
 import study_agent
+import vault_write
 
 TASK_RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INBOX = os.path.join(TASK_RUNNER_DIR, "tasks", "inbox")
@@ -57,6 +58,104 @@ ALLOWED_UPLOAD_EXT = (".txt", ".zip", ".csv", ".json", ".md",
                       # on his phone, he photographs slides and boards).
                       ".jpg", ".jpeg", ".png", ".heic", ".webp", ".pdf")
 UNSAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._ ()\u00c0-\u024f-]")
+
+
+# --- vault ---------------------------------------------------------------
+
+VAULT = vault_write.VAULT
+# Bounded on purpose. These are read by MCP clients whose whole cost model is
+# tokens: an unbounded grep over 280+ vault files would hand a model tens of
+# thousands of tokens of context to answer "what is the DMARC project", which
+# is both expensive and worse than a focused answer.
+VAULT_MAX_HITS = 20
+VAULT_SNIPPET_CHARS = 240
+VAULT_MAX_PAGE_CHARS = 20_000
+# Folders that are machine state or vendored code, not knowledge. Searching
+# them returns noise (node_modules) or churn (task logs) and buries the notes.
+VAULT_SKIP_DIRS = {"node_modules", ".git", "__pycache__", "backups", "tasks",
+                   "uploads", "voice", "spend", "prospects", "study", "techscout"}
+
+
+def _vault_files():
+    for root, dirs, files in os.walk(VAULT):
+        dirs[:] = [d for d in dirs if d not in VAULT_SKIP_DIRS and not d.startswith(".")]
+        for name in files:
+            if name.endswith(".md"):
+                yield os.path.join(root, name)
+
+
+def get_vault_search(body):
+    """Keyword search across the vault's Markdown. -> ranked hits with
+    snippets.
+
+    Reads the real files rather than Notion. The existing AI-OSmcp server
+    queried Notion, which is a copy: everything that actually matters now -
+    the money board, the leads, the flip log, proposals - lives in files here
+    and was never in Notion at all. A search that answers from the copy would
+    confidently describe a system that no longer exists."""
+    query = (body.get("query") or "").strip()
+    if len(query) < 2:
+        return 400, {"error": "query must be at least 2 characters"}
+    limit = min(int(body.get("limit") or VAULT_MAX_HITS), VAULT_MAX_HITS)
+    needle = query.lower()
+    hits = []
+    for path in _vault_files():
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except OSError:
+            continue
+        low = text.lower()
+        count = low.count(needle)
+        if not count:
+            continue
+        where = low.find(needle)
+        start = max(0, where - VAULT_SNIPPET_CHARS // 3)
+        snippet = text[start:start + VAULT_SNIPPET_CHARS].replace("\n", " ").strip()
+        hits.append({
+            "page": os.path.relpath(path, VAULT),
+            "matches": count,
+            "snippet": ("..." if start else "") + snippet + "...",
+        })
+    # Most matches first: a page that mentions the term twenty times is
+    # almost always the page about it, and a title match is worth more than
+    # a passing mention, so exact-name hits get pushed to the top.
+    hits.sort(key=lambda h: (needle in os.path.basename(h["page"]).lower(),
+                             h["matches"]), reverse=True)
+    return 200, {"query": query, "total": len(hits), "hits": hits[:limit]}
+
+
+def get_vault_page(body):
+    """One page's full Markdown, by vault-relative path or bare name."""
+    name = (body.get("page") or "").strip()
+    if not name:
+        return 400, {"error": "page is required"}
+    # Same containment check vault_write.py uses for writes: resolve first,
+    # then verify the result is still inside the vault, so "../../.ssh/id_rsa"
+    # cannot be read back through an endpoint meant for notes.
+    candidates = []
+    direct = os.path.realpath(os.path.join(VAULT, name))
+    if direct.startswith(os.path.realpath(VAULT) + os.sep) and os.path.isfile(direct):
+        candidates.append(direct)
+    if not candidates:
+        stem = name.lower().removesuffix(".md")
+        for path in _vault_files():
+            if os.path.basename(path).lower().removesuffix(".md") == stem:
+                candidates.append(path)
+                break
+    if not candidates:
+        return 404, {"error": f"no vault page matching {name!r}"}
+    try:
+        with open(candidates[0], encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError as e:
+        return 500, {"error": str(e)}
+    truncated = len(text) > VAULT_MAX_PAGE_CHARS
+    return 200, {
+        "page": os.path.relpath(candidates[0], VAULT),
+        "truncated": truncated,
+        "content": text[:VAULT_MAX_PAGE_CHARS],
+    }
 
 
 # --- today ---------------------------------------------------------------
