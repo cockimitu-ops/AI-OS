@@ -4770,6 +4770,16 @@ class TestPhoneControl(unittest.TestCase):
         cls.ph = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.ph)
 
+    def test_rooted_phone_also_targets_the_tailnet(self):
+        """Both phones are reached the same way. A USB serial only resolves
+        while the cable is in, which makes it useless for anything scheduled;
+        the tailnet address works from home, campus or a train."""
+        spec = importlib.util.spec_from_file_location(
+            "phone_root_addr", os.path.join(HERE, "scripts", "phone_root.py"))
+        pr = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pr)
+        self.assertTrue(pr.DEVICE.startswith("100."), pr.DEVICE)
+
     def test_targets_the_tailnet_address_not_a_lan_one(self):
         """A LAN address changes with every network he joins; the tailnet one
         is the same from home, from campus, or from a train."""

@@ -48,7 +48,10 @@ PULL_DIR = os.path.join(STATE_DIR, "pulled")
 
 # The rooted phone. Serial by default (USB), overridable to host:port once it
 # is on the tailnet.
-DEVICE = os.environ.get("AIOS_ROOT_PHONE", "f3b7e7bf")
+# The tailnet address, not the USB serial. Verified working 2026-09-01: root
+# over Tailscale from the server, cable unplugged. A USB serial only resolves
+# while the cable is in, which makes it useless for anything scheduled.
+DEVICE = os.environ.get("AIOS_ROOT_PHONE", "100.97.248.22:5555")
 ADB_TIMEOUT = 40
 
 # Verbs that can cost him the device or its data. Present, but never callable
