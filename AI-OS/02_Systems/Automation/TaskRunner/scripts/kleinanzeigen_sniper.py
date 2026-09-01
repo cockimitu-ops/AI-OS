@@ -67,6 +67,28 @@ FAILURE_REALERT_SECONDS = 6 * 3600
 
 DIRECTIVE_RE = re.compile(r"^\s*<!--\s*([a-z_]+)\s*:\s*(.+?)\s*-->\s*$", re.I | re.M)
 
+# --- current layout (rewritten 2026-09-01) ---------------------------------
+# Kleinanzeigen restyled the results page and every one of the old CSS-class
+# regexes below stopped matching: all five watches returned "0 listings
+# parsed" and the sniper had silently found nothing at all. Confirmed against
+# the live page - HTTP 200, 547KB, no captcha, 25 real listings present.
+#
+# The rewrite deliberately anchors on things that are not styling:
+#   * <article data-adid="..." data-href="..."> - data attributes the site's
+#     own click handling depends on, so they cannot be restyled away casually
+#   * the per-listing JSON-LD block, which is machine-readable structured data
+#     with the full untruncated title and description
+# The presentation-class regexes that broke are kept below only as the
+# fallback path, because a layout can always roll back.
+ART_RE = re.compile(
+    r'<article[^>]*data-adid="(\d+)"[^>]*data-href="([^"]+)"(.*?)</article>', re.S)
+LD_RE = re.compile(r'<script type="application/ld\+json">(.*?)</script>', re.S)
+# Text-level, order-independent field extraction from one article's body.
+ART_LOC_RE = re.compile(r">\s*(\d{5}\s+[^<>|]{2,60}?)\s*<")
+ART_KM_RE = re.compile(r">\s*\((\d+)\s*km\)\s*<")
+ART_DATE_RE = re.compile(r">\s*((?:Heute|Gestern)[^<>]{0,12}|\d{2}\.\d{2}\.\d{4})\s*<")
+ART_PRICE_RE = re.compile(r">\s*([^<>]*?(?:\d[\d.]*\s*€|Zu verschenken)[^<>]*?)\s*<", re.I)
+
 ARTICLE_RE = re.compile(
     r'<article[^>]*class="[^"]*\baditem\b[^"]*"[^>]*data-adid="(\d+)"'
     r'[^>]*data-href="([^"]+)"(.*?)</article>', re.S)
@@ -185,7 +207,62 @@ def build_url(cfg):
 
 
 def parse_listings(html):
-    """Search results HTML -> list of listing dicts."""
+    """Search results HTML -> list of listing dicts.
+
+    Tries the current layout first, then falls back to the pre-2026-09 one.
+    Both produce the identical dict shape, so matches() and everything
+    downstream is untouched by which path ran."""
+    out = _parse_current(html)
+    if out:
+        return out
+    return _parse_legacy(html)
+
+
+def _parse_current(html):
+    """data-adid articles + per-listing JSON-LD. See ART_RE's comment."""
+    out = []
+    for adid, href, body in ART_RE.findall(html):
+        # JSON-LD carries the full title and description; the visible markup
+        # truncates the description with an ellipsis, and the filters in
+        # matches() read the description.
+        title = desc = ""
+        for raw in LD_RE.findall(body):
+            try:
+                data = json.loads(raw)
+            except ValueError:
+                continue
+            if isinstance(data, dict) and data.get("title"):
+                title = data.get("title") or ""
+                desc = data.get("description") or ""
+                break
+        # Strip scripts and inline SVG before reading text: an SVG path's `d`
+        # attribute is full of digits and commas and produces convincing
+        # garbage for the price and distance regexes.
+        text = re.sub(r"<script.*?</script>|<svg.*?</svg>", "", body, flags=re.S)
+        loc_m = ART_LOC_RE.search(text)
+        km_m = ART_KM_RE.search(text)
+        date_m = ART_DATE_RE.search(text)
+        price_m = ART_PRICE_RE.search(text)
+        location = htmlmod.unescape(loc_m.group(1)).strip() if loc_m else ""
+        if not title:
+            continue  # an article with no readable title is not a listing
+        out.append({
+            "id": adid,
+            "url": BASE + href if href.startswith("/") else href,
+            "title": htmlmod.unescape(title).strip(),
+            "desc": htmlmod.unescape(desc).strip(),
+            "location": location,
+            "posted": strip_tags(date_m.group(1)) if date_m else "",
+            "price": parse_price(price_m.group(1)) if price_m else None,
+            # Distance is its own element now, no longer inside the location
+            # string - parse_distance() would find nothing in "09212 Limbach".
+            "distance": int(km_m.group(1)) if km_m else None,
+        })
+    return out
+
+
+def _parse_legacy(html):
+    """The pre-2026-09-01 presentation-class layout."""
     out = []
     for match in ARTICLE_RE.finditer(html):
         adid, href, body = match.groups()

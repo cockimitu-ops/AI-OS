@@ -2217,6 +2217,86 @@ class TestKleinanzeigenSniper(unittest.TestCase):
         self.assertNotIn("None", alert)
 
 
+class TestSniperCurrentLayout(unittest.TestCase):
+    """The 2026-09-01 Kleinanzeigen layout rewrite. Found live: every one of
+    the five watches was returning "0 listings parsed" and had been finding
+    nothing at all - the site restyled and every presentation-class regex
+    stopped matching. The page itself was fine (HTTP 200, no captcha, 25 real
+    listings), so nothing alerted anyone that the sniper had gone blind."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "sniper_layout", os.path.join(HERE, "scripts", "kleinanzeigen_sniper.py"))
+        cls.ks = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.ks)
+
+    # A real article block, trimmed: the data attributes, the JSON-LD, and the
+    # text-bearing fields in the order the live page emits them.
+    ARTICLE = (
+        '<ul id="srchrslt-adtable"><li><article class="flex" data-adid="3500139924" '
+        'data-href="/s-anzeige/bosch-gsr/3500139924-84-3972">'
+        '<script type="application/ld+json">{"creditText":"Kleinanzeigen",'
+        '"title":"Bosch GSR 10,8-2-Li Akkuschrauber inkl. Akku + Ladeger\u00e4t",'
+        '"description":"Biete hier einen gebrauchten Bosch Akkuschrauber",'
+        '"@type":"ImageObject"}</script>'
+        '<svg viewBox="0 0 24 24"><path d="M15.3 8.8C15.3 10.7 13.8 12.1 12.0 12.1"/></svg>'
+        '<div><span>09212 Limbach-Oberfrohna</span><span>(23 km)</span>'
+        '<span>Gestern, 18:19</span><p>50 \u20ac VB</p></div>'
+        '</article></li></ul>'
+    )
+
+    def test_parses_the_current_layout(self):
+        rows = self.ks.parse_listings(self.ARTICLE)
+        self.assertEqual(len(rows), 1)
+        r = rows[0]
+        self.assertEqual(r["id"], "3500139924")
+        self.assertEqual(r["price"], 50)
+        self.assertEqual(r["distance"], 23)
+        self.assertIn("Bosch GSR", r["title"])
+        self.assertTrue(r["url"].startswith("https://"))
+
+    def test_title_and_description_come_from_json_ld_untruncated(self):
+        """The visible markup truncates the description with an ellipsis, and
+        matches() filters on the description - so a require/exclude keyword
+        past the cut-off would silently never match."""
+        r = self.ks.parse_listings(self.ARTICLE)[0]
+        self.assertEqual(r["desc"], "Biete hier einen gebrauchten Bosch Akkuschrauber")
+        self.assertNotIn("...", r["desc"])
+
+    def test_svg_paths_do_not_poison_price_or_distance(self):
+        """An inline SVG path is full of digits and decimals and produces very
+        convincing garbage for a price regex if it is not stripped first."""
+        r = self.ks.parse_listings(self.ARTICLE)[0]
+        self.assertEqual(r["price"], 50)
+        self.assertEqual(r["distance"], 23)
+
+    def test_distance_is_its_own_element_now(self):
+        """It used to live inside the location string, so parse_distance()
+        found nothing in "09212 Limbach-Oberfrohna" and every listing came
+        back with distance None - which the distance filter treats as "in the
+        search town", i.e. never filtered."""
+        r = self.ks.parse_listings(self.ARTICLE)[0]
+        self.assertEqual(r["location"], "09212 Limbach-Oberfrohna")
+        self.assertEqual(r["distance"], 23)
+
+    def test_falls_back_to_the_legacy_layout(self):
+        """Kept because a layout can roll back, and losing the sniper twice
+        to the same class of change would be careless."""
+        legacy = (
+            '<article class="aditem" data-adid="123" data-href="/s-anzeige/x/123">'
+            '<h2><a>Alter Titel</a></h2>'
+            '<p class="aditem-main--middle--price-shipping--price">80 \u20ac</p>'
+            '</article>')
+        rows = self.ks.parse_listings(legacy)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["price"], 80)
+
+    def test_an_article_without_a_title_is_not_a_listing(self):
+        self.assertEqual(self.ks.parse_listings(
+            '<article data-adid="9" data-href="/x"><div>09212 Ort</div></article>'), [])
+
+
 class TestDmarcProspector(unittest.TestCase):
     """The DMARC lead finder (added 2026-08-31). Pure functions only - no DNS,
     no Overpass. Several of these encode mistakes the first live run actually
