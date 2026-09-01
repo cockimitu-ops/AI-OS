@@ -689,6 +689,46 @@ class TestAgentSelection(TaskRunnerTestCase):
         finally:
             self.runner.MODEL_CHAIN = original
 
+    def test_chat_gets_a_shorter_per_model_budget_than_a_scheduled_job(self):
+        """Five minutes per attempt is right for a nightly task that has all
+        night. On a chat message it means one exhausted provider stalls the
+        answer for five minutes, and a chain of six grinds for half an hour -
+        observed live on 2026-09-01, when "how much battery does my phone
+        have" sat unanswered for 12+ minutes after Groq returned a quota
+        error."""
+        self.assertLess(self.runner.CHAT_ATTEMPT_TIMEOUT_S,
+                        self.runner.ATTEMPT_TIMEOUT_S)
+
+        seen = {}
+        original = self.runner._time_limit
+        import contextlib
+
+        @contextlib.contextmanager
+        def spy(seconds):
+            seen.setdefault("budgets", []).append(seconds)
+            yield
+
+        self.runner._time_limit = spy
+        self.runner._attempt = lambda *a, **k: "ok"
+        try:
+            # The LAST budget, not the first: agent routing runs before the
+            # model attempt and applies its own ROUTING_TIMEOUT_S. Asserting
+            # on [0] passed the routing timeout instead and failed for a
+            # reason that had nothing to do with what is being tested.
+            self.queue("chat.md", "<!-- thread: web_x -->\nhallo")
+            self.runner._run_task(os.path.join(self.runner.INBOX, "chat.md"), "chat.md")
+            chat_budget = seen["budgets"][-1]
+
+            seen.clear()
+            self.queue("sched.md", "Scheduled work with no thread.")
+            self.runner._run_task(os.path.join(self.runner.INBOX, "sched.md"), "sched.md")
+            batch_budget = seen["budgets"][-1]
+        finally:
+            self.runner._time_limit = original
+
+        self.assertEqual(chat_budget, self.runner.CHAT_ATTEMPT_TIMEOUT_S)
+        self.assertEqual(batch_budget, self.runner.ATTEMPT_TIMEOUT_S)
+
     def test_worker_runs_the_task_with_the_agent_prompt(self):
         """End to end through _run_task: the directive is parsed off, and the
         prompt handed to the model is the scoped one."""

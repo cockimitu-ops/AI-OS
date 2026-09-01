@@ -55,6 +55,18 @@ import litellm
 
 LLM_REQUEST_TIMEOUT_S = 120
 ATTEMPT_TIMEOUT_S = 300
+# Interactive chat gets a much shorter per-model budget than a scheduled job.
+# Five minutes per attempt is right for a nightly task that has all night; on
+# a chat message it means one exhausted provider stalls the answer for five
+# minutes, and a chain of six can grind for half an hour. Observed live
+# 2026-09-01: "how much battery does my phone have" sat unanswered for 12+
+# minutes after Groq returned its quota error.
+#
+# The failure mode matters more than the number. A model that is rate-limited
+# usually says so in seconds; one that is going to be slow is rarely worth
+# waiting five minutes for when five other providers are queued behind it.
+# Falling through fast to a working model beats waiting for a dead one.
+CHAT_ATTEMPT_TIMEOUT_S = 75
 litellm.request_timeout = LLM_REQUEST_TIMEOUT_S
 
 
@@ -964,6 +976,10 @@ def _run_task(task_path, filename):
 
     system_prompt = _system_prompt_for(agent_name, thread_id)
     history = memory.as_messages(thread_id) if thread_id else None
+    # Same signal the voice profile uses: a thread id means a human is waiting
+    # on the other end, and nothing else does.
+    interactive = bool(thread_id and thread_id.startswith(VOICE_THREAD_PREFIXES))
+    attempt_budget = CHAT_ATTEMPT_TIMEOUT_S if interactive else ATTEMPT_TIMEOUT_S
 
     if not instruction:
         # Still write a log: a caller waiting on this file would otherwise
@@ -1000,7 +1016,7 @@ def _run_task(task_path, filename):
                 errors.append(f"{model}: skipped, monthly budget reached")
                 continue
         try:
-            with _time_limit(ATTEMPT_TIMEOUT_S):
+            with _time_limit(attempt_budget):
                 output = _attempt(model, instruction, system_prompt, history,
                                   api_base=entry["api_base"], api_key=entry["api_key"],
                                   context_window=entry["context_window"],
