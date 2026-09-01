@@ -1118,11 +1118,11 @@ def get_claude_transcript(body):
                          "error": "keine Claude-Sitzungen gefunden"}
         session_id = recent[0]["id"]
     try:
-        limit = int(body.get("limit") or 60)
+        limit = int(body.get("limit") or 14)
     except (TypeError, ValueError):
-        limit = 60
+        limit = 14
     try:
-        return 200, claude_chat.transcript(session_id, limit=max(5, min(limit, 300)))
+        return 200, claude_chat.transcript(session_id, limit=max(4, min(limit, 400)))
     except (ValueError, FileNotFoundError) as e:
         return 400, {"error": str(e)}
 

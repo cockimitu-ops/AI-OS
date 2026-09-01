@@ -244,6 +244,19 @@ def transcript(session_id, limit=60, project=None):
     if not os.path.isfile(path):
         raise FileNotFoundError("Sitzung nicht gefunden")
     rows = _iter_rows(path)
+    # Most "user" rows were never typed by anyone. Tool results, skill
+    # injections and system reminders all arrive with role=user, and in a
+    # real session they outnumber the actual prompts by forty to one - 135
+    # user rows against 3 typed messages, measured on this session. Rendered
+    # as speech they bury the conversation under the harness.
+    #
+    # A genuinely typed prompt carries promptSource/origin. Rather than trust
+    # that unconditionally (an older transcript might predate the field and
+    # would then show nothing Felix said at all), it is used only when the
+    # file proves it has it.
+    typed_marked = any(r.get("type") == "user"
+                       and (r.get("promptSource") or r.get("origin"))
+                       for r in rows)
     msgs = []
     for row in rows:
         kind = row.get("type")
@@ -252,19 +265,36 @@ def transcript(session_id, limit=60, project=None):
         text = _text_of((row.get("message") or {}).get("content"))
         if not text:
             continue
+        machine = (kind == "user" and typed_marked
+                   and not (row.get("promptSource") or row.get("origin")))
         msgs.append({
             "role": kind,
-            "text": text,
+            # Machine turns are for glancing at, not reading: a skill payload
+            # is thousands of words of instructions to the model.
+            "text": (text[:300] + " …") if machine and len(text) > 300 else text,
             "ts": row.get("timestamp"),
-            # A user row whose only content was a tool result is the harness
-            # talking to itself, not Felix - shown as machine output so the
-            # conversation still reads as a conversation.
-            "tool": text.startswith("⚙"),
+            # Anything the harness said to itself, shown as machine output so
+            # the conversation still reads as a conversation.
+            "tool": text.startswith("⚙") or machine,
         })
-    stats = session_stats(rows)
-    return {"session_id": session_id, "messages": msgs[-limit:],
-            "total_messages": len(msgs), "title": _title(rows, session_id[:8]),
-            "stats": stats}
+    # `limit` counts CONVERSATION turns, not rows. Counting rows put three
+    # real messages and fifty-seven machine lines on the screen, which is a
+    # window onto the harness rather than onto the conversation - the machine
+    # lines come along because they fall between the turns, not because they
+    # were asked for.
+    kept, turns = 0, 0
+    for i in range(len(msgs) - 1, -1, -1):
+        kept += 1
+        if not msgs[i]["tool"]:
+            turns += 1
+            if turns >= limit:
+                break
+    window = msgs[-kept:] if kept else []
+    return {"session_id": session_id, "messages": window,
+            "total_messages": len(msgs),
+            # What the client would be asking for if it wanted more.
+            "shown_turns": turns,
+            "title": _title(rows, session_id[:8]), "stats": session_stats(rows)}
 
 
 # --- sending -------------------------------------------------------------

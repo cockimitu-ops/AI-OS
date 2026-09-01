@@ -4348,6 +4348,38 @@ class TestClaudeChat(unittest.TestCase):
         self.assertEqual([m["role"] for m in out["messages"]], ["user", "assistant"])
         self.assertEqual(out["messages"][0]["text"], "hallo")
 
+    def test_harness_user_rows_are_not_shown_as_speech(self):
+        """Tool results, skill injections and system reminders all arrive with
+        role=user and outnumber the typed prompts by roughly forty to one -
+        135 user rows against 3 real messages, measured on a live session.
+        Rendered as speech they bury the conversation under the harness. A
+        genuinely typed prompt carries promptSource."""
+        home, project, sid = self._project([
+            {"type": "user", "promptSource": "user", "origin": "cli",
+             "message": {"role": "user", "content": "lese handoff 4"}},
+            {"type": "user", "message": {"role": "user", "content": "x" * 900}},
+            {"type": "assistant", "message": {"role": "assistant",
+             "content": [{"type": "text", "text": "gelesen"}], "usage": {}}},
+        ])
+        with unittest.mock.patch.dict(os.environ, {"HOME": home}):
+            out = self.cc.transcript(sid, project=project)
+        typed = [m for m in out["messages"] if not m["tool"]]
+        self.assertEqual([m["text"] for m in typed], ["lese handoff 4", "gelesen"])
+        injected = [m for m in out["messages"] if m["tool"]][0]
+        self.assertLess(len(injected["text"]), 320)
+
+    def test_an_old_transcript_without_promptsource_still_shows_its_prompts(self):
+        """The field is used only when the file proves it has it. Trusting it
+        unconditionally would show nothing Felix said in any transcript that
+        predates it."""
+        home, project, sid = self._project([
+            {"type": "user", "message": {"role": "user", "content": "hallo"}},
+            {"type": "user", "message": {"role": "user", "content": "und tschuess"}},
+        ])
+        with unittest.mock.patch.dict(os.environ, {"HOME": home}):
+            out = self.cc.transcript(sid, project=project)
+        self.assertEqual([m["tool"] for m in out["messages"]], [False, False])
+
     def test_a_half_written_line_does_not_break_the_read(self):
         """The file is appended to while it is being read - a transcript can
         genuinely end mid-line."""

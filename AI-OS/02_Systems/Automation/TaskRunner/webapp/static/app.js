@@ -417,8 +417,8 @@ function renderTranscript(data) {
     const more = document.createElement("button");
     more.className = "chip";
     more.style.alignSelf = "center";
-    more.textContent = `${data.total_messages - data.messages.length} ältere Nachrichten laden`;
-    more.addEventListener("click", () => openSession(data.session_id, data.messages.length + 120));
+    more.textContent = `${data.total_messages - data.messages.length} ältere laden`;
+    more.addEventListener("click", () => openSession(data.session_id, (data.shown_turns || 14) + 20));
     chatLog.appendChild(more);
   }
   // Runs of tool calls are folded into one line. A coding session is mostly
@@ -455,7 +455,7 @@ async function openSession(sessionId, limit) {
   try {
     const data = await api("/api/claude-transcript", {
       method: "POST",
-      body: JSON.stringify({ session_id: sessionId || "", limit: limit || 60 }),
+      body: JSON.stringify({ session_id: sessionId || "", limit: limit || 14 }),
     });
     setConnDot("ok");
     if (!data.session_id) {
