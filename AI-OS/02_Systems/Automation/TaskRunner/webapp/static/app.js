@@ -355,21 +355,19 @@ async function loadDmarcLeads() {
       tableEl.innerHTML = `<div class="empty-state">Noch keine Leads.</div>`;
       return;
     }
-    const rows = data.leads.map((l) => `
-      <tr>
-        <td>${escapeHtml(l.name || l.domain)}</td>
-        <td>${escapeHtml(l.domain)}</td>
-        <td>${l.score ?? ""}</td>
-        <td>${escapeHtml(dmarcFinding(l))}</td>
-        <td>${escapeHtml(l.provider || "")}</td>
-        <td>${l.address ? escapeHtml(l.address.city) : ""}</td>
-        <td>${escapeHtml(l.phone || "")}</td>
-      </tr>
+    tableEl.innerHTML = data.leads.map((l) => `
+      <div class="data-row">
+        <div class="title">${escapeHtml(l.name || l.domain)}</div>
+        <div class="subtitle">${escapeHtml(l.domain)}</div>
+        <div class="meta">
+          <span>Score ${l.score ?? "?"}</span>
+          <span>${escapeHtml(dmarcFinding(l))}</span>
+          ${l.provider ? `<span>${escapeHtml(l.provider)}</span>` : ""}
+          ${l.address?.city ? `<span>${escapeHtml(l.address.city)}</span>` : ""}
+          ${l.phone ? `<span>${escapeHtml(l.phone)}</span>` : ""}
+        </div>
+      </div>
     `).join("");
-    tableEl.innerHTML = `<table>
-      <thead><tr><th>Name</th><th>Domain</th><th>Score</th><th>Befund</th><th>Provider</th><th>Ort</th><th>Telefon</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
   } catch (err) {
     setConnDot("err");
     tableEl.innerHTML = `<div class="empty-state">Fehler beim Laden: ${escapeHtml(err.message)}</div>`;
@@ -387,24 +385,24 @@ async function loadFlipLog() {
       tableEl.innerHTML = `<div class="empty-state">Noch keine Flips geloggt.</div>`;
       return;
     }
-    const rows = data.rows.map((r) => {
+    tableEl.innerHTML = data.rows.map((r) => {
       const net = parseFloat((r["Net €"] || "").replace(",", "."));
-      const cls = r.open ? "open" : (net < 0 ? "loss" : "win");
+      // CSS keys off "net win" / "net loss" together (.net.win, .net.loss) so
+      // the neutral ".net" rule and the colour rule can both apply; a plain
+      // "win"/"loss" class here left the amount in default grey with no error
+      // anywhere, since escapeHtml() happily wrote the wrong class name too.
+      const netCls = r.open ? "open" : `net ${net < 0 ? "loss" : "win"}`;
       return `
-        <tr class="${cls}">
-          <td>${escapeHtml(r.Date || "")}</td>
-          <td>${escapeHtml(r.Item || "")}</td>
-          <td>${escapeHtml(r.Category || "")}</td>
-          <td>${escapeHtml(r["Buy €"] || "")}</td>
-          <td>${r.open ? "offen" : escapeHtml(r["Sold €"] || "")}</td>
-          <td class="net">${escapeHtml(r["Net €"] || "")}</td>
-          <td>${escapeHtml(r["€/hour"] || "")}</td>
-        </tr>`;
+        <div class="data-row">
+          <div class="title">${escapeHtml(r.Item || "")}</div>
+          <div class="subtitle">${escapeHtml(r.Date || "")} · ${escapeHtml(r.Category || "")}</div>
+          <div class="meta">
+            <span>Kauf ${escapeHtml(r["Buy €"] || "?")} €</span>
+            <span class="${netCls}">${r.open ? "offen" : `Netto ${escapeHtml(r["Net €"] || "")} €`}</span>
+            ${!r.open && r["€/hour"] ? `<span>${escapeHtml(r["€/hour"])} €/h</span>` : ""}
+          </div>
+        </div>`;
     }).join("");
-    tableEl.innerHTML = `<table>
-      <thead><tr><th>Datum</th><th>Item</th><th>Kategorie</th><th>Kauf €</th><th>Verkauft €</th><th>Netto €</th><th>€/h</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
   } catch (err) {
     setConnDot("err");
     tableEl.innerHTML = `<div class="empty-state">Fehler beim Laden: ${escapeHtml(err.message)}</div>`;

@@ -2521,7 +2521,14 @@ class TestStatusUpdate(unittest.TestCase):
             original = spend_guard_mod.LEDGER_PATH
             spend_guard_mod.LEDGER_PATH = os.path.join(tmp, "ledger.json")
             try:
-                spend_guard_mod.record_spend(1.23, month="2026-08")
+                # format_spend_section() always reports the CURRENT month -
+                # that is correct real behaviour, not a bug to work around.
+                # An earlier version of this test hardcoded month="2026-08"
+                # and broke the instant the calendar rolled to September:
+                # it wrote into the August bucket and then read the (empty)
+                # September one. Deriving the month here keeps the test
+                # honest about what the function actually does.
+                spend_guard_mod.record_spend(1.23, month=spend_guard_mod.month_key())
                 line = self.su.format_spend_section()
             finally:
                 spend_guard_mod.LEDGER_PATH = original
