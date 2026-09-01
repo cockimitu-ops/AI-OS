@@ -26,6 +26,7 @@ import json
 import mimetypes
 import os
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -40,6 +41,18 @@ import api  # noqa: E402  (needs sys.path set first)
 # Tailscale IP first (the intended, only access path), loopback as a
 # same-box-only fallback so this is still testable without editing .env.
 BIND_HOST = os.environ.get("AIOS_WEB_BIND", "100.64.2.100")
+# Additional addresses to listen on, comma-separated. Added so the laptop can
+# reach the server on the home LAN while Tailscale is not working there -
+# without it the compute-node plan depended on a VPN Felix cannot currently
+# log into.
+#
+# Explicitly named addresses, never 0.0.0.0. The difference matters: 0.0.0.0
+# would also bind any interface added later, including one facing somewhere it
+# should not. This widens the boundary from "tailnet only" to "tailnet plus
+# the home network", deliberately, and the bearer token still gates every
+# request on both.
+EXTRA_BINDS = [a.strip() for a in
+               os.environ.get("AIOS_WEB_EXTRA_BINDS", "").split(",") if a.strip()]
 PORT = int(os.environ.get("AIOS_WEB_PORT", "8787"))
 TOKEN = os.environ.get("AIOS_WEB_TOKEN", "")
 
@@ -228,10 +241,27 @@ def main():
         print("WARNING: AIOS_WEB_TOKEN is not set in .env - every request "
              "will be rejected until it is. Not starting with a blank/"
              "default token; set a real random value.", file=sys.stderr)
-    server = ThreadingHTTPServer((BIND_HOST, PORT), Handler)
-    print(f"AI-OS web client listening on {BIND_HOST}:{PORT}")
+    servers = []
+    for host in [BIND_HOST] + EXTRA_BINDS:
+        try:
+            servers.append(ThreadingHTTPServer((host, PORT), Handler))
+            print(f"AI-OS web client listening on {host}:{PORT}")
+        except OSError as e:
+            # A configured address that does not exist on this machine must
+            # not stop the ones that do - an interface can be down (wlo1 was,
+            # tonight) without taking the whole service with it.
+            print(f"[!] cannot bind {host}:{PORT}: {e}", file=sys.stderr)
+    if not servers:
+        print("No address could be bound - not starting.", file=sys.stderr)
+        return
+    threads = [threading.Thread(target=srv.serve_forever, daemon=True)
+               for srv in servers]
+    for t in threads:
+        t.start()
     try:
-        server.serve_forever()
+        while any(t.is_alive() for t in threads):
+            for t in threads:
+                t.join(1)
     except KeyboardInterrupt:
         pass
 

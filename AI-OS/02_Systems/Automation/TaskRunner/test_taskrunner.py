@@ -5396,3 +5396,99 @@ class TestProposalFactChecks(unittest.TestCase):
         proposal - turning a correctly refused "none" back into a reviewable
         item."""
         self.assertEqual(self.pr.parse("AI_PROPOSAL: none."), [])
+
+
+class TestNodeQueue(unittest.TestCase):
+    """Compute-node registry and job queue (added 2026-09-01). The laptop
+    connects OUT to the server and asks for work; the server never reaches in.
+    That is what lets it live on a machine which sleeps, changes network and
+    goes to university without needing a VPN, a port forward or a fixed IP."""
+
+    @classmethod
+    def setUpClass(cls):
+        webapp_dir = os.path.join(HERE, "webapp")
+        for p in (HERE, os.path.join(HERE, "scripts")):
+            if p not in sys.path:
+                sys.path.insert(0, p)
+        spec = importlib.util.spec_from_file_location(
+            "webapp_api_nodes", os.path.join(webapp_dir, "api.py"))
+        cls.api = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.api)
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        for attr, sub in (("NODES_DIR", "nodes"), ("JOBS_DIR", "jobs")):
+            self.addCleanup(setattr, self.api, attr, getattr(self.api, attr))
+            setattr(self.api, attr, os.path.join(self.tmp.name, sub))
+
+    def test_node_id_must_be_a_plain_name(self):
+        """It becomes a filename."""
+        for evil in ("../../etc/passwd", "a/b", "", "x" * 60):
+            status, _ = self.api.post_node_register({"id": evil})
+            self.assertEqual(status, 400, evil)
+
+    def test_register_then_appears_online(self):
+        self.api.post_node_register({"id": "laptop", "label": "Ryzen",
+                                     "cores": 16, "ram_gb": 16,
+                                     "capabilities": ["ocr", "video"]})
+        _, payload = self.api.get_nodes({})
+        node = payload["nodes"][0]
+        self.assertEqual(node["id"], "laptop")
+        self.assertTrue(node["online"])
+        self.assertIn("ocr", node["capabilities"])
+
+    def test_a_node_that_stopped_checking_in_is_offline(self):
+        """Two minutes rather than seconds: a lid closes and a wifi switches,
+        and neither should mark a node dead while a job runs on it."""
+        self.api.post_node_register({"id": "laptop"})
+        path = os.path.join(self.api.NODES_DIR, "laptop.json")
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        data["last_seen"] = time.time() - (self.api.NODE_STALE_S + 30)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        _, payload = self.api.get_nodes({})
+        self.assertFalse(payload["nodes"][0]["online"])
+
+    def _queue_job(self, job_id, **extra):
+        queued = os.path.join(self.api.JOBS_DIR, "queued")
+        os.makedirs(queued, exist_ok=True)
+        job = {"id": job_id, "kind": "shell", "payload": {"command": "true"}}
+        job.update(extra)
+        with open(os.path.join(queued, job_id), "w", encoding="utf-8") as f:
+            json.dump(job, f)
+
+    def test_claiming_is_exclusive(self):
+        """Claiming renames the file, which is atomic on a POSIX filesystem -
+        two nodes racing cannot both win, with no lock and no database."""
+        self._queue_job("j1.json")
+        first = self.api.post_job_claim({"id": "a", "capabilities": ["shell"]})[1]
+        second = self.api.post_job_claim({"id": "b", "capabilities": ["shell"]})[1]
+        self.assertEqual(first["job"]["id"], "j1.json")
+        self.assertIsNone(second["job"])
+
+    def test_a_job_is_left_for_a_node_that_can_run_it(self):
+        """Routing an OCR job to a machine without tesseract would fail on the
+        wrong machine - the whole point of declaring capabilities."""
+        self._queue_job("ocr.json", needs="ocr")
+        _, payload = self.api.post_job_claim({"id": "a", "capabilities": ["shell"]})
+        self.assertIsNone(payload["job"])
+        _, payload = self.api.post_job_claim({"id": "b", "capabilities": ["ocr"]})
+        self.assertEqual(payload["job"]["id"], "ocr.json")
+
+    def test_result_moves_the_job_to_done(self):
+        self._queue_job("j2.json")
+        self.api.post_job_claim({"id": "a", "capabilities": ["shell"]})
+        self.api.post_job_result({"job_id": "j2.json", "ok": True, "output": "fertig"})
+        done = os.path.join(self.api.JOBS_DIR, "done", "j2.json")
+        self.assertTrue(os.path.exists(done))
+        self.assertFalse(os.path.exists(
+            os.path.join(self.api.JOBS_DIR, "running", "j2.json")))
+        with open(done, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["output"], "fertig")
+
+    def test_job_id_cannot_escape_the_jobs_directory(self):
+        for evil in ("../../etc/passwd", "/etc/shadow.json", "no-extension"):
+            status, _ = self.api.post_job_result({"job_id": evil, "ok": True})
+            self.assertEqual(status, 400, evil)
