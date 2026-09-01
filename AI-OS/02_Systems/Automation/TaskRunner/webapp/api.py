@@ -25,12 +25,15 @@ import time
 from datetime import datetime
 
 import agents
+import claude_chat
+import cost_board
 import memory
 import money_board
 import dmarc_prospector
 import flip_log
 import phone
 import phone_root
+import phone_stream
 import proposals
 import snipe_rank
 import study_agent
@@ -306,11 +309,6 @@ DEVICES = {
     "nothing": {"label": "Nothing Phone 2a", "module": phone, "rooted": False},
 }
 
-# Actions the panel may perform. An allowlist, not a passthrough: the request
-# body reaches a device with root, and "whatever the client sent" is not an
-# acceptable definition of what may run there. Destructive verbs are absent
-# entirely rather than gated, because a web button is exactly the wrong place
-# to put a factory reset.
 # A panel is an at-a-glance view; waiting longer than this for a phone that
 # is probably asleep makes the whole screen feel broken.
 # Raised from 9s once the probes themselves dropped from ~6s to under
@@ -318,7 +316,36 @@ DEVICES = {
 # protocol overhead.
 DEVICE_PROBE_S = 12
 
-DEVICE_ACTIONS = {"screenshot", "tap", "swipe", "key", "text", "open", "status"}
+# Actions the panel may perform, in four groups.
+#
+# An allowlist, not a passthrough. The request body reaches a device with
+# root, and "whatever the client sent" is not an acceptable definition of
+# what may run there - so every verb is named here or it does not exist.
+#
+# The grouping is what decides which phone may do what. The Nothing Phone has
+# no root, so the ROOT_ACTIONS simply are not possible there and are refused
+# with a reason rather than attempted and failed with a stack trace.
+BASE_ACTIONS = {"screenshot", "tap", "swipe", "key", "text", "open", "status",
+                "notifications", "apps", "stream_start", "stream_stop"}
+ROOT_ACTIONS = {"info", "sms", "calls", "clipboard", "ls", "read", "pull",
+                "shell", "setting", "record", "app_info"}
+# Verbs that can cost Felix the device or its data. Present, because it is his
+# phone and he asked for a toolkit without restrictions - but each one has to
+# arrive with confirm=true, which the UI only sends after a second, explicit
+# press. That gate lives in phone_root.py itself; this set is what tells the
+# panel to render the second press at all.
+DANGEROUS_ACTIONS = {"uninstall", "rm", "reboot", "wipe"}
+DEVICE_ACTIONS = BASE_ACTIONS | ROOT_ACTIONS | DANGEROUS_ACTIONS
+
+# A shell command from the panel is interactive - Felix is watching it. A long
+# one belongs in the task queue, not in a request a phone browser is holding
+# open.
+DEVICE_SHELL_TIMEOUT_S = 25
+# Screen recording blocks the request for its whole duration, so the web path
+# caps it well below phone_root.record()'s own 180s limit. Longer recordings
+# are still available from the CLI.
+MAX_RECORD_S = 15
+DEVICE_LIST_LIMIT = 200
 
 
 def _device(name):
@@ -326,6 +353,22 @@ def _device(name):
     if not entry:
         raise ValueError(f"unknown device: {name!r}")
     return entry
+
+
+def _device_serial(entry):
+    """The adb serial for a device, asked of the module that owns it.
+
+    phone.py resolves its own serial at runtime (it scans for a moved adb
+    port and remembers what it found), so reading a module constant would be
+    wrong for exactly the case that module exists to handle."""
+    mod = entry["module"]
+    getter = getattr(mod, "_active_serial", None)
+    if callable(getter):
+        try:
+            return getter()
+        except Exception:  # noqa: BLE001 - fall through to the constant
+            pass
+    return getattr(mod, "DEVICE", None) or getattr(mod, "SERIAL", None)
 
 
 def get_devices(_body):
@@ -349,6 +392,8 @@ def get_devices(_body):
                 "current_app": state.get("current_app"),
                 "width": size[0] if size else None,
                 "height": size[1] if size else None,
+                "actions": sorted(BASE_ACTIONS | (
+                    ROOT_ACTIONS | DANGEROUS_ACTIONS if entry["rooted"] else set())),
             })
         except Exception as e:  # noqa: BLE001 - a device being away is normal
             row.update({"reachable": False, "reason": str(e)[:140]})
@@ -390,6 +435,25 @@ def get_devices(_body):
     return 200, {"devices": sorted(out, key=lambda r: (not r["reachable"], r["id"]))}
 
 
+def _keep_for_download(src, prefix):
+    """Move a file the phone produced into the Downloads list.
+
+    Everything pulled off a phone lands where the Dateien tab already looks,
+    rather than in a directory only the CLI knows about - a file Felix cannot
+    reach from the app he pulled it with is not really pulled."""
+    os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+    name = safe_upload_name(f"{prefix}_{os.path.basename(src)}")
+    dest = os.path.join(DOWNLOADS_DIR, name)
+    n = 1
+    stem, ext = os.path.splitext(dest)
+    while os.path.exists(dest):
+        dest = f"{stem}_{n}{ext}"
+        n += 1
+    os.replace(src, dest)
+    return {"name": os.path.basename(dest), "url": f"/downloads/{os.path.basename(dest)}",
+            "size": os.path.getsize(dest)}
+
+
 def post_device_action(body):
     """Perform one allowlisted action on one device."""
     body = body or {}
@@ -401,12 +465,20 @@ def post_device_action(body):
     except ValueError as e:
         return 400, {"error": str(e)}
     mod = entry["module"]
+    if action in (ROOT_ACTIONS | DANGEROUS_ACTIONS) and not entry["rooted"]:
+        return 200, {"ok": False,
+                     "error": f"{entry['label']} hat kein root - '{action}' geht dort nicht"}
 
-    def _num(name):
+    def _num(name, default=None):
         try:
             return int(body.get(name))
         except (TypeError, ValueError):
-            return None
+            return default
+
+    def _str(name):
+        return (body.get(name) or "").strip()
+
+    confirm = bool(body.get("confirm"))
 
     try:
         if action == "status":
@@ -423,6 +495,81 @@ def post_device_action(body):
                          "width": size[0] if size else None,
                          "height": size[1] if size else None}
 
+        # --- live video ---------------------------------------------------
+        if action == "stream_start":
+            size = mod.screen_size()
+            serial = _device_serial(entry)
+            enc = phone_stream.encode_size(size[0] if size else None,
+                                           size[1] if size else None)
+            phone_stream.get(serial, size=enc)
+            return 200, {"ok": True, "serial": serial, "encode_size": enc,
+                         "width": size[0] if size else None,
+                         "height": size[1] if size else None}
+        if action == "stream_stop":
+            phone_stream.stop(_device_serial(entry))
+            return 200, {"ok": True}
+
+        # --- reading ------------------------------------------------------
+        if action == "notifications":
+            notes = mod.notifications()
+            return 200, {"ok": True, "notifications": notes[:60],
+                         "total": len(notes)}
+        if action == "apps":
+            names = (mod.packages(third_party=True) if entry["rooted"]
+                     else mod.installed_apps())
+            return 200, {"ok": True, "apps": sorted(names)[:DEVICE_LIST_LIMIT],
+                         "total": len(names)}
+        if action == "info":
+            return 200, {"ok": True, "info": mod.device_info(),
+                         "root": mod.has_root()}
+        if action == "app_info":
+            return 200, {"ok": True, "app": mod.app_info(_str("package"))}
+        if action == "sms":
+            return 200, {"ok": True, "messages": mod.sms(limit=_num("limit", 20))}
+        if action == "calls":
+            return 200, {"ok": True, "calls": mod.call_log(limit=_num("limit", 20))}
+        if action == "clipboard":
+            return 200, {"ok": True, "clipboard": mod.clipboard()}
+        if action == "ls":
+            path = _str("path") or "/sdcard"
+            return 200, {"ok": True, "path": path,
+                         "entries": mod.ls(path, root=bool(body.get("root")))[:DEVICE_LIST_LIMIT]}
+        if action == "read":
+            return 200, {"ok": True,
+                         "text": mod.read_file(_str("path"), root=bool(body.get("root")))}
+        if action == "pull":
+            local = mod.pull(_str("path"))
+            return 200, {"ok": True, "file": _keep_for_download(local, entry["id"])}
+        if action == "record":
+            secs = max(1, min(_num("seconds", 8) or 8, MAX_RECORD_S))
+            local = mod.record(seconds=secs)
+            return 200, {"ok": True, "file": _keep_for_download(local, entry["id"])}
+        if action == "shell":
+            cmd = _str("command")
+            if not cmd:
+                return 400, {"error": "shell braucht ein command"}
+            out = mod.sh(cmd, root=bool(body.get("root")),
+                         timeout=DEVICE_SHELL_TIMEOUT_S)
+            return 200, {"ok": True, "output": out}
+        if action == "setting":
+            value = body.get("value")
+            return 200, {"ok": True,
+                         "value": mod.setting(_str("namespace") or "system",
+                                              _str("key"),
+                                              value if value not in (None, "") else None)}
+
+        # --- destructive, each needs its own confirm ----------------------
+        if action == "uninstall":
+            return 200, {"ok": True, "output": mod.uninstall(_str("package"), confirm=confirm)}
+        if action == "wipe":
+            return 200, {"ok": True,
+                         "output": mod.wipe_package_data(_str("package"), confirm=confirm)}
+        if action == "rm":
+            return 200, {"ok": True, "output": mod.remove_file(_str("path"), confirm=confirm)}
+        if action == "reboot":
+            return 200, {"ok": True, "output": mod.reboot(_str("mode") or None, confirm=confirm)}
+
+        # --- input --------------------------------------------------------
         if action == "tap":
             x, y = _num("x"), _num("y")
             if x is None or y is None:
@@ -434,17 +581,17 @@ def post_device_action(body):
                 return 400, {"error": "swipe needs x1,y1,x2,y2"}
             mod.swipe(*coords, ms=_num("ms") or 300)
         elif action == "key":
-            mod.key((body.get("key") or "").strip())
+            mod.key(_str("key"))
         elif action == "text":
             value = body.get("text") or ""
             if not value:
                 return 400, {"error": "text is empty"}
             mod.type_text(value[:500])
         elif action == "open":
-            mod.open_app((body.get("package") or "").strip())
+            mod.open_app(_str("package"))
         return 200, {"ok": True}
     except Exception as e:  # noqa: BLE001 - surface the device's own message
-        return 200, {"ok": False, "error": str(e)[:200]}
+        return 200, {"ok": False, "error": str(e)[:400]}
 
 
 # --- snipes --------------------------------------------------------------
@@ -937,3 +1084,61 @@ def get_chat_result(body):
         age = 0
     return 200, {"ready": False, "elapsed": age,
                  "timed_out": age > CHAT_TIMEOUT_S}
+
+
+# --- costs ---------------------------------------------------------------
+
+def get_costs(_body):
+    """What the whole thing costs. See cost_board.py for why the two halves
+    are reported separately and only one of them is a bill."""
+    return 200, cost_board.board()
+
+
+# --- Claude Code sessions ------------------------------------------------
+#
+# The other chat. api.post_chat above talks to the local worker; this talks to
+# a real Claude Code session and continues it, which is what Felix asked for:
+# the same conversation he has at the desk, carried on from his phone. See
+# claude_chat.py for the permission decision behind it.
+
+def get_claude_sessions(_body):
+    return 200, {"sessions": claude_chat.list_sessions(limit=15)}
+
+
+def get_claude_transcript(body):
+    body = body or {}
+    session_id = (body.get("session_id") or "").strip()
+    if not session_id:
+        # No session named: the most recent one, which is what "immer vom
+        # letzten genutzten chat" asks for - open the app and you are where
+        # you left off, without choosing anything.
+        recent = claude_chat.list_sessions(limit=1)
+        if not recent:
+            return 200, {"messages": [], "session_id": None,
+                         "error": "keine Claude-Sitzungen gefunden"}
+        session_id = recent[0]["id"]
+    try:
+        limit = int(body.get("limit") or 60)
+    except (TypeError, ValueError):
+        limit = 60
+    try:
+        return 200, claude_chat.transcript(session_id, limit=max(5, min(limit, 300)))
+    except (ValueError, FileNotFoundError) as e:
+        return 400, {"error": str(e)}
+
+
+def post_claude_send(body):
+    body = body or {}
+    try:
+        job_id = claude_chat.send((body.get("session_id") or "").strip(),
+                                  body.get("message") or "")
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    return 200, {"job_id": job_id, "pending": True}
+
+
+def get_claude_result(body):
+    try:
+        return 200, claude_chat.result(((body or {}).get("job_id") or "").strip())
+    except ValueError as e:
+        return 400, {"error": str(e)}

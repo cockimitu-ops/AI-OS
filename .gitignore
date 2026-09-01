@@ -31,6 +31,19 @@ AI-OS/02_Systems/Automation/TaskRunner/prospects/domains.json
 AI-OS/02_Systems/Automation/TaskRunner/prospects/results.json
 AI-OS/02_Systems/Automation/TaskRunner/prospects/reported.json
 AI-OS/02_Systems/Automation/TaskRunner/spend/openrouter_ledger.json
+# Per-call spend log and the Claude transcript cost cache: runtime data, and
+# the log names the tasks the money went on.
+AI-OS/02_Systems/Automation/TaskRunner/spend/openrouter_calls.jsonl
+AI-OS/02_Systems/Automation/TaskRunner/spend/claude_cost_cache.json
+# One directory per phone-sent Claude turn: the prompt Felix typed, the reply,
+# and its cost. His conversations, not source.
+AI-OS/02_Systems/Automation/TaskRunner/claude_jobs/*
+!AI-OS/02_Systems/Automation/TaskRunner/claude_jobs/.gitkeep
+# Live screen frames pulled off a phone.
+AI-OS/02_Systems/Automation/TaskRunner/phone/screenshots/*
+!AI-OS/02_Systems/Automation/TaskRunner/phone/screenshots/.gitkeep
+AI-OS/02_Systems/Automation/TaskRunner/phone/pulled/*
+!AI-OS/02_Systems/Automation/TaskRunner/phone/pulled/.gitkeep
 # Proposals are runtime state: what agents suggested and what Felix decided.
 AI-OS/02_Systems/Automation/TaskRunner/proposals/*.json
 AI-OS/02_Systems/Automation/TaskRunner/proposals/*.jsonl

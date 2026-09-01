@@ -81,6 +81,11 @@ API_ROUTES = {
     ("POST", "/api/chat"): api.post_chat,
     ("POST", "/api/chat-result"): api.get_chat_result,
     ("POST", "/api/voice-import"): api.post_voice_import,
+    ("GET", "/api/costs"): api.get_costs,
+    ("GET", "/api/claude-sessions"): api.get_claude_sessions,
+    ("POST", "/api/claude-transcript"): api.get_claude_transcript,
+    ("POST", "/api/claude-send"): api.post_claude_send,
+    ("POST", "/api/claude-result"): api.get_claude_result,
 }
 
 # Routes whose body is file bytes, not JSON. They get (query_dict, raw_bytes)
@@ -120,6 +125,78 @@ class Handler(BaseHTTPRequestHandler):
         if not header.startswith("Bearer "):
             return False
         return hmac.compare_digest(header[len("Bearer "):], TOKEN)
+
+    def _authorized_query(self, query):
+        """Same check as _authorized, but reading the token from the URL.
+
+        Needed for exactly one thing: the live picture is delivered to an
+        <img> tag, and an <img> request carries no Authorization header - the
+        browser simply does not offer a way to add one. Everything else in
+        this app fetches with the header and would be wrong to loosen. The
+        token still has to be right, and the tailnet is still the outer
+        boundary; what changes is only that it travels in the URL of a
+        request the page makes to its own origin."""
+        if not TOKEN:
+            return False
+        supplied = (query.get("token") or [""])[0]
+        return bool(supplied) and hmac.compare_digest(supplied, TOKEN)
+
+    def _serve_device_stream(self, query):
+        """Live phone screen as multipart MJPEG.
+
+        Why a stream at all: the panel used to take one screenshot per
+        interaction, measured at 1.1-1.4s each while the tap itself cost
+        0.16s. The picture, not the phone, was the slow part. This holds one
+        response open and pushes frames into it as they arrive - measured
+        median 0.47s from an input to the change being visible, and
+        continuous in between instead of frozen.
+
+        Never buffered on this side: only the newest frame is ever sent, so a
+        slow phone browser falls back to a lower frame rate rather than
+        drifting steadily further into the past."""
+        if not self._authorized_query(query):
+            self.send_error(401, "unauthorized")
+            return
+        name = (query.get("device") or [""])[0]
+        try:
+            entry = api._device(name)
+        except ValueError as e:
+            self.send_error(400, str(e))
+            return
+        try:
+            size = entry["module"].screen_size()
+            serial = api._device_serial(entry)
+            stream = api.phone_stream.get(
+                serial, size=api.phone_stream.encode_size(
+                    size[0] if size else None, size[1] if size else None))
+        except Exception as e:  # noqa: BLE001 - an absent phone is normal
+            self.send_error(503, str(e)[:120])
+            return
+
+        boundary = "aiosframe"
+        self.send_response(200)
+        self.send_header("Content-Type",
+                         f"multipart/x-mixed-replace; boundary={boundary}")
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        # No Content-Length is possible for a response that never ends, so the
+        # connection cannot be reused afterwards and says so.
+        self.send_header("Connection", "close")
+        self.end_headers()
+        try:
+            for frame in stream.frames():
+                self.wfile.write(
+                    f"--{boundary}\r\nContent-Type: image/jpeg\r\n"
+                    f"Content-Length: {len(frame)}\r\n\r\n".encode("ascii"))
+                self.wfile.write(frame)
+                self.wfile.write(b"\r\n")
+        except (BrokenPipeError, ConnectionResetError):
+            # The tab closed, the phone locked, the network moved. All normal
+            # ways for a viewer to leave; the stream shuts itself down once
+            # nobody is reading it.
+            pass
+        except Exception as e:  # noqa: BLE001
+            sys.stderr.write(f"[!] device-stream ended: {e}\n")
 
     def _serve_static(self, path):
         """Static files only, no directory listing, no path escaping the
@@ -191,6 +268,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(500, {"error": "internal error"})
                 return
             self._send_json(status, payload)
+            return
+        if method == "GET" and parsed.path == "/device-stream":
+            self._serve_device_stream(parse_qs(parsed.query))
             return
         if method == "GET" and parsed.path.startswith("/device-screen/"):
             # A live picture of whatever is on Felix's phone screen - at least
