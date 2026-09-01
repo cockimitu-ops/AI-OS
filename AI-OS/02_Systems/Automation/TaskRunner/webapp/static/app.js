@@ -506,6 +506,34 @@ function updateUploadButton() {
   document.getElementById("upload-send").disabled = !(input.files || []).length;
 }
 
+// Both uploads and downloads are already sorted newest-first by the
+// server, so capping here always keeps the most recent items visible - the
+// ones actually worth seeing without hunting. Purely client-side: the full
+// list already arrived in one request, so "show more" just reveals more of
+// what is already in memory, no extra round trip. Felix asked for this
+// directly: a semester of photographed slides or a summer of DMARC PDFs
+// would otherwise mean scrolling through hundreds of rows to find anything.
+const LIST_PAGE_SIZE = 20;
+
+function renderCapped(listEl, items, toHtml, opts = {}) {
+  const pageSize = opts.pageSize || LIST_PAGE_SIZE;
+  let shown = pageSize;
+  const render = () => {
+    const visible = items.slice(0, shown);
+    const remaining = items.length - visible.length;
+    listEl.innerHTML = visible.map(toHtml).join("") + (remaining > 0
+      ? `<button class="show-more-btn" id="list-show-more">Mehr anzeigen (${remaining} weitere)</button>`
+      : "");
+    if (opts.afterRender) opts.afterRender(listEl);
+    const moreBtn = document.getElementById("list-show-more");
+    if (moreBtn) moreBtn.addEventListener("click", () => {
+      shown += pageSize;
+      render();
+    });
+  };
+  render();
+}
+
 async function loadUploads() {
   const listEl = document.getElementById("uploads-list");
   try {
@@ -517,12 +545,12 @@ async function loadUploads() {
     // No download link, unlike the generated files below: these are his own
     // private chat exports, already on his phone. Re-serving them would add
     // exposure for nothing.
-    listEl.innerHTML = data.files.map((f) => `
+    renderCapped(listEl, data.files, (f) => `
       <div class="card">
         <div class="card-action">${escapeHtml(f.name)}</div>
         <div class="download-meta">${formatBytes(f.size)} · ${escapeHtml(f.modified.replace("T", " "))}</div>
       </div>
-    `).join("");
+    `);
   } catch (err) {
     listEl.innerHTML = `<div class="empty-state">Fehler: ${escapeHtml(err.message)}</div>`;
   }
@@ -559,7 +587,7 @@ async function loadDownloads() {
       listEl.innerHTML = `<div class="empty-state">Noch keine Dateien. Bitte den Bot im Chat, dir etwas zu erstellen.</div>`;
       return;
     }
-    listEl.innerHTML = data.files.map((f) => `
+    renderCapped(listEl, data.files, (f) => `
       <div class="card">
         <div class="download-row">
           <div>
@@ -571,10 +599,14 @@ async function loadDownloads() {
           </button>
         </div>
       </div>
-    `).join("");
-    listEl.querySelectorAll(".download-btn").forEach((btn) => {
-      btn.addEventListener("click", () =>
-        downloadFile(btn.dataset.url, btn.dataset.name, btn));
+    `, {
+      // Re-wired after every render, including "show more" clicks, since
+      // renderCapped replaces innerHTML each time - listeners on the
+      // previous DOM nodes are gone with them.
+      afterRender: (el) => el.querySelectorAll(".download-btn").forEach((btn) => {
+        btn.addEventListener("click", () =>
+          downloadFile(btn.dataset.url, btn.dataset.name, btn));
+      }),
     });
   } catch (err) {
     setConnDot("err");
