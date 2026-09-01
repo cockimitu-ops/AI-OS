@@ -105,6 +105,127 @@ def get_phone(_body):
     }
 
 
+# --- compute nodes -------------------------------------------------------
+
+NODES_DIR = os.path.join(TASK_RUNNER_DIR, "nodes")
+JOBS_DIR = os.path.join(TASK_RUNNER_DIR, "jobs")
+# A node that has not checked in for this long is treated as gone. Two minutes
+# rather than seconds: a laptop lid closes, a wifi switches, and neither of
+# those should mark it dead while a job is still running on it.
+NODE_STALE_S = 120
+
+
+def _nodes_state():
+    os.makedirs(NODES_DIR, exist_ok=True)
+    out = []
+    now = time.time()
+    for name in os.listdir(NODES_DIR):
+        if not name.endswith(".json"):
+            continue
+        data = _load_json(os.path.join(NODES_DIR, name))
+        if not data:
+            continue
+        seen = data.get("last_seen", 0)
+        data["online"] = (now - seen) < NODE_STALE_S
+        data["seen_ago"] = int(now - seen)
+        out.append(data)
+    return sorted(out, key=lambda n: (not n["online"], n.get("id", "")))
+
+
+def post_node_register(body):
+    """A compute node checking in. Also serves as its heartbeat.
+
+    The node connects OUT to the server rather than the server reaching in.
+    That is deliberate: a laptop moves between networks, sleeps, and goes to
+    university, and none of that should require inbound connectivity, a port
+    forward, or a working VPN. It also means this keeps working the moment
+    Tailscale is sorted out, without changing anything here."""
+    body = body or {}
+    node_id = (body.get("id") or "").strip()
+    if not re.fullmatch(r"[\w-]{1,40}", node_id):
+        return 400, {"error": "invalid node id"}
+    os.makedirs(NODES_DIR, exist_ok=True)
+    record = {
+        "id": node_id,
+        "label": str(body.get("label") or node_id)[:60],
+        "os": str(body.get("os") or "")[:60],
+        "cpu": str(body.get("cpu") or "")[:80],
+        "cores": body.get("cores"),
+        "ram_gb": body.get("ram_gb"),
+        "capabilities": [str(c)[:30] for c in (body.get("capabilities") or [])][:20],
+        "last_seen": time.time(),
+    }
+    path = os.path.join(NODES_DIR, f"{node_id}.json")
+    tmp = path + ".part"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(record, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, path)
+    return 200, {"ok": True, "node": node_id}
+
+
+def get_nodes(_body):
+    return 200, {"nodes": _nodes_state()}
+
+
+def post_job_claim(body):
+    """A node asking for work. -> one job, or nothing.
+
+    Claiming renames the file, which on a POSIX filesystem is atomic - two
+    nodes racing for the same job cannot both win, without needing a lock or a
+    database."""
+    body = body or {}
+    node_id = (body.get("id") or "").strip()
+    if not re.fullmatch(r"[\w-]{1,40}", node_id):
+        return 400, {"error": "invalid node id"}
+    caps = set(body.get("capabilities") or [])
+    queued = os.path.join(JOBS_DIR, "queued")
+    running = os.path.join(JOBS_DIR, "running")
+    for d in (queued, running):
+        os.makedirs(d, exist_ok=True)
+
+    for name in sorted(os.listdir(queued)):
+        if not name.endswith(".json"):
+            continue
+        job = _load_json(os.path.join(queued, name))
+        need = job.get("needs")
+        # A job that needs a capability this node lacks is left for one that
+        # has it, rather than failing on the wrong machine.
+        if need and need not in caps:
+            continue
+        try:
+            os.rename(os.path.join(queued, name), os.path.join(running, name))
+        except OSError:
+            continue  # another node got it first
+        job["claimed_by"] = node_id
+        job["claimed_at"] = time.time()
+        with open(os.path.join(running, name), "w", encoding="utf-8") as f:
+            json.dump(job, f, ensure_ascii=False)
+        return 200, {"job": job}
+    return 200, {"job": None}
+
+
+def post_job_result(body):
+    """A node returning a finished job."""
+    body = body or {}
+    job_id = (body.get("job_id") or "").strip()
+    if not re.fullmatch(r"[\w.-]{1,80}\.json", job_id):
+        return 400, {"error": "invalid job_id"}
+    running = os.path.join(JOBS_DIR, "running", job_id)
+    done_dir = os.path.join(JOBS_DIR, "done")
+    os.makedirs(done_dir, exist_ok=True)
+    job = _load_json(running) or {"id": job_id}
+    job.update({
+        "finished_at": time.time(),
+        "ok": bool(body.get("ok")),
+        "output": str(body.get("output") or "")[:20000],
+    })
+    with open(os.path.join(done_dir, job_id), "w", encoding="utf-8") as f:
+        json.dump(job, f, ensure_ascii=False, indent=1)
+    if os.path.exists(running):
+        os.remove(running)
+    return 200, {"ok": True}
+
+
 # --- device control ------------------------------------------------------
 
 SCREENSHOT_DIR = os.path.join(TASK_RUNNER_DIR, "phone", "screenshots")

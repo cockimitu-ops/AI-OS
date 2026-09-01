@@ -1,0 +1,15 @@
+{
+ "id": "crypton",
+ "label": "crypton",
+ "os": "Linux 7.0.0-30-generic",
+ "cpu": "x86_64",
+ "cores": 2,
+ "ram_gb": 7.0,
+ "capabilities": [
+  "shell",
+  "ocr",
+  "python",
+  "git"
+ ],
+ "last_seen": 1788285749.898682
+}

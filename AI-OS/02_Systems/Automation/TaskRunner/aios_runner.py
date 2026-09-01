@@ -254,6 +254,26 @@ if os.environ.get("OPENROUTER_PAID_ENABLED", "").lower() == "true" and os.enviro
 # a clear-cut violation either way - genuinely unresolved, not dismissed.
 # Do not flip this back to True without Felix explicitly deciding to accept
 # that risk, or switching this to a real ANTHROPIC_API_KEY instead.
+# Felix raised the budget to EUR20/month and asked for GLM to be prioritised
+# generally rather than per agent. Measured cost is ~$0.006 per task at ~25
+# tasks/day, so full coverage is roughly $6/month - three times inside the new
+# budget. At that point per-agent tiering is complexity without a payoff, so
+# the default inverts: paid model first for everything, free chain still
+# behind it as the fallback.
+#
+# This is also the most direct answer to tonight's failure. Tech_Scout invented
+# a GitHub repository out of a digest that contained one unrelated project, and
+# the approval gate could not catch it because a plausible technical claim is
+# not something a human can check from a Telegram message. A stronger model
+# does not make that impossible - it makes it much less likely, which is worth
+# more than any single deterministic check.
+#
+# Off means off: with OPENROUTER_PAID_ENABLED unset there is no paid entry in
+# the chain at all and this flag changes nothing.
+PAID_FIRST_DEFAULT = os.environ.get(
+    "OPENROUTER_PAID_DEFAULT", "true").lower() == "true"
+
+
 def chain_for(preference):
     """MODEL_CHAIN, ordered for this task. -> list of entries.
 
@@ -275,7 +295,9 @@ def chain_for(preference):
     2-4 calls per task, so a paid task is roughly $0.005-0.01. Every task
     paid would be ~$6/month, exactly the cap with no headroom; a handful of
     quality tasks a day is ~$1.50."""
-    if preference != "paid":
+    # "free" is now the explicit opt-OUT rather than the default. Anything
+    # that has not asked for free gets the paid model first.
+    if preference == "free" or (preference is None and not PAID_FIRST_DEFAULT):
         return MODEL_CHAIN
     paid = [e for e in MODEL_CHAIN if e["paid"]]
     return paid + [e for e in MODEL_CHAIN if not e["paid"]] if paid else MODEL_CHAIN
@@ -734,7 +756,12 @@ def _route(instruction):
         "handles anything, a wrong specialist actively misleads."
     )
 
-    for entry in MODEL_CHAIN[:ROUTING_MAX_MODELS]:
+    # Routing deliberately stays on the free chain even when everything else
+    # is paid-first. It is a one-word classification - picking a specialist
+    # from a list - and paying a premium model to answer "Business_Development"
+    # would be a meaningful share of the monthly spend for a decision the
+    # cheap models already get right.
+    for entry in [e for e in MODEL_CHAIN if not e["paid"]][:ROUTING_MAX_MODELS]:
         try:
             with _time_limit(ROUTING_TIMEOUT_S):
                 response = litellm.completion(

@@ -1,0 +1,13 @@
+{
+ "id": "testjob.json",
+ "kind": "shell",
+ "needs": "shell",
+ "payload": {
+  "command": "echo Job lief auf $(hostname) mit $(nproc) Kernen"
+ },
+ "claimed_by": "crypton",
+ "claimed_at": 1788285749.9015737,
+ "finished_at": 1788285749.9142559,
+ "ok": true,
+ "output": "Job lief auf crypton mit 2 Kernen\n"
+}

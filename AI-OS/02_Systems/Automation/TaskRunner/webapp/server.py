@@ -49,6 +49,10 @@ API_ROUTES = {
     ("GET", "/api/today"): api.get_today,
     ("GET", "/api/phone"): api.get_phone,
     ("GET", "/api/devices"): api.get_devices,
+    ("GET", "/api/nodes"): api.get_nodes,
+    ("POST", "/api/node-register"): api.post_node_register,
+    ("POST", "/api/job-claim"): api.post_job_claim,
+    ("POST", "/api/job-result"): api.post_job_result,
     ("POST", "/api/device-action"): api.post_device_action,
     # POST because they take a query body; both are reads and change nothing.
     ("POST", "/api/snipes"): api.get_snipes,

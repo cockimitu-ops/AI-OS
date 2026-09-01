@@ -598,6 +598,41 @@ class TestAgentSelection(TaskRunnerTestCase):
             finally:
                 self.runner.VOICE_PROFILE_PATH = original
 
+    def test_paid_first_is_the_default_and_free_is_the_opt_out(self):
+        """Budget raised to EUR20/month; measured cost is ~$6/month for full
+        coverage, so per-agent tiering stopped being worth its complexity.
+        The direct reason: Tech_Scout invented a GitHub repository out of a
+        digest containing one unrelated project, and the approval gate could
+        not catch it - a plausible technical claim is not something a human
+        can verify from a Telegram message."""
+        free_a = self.runner._chain_entry("free/a")
+        paid = self.runner._chain_entry("paid/x", paid=True)
+        original_chain = self.runner.MODEL_CHAIN
+        original_flag = self.runner.PAID_FIRST_DEFAULT
+        self.runner.MODEL_CHAIN = [free_a, paid]
+        try:
+            self.runner.PAID_FIRST_DEFAULT = True
+            self.assertEqual([e["model"] for e in self.runner.chain_for(None)],
+                             ["paid/x", "free/a"])
+            # Explicit "free" still opts out, and the free chain is always
+            # still behind the paid model rather than replaced by it.
+            self.assertEqual([e["model"] for e in self.runner.chain_for("free")],
+                             ["free/a", "paid/x"])
+            self.runner.PAID_FIRST_DEFAULT = False
+            self.assertEqual([e["model"] for e in self.runner.chain_for(None)],
+                             ["free/a", "paid/x"])
+        finally:
+            self.runner.MODEL_CHAIN = original_chain
+            self.runner.PAID_FIRST_DEFAULT = original_flag
+
+    def test_routing_stays_on_the_free_chain(self):
+        """Routing is a one-word classification - picking a specialist from a
+        list. Paying a premium model for that would be a real share of the
+        monthly spend for a decision the cheap models already get right."""
+        import inspect
+        src = inspect.getsource(self.runner._route)
+        self.assertIn('not e["paid"]', src)
+
     def test_paid_preference_moves_the_paid_model_to_the_front(self):
         """Default order is every free tier first, paid only as a last
         resort - right for the ~25 routine tasks a day, wrong for the handful
@@ -607,7 +642,13 @@ class TestAgentSelection(TaskRunnerTestCase):
         paid = self.runner._chain_entry("paid/x", paid=True)
         original = self.runner.MODEL_CHAIN
         self.runner.MODEL_CHAIN = [free_a, free_b, paid]
+        original_flag = self.runner.PAID_FIRST_DEFAULT
         try:
+            # Pinned rather than inherited: this test is about what the
+            # DIRECTIVE does, so it must not silently change meaning when the
+            # global default flips - which is exactly what happened when
+            # paid-first became the default on 2026-09-01.
+            self.runner.PAID_FIRST_DEFAULT = False
             self.assertEqual([e["model"] for e in self.runner.chain_for("paid")],
                              ["paid/x", "free/a", "free/b"])
             # ... and the free chain is still behind it, so a failed paid
@@ -618,6 +659,7 @@ class TestAgentSelection(TaskRunnerTestCase):
                                  ["free/a", "free/b", "paid/x"])
         finally:
             self.runner.MODEL_CHAIN = original
+            self.runner.PAID_FIRST_DEFAULT = original_flag
 
     def test_paid_preference_is_a_no_op_when_no_paid_tier_is_configured(self):
         """OPENROUTER_PAID_ENABLED is off by default, so most installs have
@@ -646,10 +688,14 @@ class TestAgentSelection(TaskRunnerTestCase):
         self.assertIsNone(self.agents.model_preference(None))
 
     def test_a_routed_agent_does_not_inherit_its_paid_preference(self):
-        """The router is a guess - its own prompt says prefer NONE over a
-        weak one - and a guess must not spend money. Caught live: "welche
-        obsidian plugins fuers studium?" routed to Study_Teacher on the word
-        "Studium" and would have billed a casual chat to the paid tier."""
+        """Written when paid was opt-in and a routed (guessed) agent could
+        silently escalate a casual chat to the paid tier - "welche obsidian
+        plugins fuers studium?" routed to Study_Teacher on the word "Studium".
+
+        Since 2026-09-01 paid is the default for everything, so this no longer
+        protects spending. It is kept because the precedence rule it pins
+        down still matters: a GUESS must not override an explicit choice, and
+        that stays true whichever direction the default points."""
         seen = {}
 
         def spy(model, instruction, system_prompt=None, history=None, **kwargs):
@@ -659,9 +705,13 @@ class TestAgentSelection(TaskRunnerTestCase):
         paid = self.runner._chain_entry("paid/x", paid=True)
         free = self.runner._chain_entry("free/a")
         original_chain, original_route = self.runner.MODEL_CHAIN, self.runner._route
+        original_flag = self.runner.PAID_FIRST_DEFAULT
         self.runner.MODEL_CHAIN = [free, paid]
         self.runner._attempt = spy
         self.runner._route = lambda instruction: "Study_Teacher"
+        # Same reason: the precedence rule is what is under test, not which
+        # way the global default happens to point today.
+        self.runner.PAID_FIRST_DEFAULT = False
         try:
             self.queue("t.md", "welche obsidian plugins fuers studium?")
             self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
@@ -669,6 +719,7 @@ class TestAgentSelection(TaskRunnerTestCase):
         finally:
             self.runner.MODEL_CHAIN = original_chain
             self.runner._route = original_route
+            self.runner.PAID_FIRST_DEFAULT = original_flag
 
     def test_an_explicitly_named_paid_agent_still_pays(self):
         seen = {}
@@ -2807,23 +2858,32 @@ class TestPaidTierGating(unittest.TestCase):
         for entry in self.runner.MODEL_CHAIN[:-1]:
             self.assertIs(entry["paid"], False)
 
-    def test_paid_tier_only_reached_after_every_free_model_fails(self):
+    def test_free_chain_still_answers_when_the_paid_model_fails(self):
+        """The old invariant here was "paid tier only after every free model
+        fails". That was deliberately inverted on 2026-09-01 when Felix raised
+        the budget to EUR20/month - paid is now tried FIRST. What still has to
+        hold is the other half: the free chain sits behind it, so an
+        unavailable or budget-exhausted paid model still gets the task
+        answered rather than failing it."""
         calls = []
 
         def track(model, instr, sp=None, history=None, **kwargs):
             calls.append(model)
             if model == self.runner.OPENROUTER_PAID_MODEL:
-                return "answered by paid tier"
-            raise RuntimeError("free tier exhausted")
+                raise RuntimeError("paid model unavailable")
+            return "answered by free tier"
 
         self.runner._attempt = track
         self.runner._record_paid_spend = lambda *a, **k: None
         self.runner.time.sleep = lambda s: None
         self.queue("t.md", "do a thing")
         self.runner._run_task(os.path.join(self.runner.INBOX, "t.md"), "t.md")
-        self.assertEqual(self.log_of("t.md"), "answered by paid tier")
-        self.assertEqual(calls[-1], self.runner.OPENROUTER_PAID_MODEL)
-        self.assertEqual(len(calls), len(self.runner.MODEL_CHAIN))
+        self.assertEqual(self.log_of("t.md"), "answered by free tier")
+        self.assertTrue(calls, "no model was tried at all")
+        # Paid is now tried FIRST, not last - and every free model behind it
+        # is still available, which is what makes the inversion safe.
+        self.assertEqual(calls[0], self.runner.OPENROUTER_PAID_MODEL)
+        self.assertGreater(len(calls), 1)
 
     def test_budget_exhausted_skips_the_paid_call_entirely(self):
         """The cap must prevent the call, not refund it after - record_spend
