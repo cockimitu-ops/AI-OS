@@ -15,3 +15,9 @@ fpdf2==2.8.8
 # NOT required by scripts/send_telegram_notification.py — that one is
 # deliberately stdlib-only, because systemd runs cloud_backup.py (which calls
 # it on failure) under /usr/bin/python3, outside this venv.
+
+# QR code for the web client's login link (scripts/login_qr.py). Installed as
+# the system package python3-segno, not into the venv: login_qr.py is a
+# terminal helper Felix runs directly, not something the worker imports.
+# Pure Python, no dependencies of its own.
+segno==1.6.6

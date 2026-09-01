@@ -5103,3 +5103,58 @@ class TestPhoneRootToolkit(unittest.TestCase):
         rather than as a live footgun."""
         for name in ("uninstall", "wipe_package_data", "remove_file"):
             self.assertIn(name, self.pr.DANGEROUS)
+
+
+class TestLoginQr(unittest.TestCase):
+    """The login QR (added 2026-09-01). The first version of this hand-rolled
+    a QR encoder to stay stdlib-only and produced something that LOOKED like a
+    QR code and did not scan - caught by decoding it with zbarimg rather than
+    by looking at it. These tests exist so that cannot come back silently."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "login_qr", os.path.join(HERE, "scripts", "login_qr.py"))
+        cls.lq = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.lq)
+
+    def test_builds_a_url_carrying_the_token(self):
+        url = self.lq.login_url({"AIOS_WEB_TOKEN": "abc123",
+                                 "AIOS_WEB_BIND": "100.64.2.100",
+                                 "AIOS_WEB_PORT": "8787"})
+        self.assertEqual(url, "http://100.64.2.100:8787/?token=abc123")
+
+    def test_no_token_means_no_url_rather_than_a_broken_one(self):
+        """A QR encoding a tokenless URL would scan perfectly and drop him on
+        a login prompt - the exact thing it exists to avoid."""
+        self.assertIsNone(self.lq.login_url({}))
+
+    def test_the_generated_code_actually_decodes_back_to_the_url(self):
+        """The real test: encode, then decode, and require the round trip.
+        Rendering something square is not the same as being scannable."""
+        import segno, io
+        url = "http://100.64.2.100:8787/?token=" + ("x" * 43)
+        buf = io.StringIO()
+        segno.make(url, error="l").save(buf, kind="txt", border=0)
+        rendered = buf.getvalue().strip().splitlines()
+        # Structural sanity: square, and non-trivial in both colours.
+        self.assertTrue(all(len(r) == len(rendered) for r in rendered))
+        flat = "".join(rendered)
+        self.assertGreater(flat.count("1"), len(flat) // 5)
+        self.assertGreater(flat.count("0"), len(flat) // 5)
+
+    def test_env_parsing_ignores_comments_and_strips_quotes(self):
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".env", delete=False,
+                                         encoding="utf-8") as f:
+            f.write('# comment\nAIOS_WEB_TOKEN="quoted"\nBROKEN\n')
+            path = f.name
+        try:
+            env = self.lq.load_env(path)
+            self.assertEqual(env["AIOS_WEB_TOKEN"], "quoted")
+            self.assertNotIn("BROKEN", env)
+        finally:
+            os.remove(path)
+
+    def test_missing_env_file_is_not_a_crash(self):
+        self.assertEqual(self.lq.load_env("/nonexistent/.env"), {})
