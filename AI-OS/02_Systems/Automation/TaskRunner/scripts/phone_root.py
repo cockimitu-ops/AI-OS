@@ -64,13 +64,40 @@ class PhoneError(RuntimeError):
     pass
 
 
-def _adb(*args, timeout=ADB_TIMEOUT, binary=False, check=True):
+def reconnect():
+    """Drop and re-establish the adb connection. -> True if the device answers.
+
+    adb over the network goes stale: the daemon keeps reporting `device` while
+    every shell command times out, usually after the phone sleeps or changes
+    network. Nothing looks wrong until a caller hangs for the full timeout.
+    Disconnecting first is what clears it - a bare `adb connect` on an
+    already-registered stale entry is a no-op."""
+    for verb in ("disconnect", "connect"):
+        try:
+            subprocess.run(["adb", verb, DEVICE], capture_output=True, timeout=15)
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+    try:
+        proc = subprocess.run(["adb", "-s", DEVICE, "shell", "echo", "ok"],
+                              capture_output=True, timeout=10)
+        return b"ok" in proc.stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _adb(*args, timeout=ADB_TIMEOUT, binary=False, check=True, _retried=False):
     cmd = ["adb", "-s", DEVICE, *args]
     try:
         proc = subprocess.run(cmd, capture_output=True, timeout=timeout)
     except FileNotFoundError:
         raise PhoneError("adb is not installed")
     except subprocess.TimeoutExpired:
+        # One automatic recovery attempt. A stale connection is the common
+        # cause and it is fixable without Felix; a genuinely absent phone
+        # fails the retry too and reports honestly.
+        if not _retried and reconnect():
+            return _adb(*args, timeout=timeout, binary=binary, check=check,
+                        _retried=True)
         raise PhoneError(f"adb timed out after {timeout}s")
     if check and proc.returncode != 0:
         raise PhoneError(proc.stderr.decode("utf-8", "replace").strip()

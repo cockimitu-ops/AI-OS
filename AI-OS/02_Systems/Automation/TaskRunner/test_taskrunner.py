@@ -5018,6 +5018,61 @@ class TestPhoneControl(unittest.TestCase):
         spec.loader.exec_module(pr)
         self.assertTrue(pr.DEVICE.startswith("100."), pr.DEVICE)
 
+    def test_scan_returns_several_ports_not_one(self):
+        """Android opens TWO ports when wireless debugging is on - one for
+        pairing, one for connecting - and they speak different protocols.
+        Taking the first open port found gave "device offline" every time it
+        landed on the pairing port, which reads exactly like a broken phone.
+        Observed live on 2026-09-01: ports 35787 and 41789 both open, only one
+        of them usable."""
+        original = self.ph._port_open
+        self.ph._port_open = lambda p, timeout=0: p in (35787, 41789)
+        try:
+            found = self.ph.scan_for_adb()
+        finally:
+            self.ph._port_open = original
+        self.assertEqual(sorted(found), [35787, 41789])
+
+    def test_remembered_port_is_tried_before_scanning(self):
+        """A 20k-port scan to reach a phone whose port has not changed is
+        seconds wasted on every single call."""
+        import tempfile, json as _json
+        original = self.ph.STATE_PATH
+        with tempfile.TemporaryDirectory() as tmp:
+            self.ph.STATE_PATH = os.path.join(tmp, "port.json")
+            try:
+                self.ph._remember_port(41789)
+                self.assertEqual(self.ph._remembered_port(), 41789)
+            finally:
+                self.ph.STATE_PATH = original
+
+    def test_a_corrupt_port_file_is_not_a_crash(self):
+        import tempfile
+        original = self.ph.STATE_PATH
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "port.json")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("{not json")
+            self.ph.STATE_PATH = path
+            try:
+                self.assertIsNone(self.ph._remembered_port())
+            finally:
+                self.ph.STATE_PATH = original
+
+    def test_no_open_port_says_what_to_do(self):
+        """The failure Felix actually hits is "wireless debugging got turned
+        off again". An error that names the fix beats one that names the
+        symptom."""
+        original_scan, original_open = self.ph.scan_for_adb, self.ph._port_open
+        self.ph.scan_for_adb = lambda **k: []
+        self.ph._port_open = lambda *a, **k: False
+        try:
+            with self.assertRaises(self.ph.PhoneError) as ctx:
+                self.ph.connect()
+        finally:
+            self.ph.scan_for_adb, self.ph._port_open = original_scan, original_open
+        self.assertIn("Entwickleroptionen", str(ctx.exception))
+
     def test_targets_the_tailnet_address_not_a_lan_one(self):
         """A LAN address changes with every network he joins; the tailnet one
         is the same from home, from campus, or from a train."""

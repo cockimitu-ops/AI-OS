@@ -15,6 +15,7 @@ The chat handler builds a task file the exact same way dispatch_task.py does
 same way - single user, one message in flight, no reason for anything
 fancier.
 """
+import concurrent.futures
 import json
 import os
 import re
@@ -243,6 +244,10 @@ DEVICES = {
 # acceptable definition of what may run there. Destructive verbs are absent
 # entirely rather than gated, because a web button is exactly the wrong place
 # to put a factory reset.
+# A panel is an at-a-glance view; waiting longer than this for a phone that
+# is probably asleep makes the whole screen feel broken.
+DEVICE_PROBE_S = 9
+
 DEVICE_ACTIONS = {"screenshot", "tap", "swipe", "key", "text", "open", "status"}
 
 
@@ -258,8 +263,8 @@ def get_devices(_body):
 
     Each is probed independently and a failure is reported per device: one
     phone being off must not blank the panel for the other."""
-    out = []
-    for key, entry in DEVICES.items():
+    def probe(item):
+        key, entry = item
         row = {"id": key, "label": entry["label"], "rooted": entry["rooted"]}
         try:
             state = entry["module"].status()
@@ -274,8 +279,42 @@ def get_devices(_body):
             })
         except Exception as e:  # noqa: BLE001 - a device being away is normal
             row.update({"reachable": False, "reason": str(e)[:140]})
-        out.append(row)
-    return 200, {"devices": out}
+        return row
+
+    # Probed in parallel AND on a deadline. Sequentially, one sleeping phone
+    # hitting its 40s adb timeout held the whole panel hostage; in parallel the
+    # total is still the slowest device, which was the same 40 seconds. For a
+    # panel, a phone that has not answered in a few seconds is simply away -
+    # that is a more useful answer than a correct one nobody waited for.
+    #
+    # A stale adb entry is the specific case this catches: the daemon reports
+    # `device` while every shell command times out, so nothing looks wrong
+    # until the whole request hangs.
+    out, pending = [], {}
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=len(DEVICES) or 1)
+    try:
+        for item in DEVICES.items():
+            pending[pool.submit(probe, item)] = item[0]
+        for fut in concurrent.futures.as_completed(pending, timeout=DEVICE_PROBE_S):
+            try:
+                out.append(fut.result())
+            except Exception as e:  # noqa: BLE001
+                out.append({"id": pending[fut], "reachable": False,
+                            "reason": str(e)[:140]})
+    except concurrent.futures.TimeoutError:
+        pass
+    finally:
+        # Not waited on: a hung adb call would otherwise keep the request open
+        # for its full timeout anyway, which is the thing being avoided.
+        pool.shutdown(wait=False, cancel_futures=True)
+
+    answered = {r["id"] for r in out}
+    for key, entry in DEVICES.items():
+        if key not in answered:
+            out.append({"id": key, "label": entry["label"],
+                        "rooted": entry["rooted"], "reachable": False,
+                        "reason": f"keine Antwort in {DEVICE_PROBE_S}s"})
+    return 200, {"devices": sorted(out, key=lambda r: (not r["reachable"], r["id"]))}
 
 
 def post_device_action(body):

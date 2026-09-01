@@ -26,8 +26,10 @@ instruction away from wiping it.
 Stdlib only, plus the adb binary.
 """
 import json
+import concurrent.futures
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -47,6 +49,83 @@ PHONE_HOST = os.environ.get("AIOS_PHONE_HOST", "100.81.85.3")
 PHONE_PORT = int(os.environ.get("AIOS_PHONE_PORT", "5555"))
 ADB_TIMEOUT = 25
 
+STATE_PATH = os.path.join(STATE_DIR, "nothing_port.json")
+
+# Android's wireless-debugging port is randomised every time the toggle is
+# flipped, and the whole service dies on reboot. That makes a hardcoded port
+# useless for anything unattended - which is exactly why this phone kept
+# "working once and then not".
+#
+# Three-step recovery, cheapest first:
+#   1. the port that worked last time, remembered on disk
+#   2. 5555, which is where `adb tcpip 5555` puts it permanently
+#   3. a bounded scan of the range Android actually uses
+#
+# And the important half: the moment a connection succeeds by ANY route, adbd
+# is pinned to 5555 so the next reconnect is instant and needs nothing from
+# Felix until the phone reboots.
+SCAN_RANGE = (30000, 50000)
+SCAN_WORKERS = 400
+SCAN_TIMEOUT = 0.25
+
+
+def _remembered_port():
+    try:
+        with open(STATE_PATH, encoding="utf-8") as f:
+            return int(json.load(f).get("port") or 0) or None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _remember_port(port):
+    os.makedirs(STATE_DIR, exist_ok=True)
+    tmp = STATE_PATH + ".part"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"port": int(port), "at": time.time()}, f)
+    os.replace(tmp, STATE_PATH)
+
+
+def _port_open(port, timeout=SCAN_TIMEOUT):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout)
+        return sock.connect_ex((PHONE_HOST, port)) == 0
+
+
+def scan_for_adb(verbose=False, want=6):
+    """-> open ports in Android's wireless-debugging range, newest-first.
+
+    Returns SEVERAL, not one. Android opens two ports when wireless debugging
+    is on - one for pairing and one for connecting - and they speak different
+    protocols. Taking the first open port found gave "device offline" every
+    time it happened to land on the pairing port, which reads exactly like a
+    broken phone. The caller tries each until one actually reaches `device`
+    state.
+
+    Parallel and bounded: 20k ports at a quarter-second each would take over
+    an hour serially; in a thread pool it is seconds. It only ever runs
+    against Felix's own phone on his own tailnet."""
+    lo, hi = SCAN_RANGE
+    found = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=SCAN_WORKERS) as pool:
+        futures = {pool.submit(_port_open, p): p for p in range(lo, hi)}
+        for fut in concurrent.futures.as_completed(futures):
+            try:
+                if fut.result():
+                    found.append(futures[fut])
+                    if len(found) >= want:
+                        for f in futures:
+                            f.cancel()
+                        break
+            except Exception:  # noqa: BLE001 - a refused port is not an error
+                pass
+    # Descending: Android hands out the connect port after the pairing port
+    # often enough that the higher number is the better first guess.
+    found.sort(reverse=True)
+    if verbose:
+        print(f"[i] offene Ports: {found or 'keine'}")
+    return found
+
+
 SERIAL = f"{PHONE_HOST}:{PHONE_PORT}"
 
 
@@ -57,7 +136,7 @@ class PhoneError(RuntimeError):
 
 
 def _adb(*args, timeout=ADB_TIMEOUT, binary=False):
-    cmd = ["adb", "-s", SERIAL, *args]
+    cmd = ["adb", "-s", _active_serial(), *args]
     try:
         proc = subprocess.run(cmd, capture_output=True, timeout=timeout)
     except FileNotFoundError:
@@ -70,6 +149,30 @@ def _adb(*args, timeout=ADB_TIMEOUT, binary=False):
     return proc.stdout if binary else proc.stdout.decode("utf-8", "replace")
 
 
+def pin_to_5555():
+    """Make adbd listen on the fixed port 5555. -> True on success.
+
+    This is what turns a one-off pairing into something durable: after this,
+    reconnecting needs no pairing dialog and no scan until the phone reboots.
+    Run automatically after every successful connection, because the cost is
+    one command and the alternative is asking Felix to fish a random port out
+    of a settings screen every time."""
+    try:
+        subprocess.run(["adb", "-s", _active_serial(), "tcpip", "5555"],
+                       capture_output=True, timeout=20)
+        time.sleep(2)
+        return _port_open(5555, timeout=2)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+_ACTIVE = {"serial": None}
+
+
+def _active_serial():
+    return _ACTIVE["serial"] or SERIAL
+
+
 def connect():
     """-> True once the device is authorised and online.
 
@@ -77,26 +180,65 @@ def connect():
     'unauthorized' - the state where the phone is reachable but Felix has not
     accepted the RSA prompt. Treating that as connected produces confusing
     failures later, so it is checked explicitly here."""
-    try:
-        subprocess.run(["adb", "connect", SERIAL],
-                       capture_output=True, timeout=15)
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        raise PhoneError(f"adb connect failed: {e}")
-    listing = subprocess.run(["adb", "devices"], capture_output=True,
-                             timeout=10).stdout.decode("utf-8", "replace")
-    for line in listing.splitlines():
-        if line.startswith(SERIAL):
-            state = line.split()[-1]
-            if state == "device":
-                return True
-            if state == "unauthorized":
-                raise PhoneError(
-                    "Phone is reachable but not authorised - accept the "
-                    "'Allow USB debugging' prompt on the device.")
-            raise PhoneError(f"Phone is in state '{state}'")
+    # Try the cheap routes before the expensive one, and stop at the first
+    # that answers.
+    candidates = []
+    remembered = _remembered_port()
+    if remembered:
+        candidates.append(remembered)
+    if PHONE_PORT not in candidates:
+        candidates.append(PHONE_PORT)
+
+    open_ports = [p for p in candidates if _port_open(p, timeout=1.5)]
+    if not open_ports:
+        open_ports = scan_for_adb()
+    if not open_ports:
+        raise PhoneError(
+            f"Kein offener adb-Port auf {PHONE_HOST}. Drahtloses Debugging ist "
+            "aus oder das Handy wurde neu gestartet - einmal in den "
+            "Entwickleroptionen einschalten, danach nagelt sich die "
+            "Verbindung selbst auf 5555 fest.")
+
+    problems = []
+    for target in open_ports:
+        serial = f"{PHONE_HOST}:{target}"
+        # A stale entry from an earlier session answers "offline" forever;
+        # dropping it first means each port gets a genuine attempt.
+        subprocess.run(["adb", "disconnect", serial],
+                       capture_output=True, timeout=10)
+        try:
+            subprocess.run(["adb", "connect", serial],
+                           capture_output=True, timeout=15)
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            raise PhoneError(f"adb connect failed: {e}")
+        listing = subprocess.run(["adb", "devices"], capture_output=True,
+                                 timeout=10).stdout.decode("utf-8", "replace")
+        state = ""
+        for line in listing.splitlines():
+            if line.startswith(serial + "\t") or line.startswith(serial + " "):
+                state = line.split()[-1]
+                break
+        if state == "device":
+            _ACTIVE["serial"] = serial
+            _remember_port(target)
+            if target != 5555:
+                # Opportunistic, never fatal: if it works the next reconnect
+                # is instant, and if it does not the remembered port still
+                # gets us back in.
+                pin_to_5555()
+            return True
+        if state == "unauthorized":
+            raise PhoneError(
+                "Handy erreichbar, aber nicht autorisiert - den "
+                "'USB-Debugging zulassen'-Dialog auf dem Gerät bestätigen.")
+        problems.append(f"{target}:{state or 'keine Antwort'}")
+        subprocess.run(["adb", "disconnect", serial],
+                       capture_output=True, timeout=10)
+
     raise PhoneError(
-        f"Phone not reachable at {SERIAL}. Wireless debugging may be off, or "
-        "adbd is not listening on 5555 (see this module's docstring).")
+        "Offene Ports gefunden, aber keiner spricht adb: "
+        + ", ".join(problems)
+        + ". Meist heißt das, die Kopplung ist weg - einmal neu koppeln.")
 
 
 def is_available():
