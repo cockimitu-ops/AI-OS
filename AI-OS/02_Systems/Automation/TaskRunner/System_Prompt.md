@@ -72,7 +72,9 @@ costs one turn and is almost always faster than writing a replacement.
 | "what's on my phone / notifications / battery" | `python3 scripts/phone_root.py status` |
 | "screenshot my phone" | `python3 scripts/phone_root.py screenshot` |
 | "read my SMS / call log" | `python3 scripts/phone_root.py sms` / `calls` |
-| "what have I spent on AI" | `python3 scripts/spend_guard.py` |
+| "what have I spent on AI" | `python3 scripts/cost_board.py` (live OpenRouter balance + monthly cap + Claude estimate; `spend_guard.py` is the ledger underneath it) |
+| "control my phone live / stream its screen" | the web app's Geräte tab; `scripts/phone_stream.py` is the H.264 pipeline behind it |
+| "what did I talk to Claude about / continue that session" | `python3 scripts/claude_chat.py` is the reader; the web app's Chat tab resumes a session |
 | "process my study photos/notes" | `python3 scripts/study_agent.py` |
 
 Two phones, deliberately separate: `phone_root.py` drives the rooted Poco X3 Pro

@@ -446,7 +446,10 @@ def _record_paid_spend(model, instruction, system_prompt, history, output):
         prompt_tok = litellm.token_counter(model=model, text=sent)
         completion_tok = litellm.token_counter(model=model, text=output or "")
     usd = _cost_for_paid_call(model, prompt_tok, completion_tok, reported_cost=reported_cost)
-    total = spend_guard.record_spend(usd)
+    # model/task go into the per-call log so the cost view can answer
+    # "on what", not just "how much".
+    total = spend_guard.record_spend(usd, model=model,
+                                     task=(instruction or "").strip()[:120])
     print(f"[$] {model}: ~${usd:.4f} this call (~{prompt_tok}+{completion_tok} tok), "
           f"${total:.2f} of ${OPENROUTER_MONTHLY_BUDGET_USD:.2f} this month")
 

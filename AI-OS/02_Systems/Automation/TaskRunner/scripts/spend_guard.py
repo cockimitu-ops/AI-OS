@@ -79,19 +79,63 @@ def can_spend(ledger, budget_usd, month=None):
     return month_spent(ledger, month) < budget_usd
 
 
-def record_spend(usd, path=None, month=None):
+def calls_path(path=None):
+    """Where the per-call log lives, derived from the ledger's own location.
+
+    Derived rather than a separate constant so a test that redirects the
+    ledger to a temporary directory redirects this with it - the alternative
+    is a test that quietly appends to the real log while checking a fake
+    ledger, which is the same class of bug the load_ledger() docstring
+    already describes."""
+    return os.path.join(os.path.dirname(path or LEDGER_PATH),
+                        "openrouter_calls.jsonl")
+
+
+def record_spend(usd, path=None, month=None, model=None, task=None):
     """Adds a completed call's cost to the current month's total.
 
     Always additive. The month resets itself: once month_key() rolls over,
     a fresh key starts at 0 with no cleanup step required, and old months
     stay in the file as a small permanent record rather than being pruned -
-    at one float per month this never becomes a size problem."""
+    at one float per month this never becomes a size problem.
+
+    Also appends one line to the per-call log. The monthly total alone can
+    say "you spent $4.50" but never "on what" - and a cost display that
+    cannot answer that is a number to worry about rather than one to act on.
+    Appending is best-effort: a failure to write the log must never lose the
+    ledger entry, which is what the budget cap actually depends on."""
     path = path or LEDGER_PATH
     ledger = load_ledger(path)
     key = month or month_key()
     ledger[key] = round(ledger.get(key, 0.0) + max(usd, 0.0), 6)
     _save(ledger, path)
+    try:
+        line = json.dumps({"ts": (datetime.now(timezone.utc)
+                                  .isoformat(timespec="seconds")),
+                           "usd": round(max(usd, 0.0), 6),
+                           "model": model, "task": (task or "")[:120]},
+                          ensure_ascii=False)
+        with open(calls_path(path), "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
     return ledger[key]
+
+
+def recent_calls(limit=50, path=None):
+    """The last `limit` logged calls, newest first."""
+    try:
+        with open(calls_path(path), encoding="utf-8") as f:
+            lines = f.readlines()[-limit:]
+    except OSError:
+        return []
+    out = []
+    for line in reversed(lines):
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return out
 
 
 def status_line(budget_usd, path=None, month=None):

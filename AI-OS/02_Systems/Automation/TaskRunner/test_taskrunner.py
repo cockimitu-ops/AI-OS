@@ -28,6 +28,7 @@ import tempfile
 import time
 import types
 import unittest
+import unittest.mock
 from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -3713,15 +3714,40 @@ class TestWebappApi(unittest.TestCase):
 
     def test_device_action_allowlists_verbs(self):
         """The request body reaches a phone with root. "Whatever the client
-        sent" is not an acceptable definition of what may run there, and the
-        destructive verbs are absent from the panel entirely rather than
-        gated - a web button is the wrong place for a factory reset."""
-        for evil in ("uninstall", "wipe_package_data", "reboot", "sh", ""):
+        sent" is not an acceptable definition of what may run there, so a verb
+        exists here or it does not exist at all."""
+        for evil in ("wipe_package_data", "sh", "", "factory_reset", "../rm"):
             status, _ = self.api.post_device_action(
                 {"device": "poco", "action": evil})
             self.assertEqual(status, 400, evil)
-        self.assertNotIn("uninstall", self.api.DEVICE_ACTIONS)
-        self.assertNotIn("reboot", self.api.DEVICE_ACTIONS)
+
+    def test_destructive_verbs_need_confirm(self):
+        """The destructive verbs ARE reachable from the panel now - it is
+        Felix's phone and he asked for a toolkit without restrictions. What
+        they are not is one tap away: phone_root.py refuses each of them
+        without confirm=True, and the UI only sends that after a second,
+        deliberate press. This asserts the refusal itself, not the button:
+        a UI can be changed by anyone, the module's gate cannot."""
+        for verb, body in (("uninstall", {"package": "com.example.app"}),
+                           ("wipe", {"package": "com.example.app"}),
+                           ("rm", {"path": "/sdcard/x"})):
+            status, payload = self.api.post_device_action(
+                dict({"device": "poco", "action": verb}, **body))
+            self.assertEqual(status, 200, verb)
+            self.assertFalse(payload["ok"], verb)
+            self.assertIn("confirm", payload["error"], verb)
+
+    def test_root_only_verbs_are_refused_on_the_unrooted_phone(self):
+        """The Nothing Phone has no root, so these are not possible there at
+        all. Refused with a reason rather than attempted and failed - the
+        panel also never renders them, but the check does not depend on
+        that."""
+        for verb in ("sms", "calls", "clipboard", "shell", "ls", "uninstall"):
+            status, payload = self.api.post_device_action(
+                {"device": "nothing", "action": verb})
+            self.assertEqual(status, 200, verb)
+            self.assertFalse(payload["ok"], verb)
+            self.assertIn("root", payload["error"], verb)
 
     def test_device_action_rejects_an_unknown_device(self):
         status, _ = self.api.post_device_action(
@@ -4184,6 +4210,256 @@ class TestTechScout(unittest.TestCase):
             self.assertEqual(self.ts.load_seen(), set())
         finally:
             self.ts.SEEN_PATH = original
+
+
+class TestPhoneStream(unittest.TestCase):
+    """The live picture. Everything here is the framing and the arithmetic -
+    the parts that can be wrong without a phone in the room."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "phone_stream", os.path.join(HERE, "scripts", "phone_stream.py"))
+        cls.ps = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.ps)
+
+    def test_encode_size_keeps_the_aspect_ratio(self):
+        """A stretched phone screen would make every tap land in the wrong
+        place, since the client maps a click back through this ratio."""
+        for w, h in ((1080, 2400), (1084, 2412), (1440, 3200)):
+            size = self.ps.encode_size(w, h)
+            ew, eh = (int(v) for v in size.split("x"))
+            self.assertAlmostEqual(ew / eh, w / h, delta=0.02, msg=size)
+
+    def test_encode_size_is_macroblock_aligned(self):
+        """The AVC encoder wants dimensions divisible by 16 and misbehaves
+        quietly rather than loudly when they are not."""
+        for w, h in ((1080, 2400), (1084, 2412), (720, 1280), (1440, 3120)):
+            ew, eh = (int(v) for v in self.ps.encode_size(w, h).split("x"))
+            self.assertEqual(ew % 16, 0)
+            self.assertEqual(eh % 16, 0)
+
+    def test_encode_size_never_upscales(self):
+        """Re-encoding a small display upward costs bandwidth for pixels that
+        were never there."""
+        _, eh = (int(v) for v in self.ps.encode_size(480, 800).split("x"))
+        self.assertLessEqual(eh, 800)
+
+    def test_encode_size_survives_an_unknown_screen(self):
+        self.assertRegex(self.ps.encode_size(None, None), r"^\d+x\d+$")
+
+    def test_frames_are_split_on_jpeg_markers(self):
+        """The pump splits ffmpeg's byte stream on SOI/EOI. Both markers are
+        illegal inside entropy-coded data, which is why scanning for them is
+        safe - this asserts the splitting, fed the same way ffmpeg feeds it:
+        in chunks that do not line up with frame boundaries."""
+        stream = self.ps.Stream("test:1", size="16x16")
+        got = []
+        stream._publish = lambda jpeg: got.append(jpeg)
+        frames = [b"\xff\xd8" + bytes([i]) * 40 + b"\xff\xd9" for i in range(1, 4)]
+        blob = b"".join(frames)
+
+        class Chunked:
+            def __init__(self, data): self.data, self.pos = data, 0
+            def read1(self, n):
+                chunk = self.data[self.pos:self.pos + 7]  # deliberately not frame-aligned
+                self.pos += len(chunk)
+                return chunk
+        stream._running = True
+        stream._last_view = time.time()
+        stream._pump(Chunked(blob))
+        self.assertEqual(got, frames)
+
+    def test_publish_throttles_to_the_frame_rate(self):
+        """The cap is enforced on the wall clock here rather than by ffmpeg's
+        fps filter. The filter paces by presentation timestamp, and a raw
+        H.264 elementary stream carries none - measured, `-vf fps=12` on a
+        120 Hz phone still delivered 24.6 fps, each dropped frame putting the
+        picture further into the past."""
+        stream = self.ps.Stream("test:1", fps=10)
+        stream._publish(b"a")
+        stream._publish(b"b")   # immediately after: inside the 100ms gap
+        self.assertEqual(stream._seq, 1)
+        self.assertEqual(stream._frame, b"a")
+        stream._frame_at -= 1.0  # pretend a second went by
+        stream._publish(b"c")
+        self.assertEqual(stream._seq, 2)
+        self.assertEqual(stream._frame, b"c")
+
+    def test_a_stream_with_no_viewers_goes_idle(self):
+        stream = self.ps.Stream("test:1")
+        stream._last_view = time.time() - (self.ps.IDLE_TIMEOUT_S + 5)
+        self.assertGreater(stream.idle_for(), self.ps.IDLE_TIMEOUT_S)
+
+
+class TestClaudeChat(unittest.TestCase):
+    """Reading and continuing a real Claude Code session. The transcript
+    reader runs against fixtures rather than the live archive: a test that
+    parses Felix's actual conversations would pass or fail depending on what
+    he happened to say that week."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "claude_chat", os.path.join(HERE, "scripts", "claude_chat.py"))
+        cls.cc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.cc)
+
+    def _project(self, rows, session="11111111-2222-3333-4444-555555555555"):
+        """Writes a fake ~/.claude/projects tree and points the module at it.
+        -> (home_dir, session_id)."""
+        tmp = tempfile.mkdtemp()
+        project = os.path.join(tmp, "proj")
+        directory = os.path.join(tmp, ".claude", "projects", project.replace("/", "-"))
+        os.makedirs(directory)
+        with open(os.path.join(directory, f"{session}.jsonl"), "w", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row) + "\n")
+        return tmp, project, session
+
+    def test_text_of_reduces_a_tool_call_to_one_line(self):
+        """A Bash block in this project is routinely a 200-line heredoc.
+        Pasted whole into a phone-width transcript it buries the conversation
+        under its own source code."""
+        text = self.cc._text_of([{"type": "tool_use", "name": "Bash",
+                                  "input": {"command": "cat <<EOF\n" + "x" * 400 + "\nEOF"}}])
+        self.assertNotIn("\n", text)
+        self.assertLess(len(text), 120)
+        self.assertTrue(text.startswith("\u2699 Bash"))
+
+    def test_thinking_blocks_are_not_shown(self):
+        self.assertEqual(self.cc._text_of([{"type": "thinking", "thinking": ""}]), "")
+
+    def test_transcript_reads_both_roles_and_skips_empty_turns(self):
+        home, project, sid = self._project([
+            {"type": "user", "message": {"role": "user", "content": "hallo"},
+             "timestamp": "2026-09-01T20:00:00Z"},
+            {"type": "assistant", "message": {"role": "assistant", "model": "claude-opus-5",
+             "content": [{"type": "text", "text": "moin"}],
+             "usage": {"input_tokens": 10, "output_tokens": 20}}},
+            # A user row whose only content is a tool result: the harness
+            # talking to itself, not Felix.
+            {"type": "user", "message": {"role": "user",
+             "content": [{"type": "tool_result", "content": "x"}]}},
+            {"type": "attachment", "attachment": {}},
+        ])
+        with unittest.mock.patch.dict(os.environ, {"HOME": home}):
+            out = self.cc.transcript(sid, project=project)
+        self.assertEqual([m["role"] for m in out["messages"]], ["user", "assistant"])
+        self.assertEqual(out["messages"][0]["text"], "hallo")
+
+    def test_a_half_written_line_does_not_break_the_read(self):
+        """The file is appended to while it is being read - a transcript can
+        genuinely end mid-line."""
+        home, project, sid = self._project([
+            {"type": "user", "message": {"role": "user", "content": "eins"}}])
+        path = os.path.join(home, ".claude", "projects", project.replace("/", "-"),
+                            f"{sid}.jsonl")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write('{"type": "user", "message": {"role"')
+        with unittest.mock.patch.dict(os.environ, {"HOME": home}):
+            out = self.cc.transcript(sid, project=project)
+        self.assertEqual(len(out["messages"]), 1)
+
+    def test_cost_prices_cache_tokens_at_their_own_rates(self):
+        """Cache writes and reads are not the input rate. A 1-hour cache write
+        is 2x input and a read is 0.1x; counting them as plain input would
+        overstate a long conversation badly, and counting them as free would
+        understate it. Rates from platform.claude.com, checked 2026-09-01."""
+        usd, tok = self.cc.usage_cost({
+            "input_tokens": 1_000_000, "output_tokens": 1_000_000,
+            "cache_read_input_tokens": 1_000_000,
+            "cache_creation": {"ephemeral_1h_input_tokens": 1_000_000,
+                               "ephemeral_5m_input_tokens": 0},
+        }, "claude-opus-5")
+        self.assertAlmostEqual(usd, 5.0 + 25.0 + 0.5 + 10.0, places=4)
+        self.assertEqual(tok["cache_1h"], 1_000_000)
+
+    def test_cost_falls_back_when_the_ttl_breakdown_is_missing(self):
+        """Older transcripts carry only the total. Billed at the cheaper of
+        the two rates - an estimate should not flatter itself."""
+        usd, tok = self.cc.usage_cost(
+            {"cache_creation_input_tokens": 1_000_000}, "claude-opus-5")
+        self.assertEqual(tok["cache_5m"], 1_000_000)
+        self.assertAlmostEqual(usd, 6.25, places=4)
+
+    def test_an_unknown_model_still_costs_something(self):
+        usd, _ = self.cc.usage_cost({"output_tokens": 1_000_000}, "some-future-model")
+        self.assertGreater(usd, 0)
+
+    def test_session_id_must_be_a_session_id(self):
+        """It becomes a filesystem path."""
+        for bad in ("../../etc/passwd", "", "; rm -rf /", "a" * 40):
+            with self.assertRaises(ValueError, msg=bad):
+                self.cc.transcript(bad)
+            with self.assertRaises(ValueError, msg=bad):
+                self.cc.send(bad, "hallo")
+
+    def test_an_empty_message_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.cc.send("11111111-2222-3333-4444-555555555555", "   ")
+
+    def test_job_id_must_be_a_job_id(self):
+        for bad in ("../x", "cc_../../etc", "nope"):
+            with self.assertRaises(ValueError, msg=bad):
+                self.cc.result(bad)
+
+    def test_list_sessions_marks_one_that_is_being_written_right_now(self):
+        """Nothing stops a session being resumed from the phone while the same
+        session is open in a terminal, and both would append to one file.
+        Rather than pretend to lock it, say so."""
+        home, project, sid = self._project([
+            {"type": "user", "message": {"role": "user", "content": "hallo"}}])
+        with unittest.mock.patch.dict(os.environ, {"HOME": home}):
+            rows = self.cc.list_sessions(project=project)
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["active"])
+        self.assertEqual(rows[0]["title"], "hallo")
+
+
+class TestSpendCallLog(unittest.TestCase):
+    """The monthly total alone can say "you spent $4.50" but never "on what",
+    and a cost display that cannot answer that is a number to worry about
+    rather than one to act on."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "spend_guard_calls", os.path.join(HERE, "scripts", "spend_guard.py"))
+        cls.sg = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.sg)
+
+    def test_calls_are_logged_next_to_their_ledger(self):
+        """Derived from the ledger path, so a test that redirects the ledger
+        redirects this too - the alternative is a test that quietly appends to
+        the real log while checking a fake ledger."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "ledger.json")
+            self.sg.record_spend(0.5, path=path, model="glm-5.2", task="eine Aufgabe")
+            self.sg.record_spend(0.25, path=path, model="glm-5.2", task="noch eine")
+            calls = self.sg.recent_calls(path=path)
+            self.assertEqual([c["usd"] for c in calls], [0.25, 0.5])  # newest first
+            self.assertEqual(calls[0]["model"], "glm-5.2")
+            self.assertTrue(self.sg.calls_path(path).startswith(tmp))
+
+    def test_a_broken_log_line_does_not_break_the_listing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "ledger.json")
+            self.sg.record_spend(1.0, path=path, model="m", task="t")
+            with open(self.sg.calls_path(path), "a", encoding="utf-8") as f:
+                f.write("{not json\n")
+            self.assertEqual(len(self.sg.recent_calls(path=path)), 1)
+
+    def test_an_unwritable_log_never_loses_the_ledger_entry(self):
+        """The cap depends on the ledger; the log is a convenience. If one of
+        them has to fail it must be the log."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "ledger.json")
+            os.makedirs(self.sg.calls_path(path))  # a directory where the file goes
+            total = self.sg.record_spend(2.0, path=path, month="2026-09")
+            self.assertEqual(total, 2.0)
+            self.assertEqual(self.sg.load_ledger(path)["2026-09"], 2.0)
+
 
 
 if __name__ == "__main__":
