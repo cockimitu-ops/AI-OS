@@ -7,9 +7,10 @@
  "ram_gb": 7.0,
  "capabilities": [
   "shell",
+  "posix",
   "ocr",
   "python",
   "git"
  ],
- "last_seen": 1788285749.898682
+ "last_seen": 1788289295.0344045
 }

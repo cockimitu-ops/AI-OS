@@ -5492,3 +5492,74 @@ class TestNodeQueue(unittest.TestCase):
         for evil in ("../../etc/passwd", "/etc/shadow.json", "no-extension"):
             status, _ = self.api.post_job_result({"job_id": evil, "ok": True})
             self.assertEqual(status, 400, evil)
+
+
+class TestNodeAgent(unittest.TestCase):
+    """The compute-node agent (added 2026-09-01). Every test here covers a bug
+    found by actually running it on Felix's Windows laptop - none of them
+    would have shown up on the Linux server, and two were silent."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "node_agent", os.path.join(HERE, "webapp", "static", "downloads",
+                                       "node_agent.py"))
+        cls.na = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.na)
+
+    def test_output_is_decoded_as_utf8_not_the_locale_codepage(self):
+        """The worst of the three, because it was silent. tesseract emits
+        UTF-8; subprocess(text=True) decodes with the locale codepage, which
+        on a German Windows is cp1252. Real output was "GrÃ¶ÃŸe der Ãœbung"
+        instead of "Größe der Übung" - every German lecture photo from that
+        node would have arrived mangled, with no error anywhere."""
+        german = "Größe der Übung: 30 Stück".encode("utf-8")
+        self.assertEqual(self.na._decode(german), "Größe der Übung: 30 Stück")
+        self.assertNotIn("Ã", self.na._decode(german))
+
+    def test_decode_never_raises_on_broken_bytes(self):
+        """A job's output must not be lost because one byte was invalid."""
+        self.assertIsInstance(self.na._decode(b"\xff\xfe ok"), str)
+        self.assertEqual(self.na._decode(None), "")
+        self.assertEqual(self.na._decode("schon str"), "schon str")
+
+    def test_ram_is_reported_on_this_platform(self):
+        """os.sysconf does not exist on Windows, so the original reported
+        "None GB" there - a 16 GB laptop advertising nothing, on a registry
+        whose entire purpose is knowing which machine deserves heavy work."""
+        ram = self.na._total_ram_gb()
+        self.assertIsNotNone(ram)
+        self.assertGreater(ram, 0.5)
+
+    def test_capabilities_are_verified_by_running_the_binary(self):
+        """shutil.which() is not enough on Windows: App Execution Aliases put
+        zero-byte python.exe stubs in WindowsApps, which sits in the machine
+        PATH ahead of every user entry. The laptop advertised the `python`
+        capability while being unable to run Python at all - which would have
+        routed a Python job to a node that cannot execute it."""
+        self.assertFalse(self.na._works("definitely-not-a-real-binary-xyz"))
+        # Something that certainly exists and runs on this machine.
+        self.assertTrue(self.na._works("sh", "-c", "exit 0")
+                        or self.na._works("echo", "hi"))
+
+    def test_platform_is_declared_as_a_capability(self):
+        """"shell" says a node can run a command; it does not say WHICH shell.
+        A POSIX one-liner sent to the Windows laptop returned "Das System kann
+        den angegebenen Pfad nicht finden" - which reads as a broken job
+        rather than a mismatched one. A job that needs bash can now ask."""
+        caps = self.na.detect_capabilities()
+        self.assertIn("shell", caps)
+        self.assertTrue("posix" in caps or "windows" in caps)
+
+    def test_only_named_job_kinds_run(self):
+        """The agent runs with Felix's own privileges on his laptop. Anyone
+        who reaches the server would otherwise be able to run code there."""
+        ok, out = self.na.run_job({"kind": "rm-rf", "payload": {}})
+        self.assertFalse(ok)
+        self.assertIn("unbekannter Job-Typ", out)
+
+    def test_ocr_on_a_missing_file_fails_cleanly(self):
+        ok, out = self.na.run_job(
+            {"kind": "ocr", "payload": {"path": "/nonexistent/x.png"}})
+        self.assertFalse(ok)
+        self.assertIn("fehlt", out)
