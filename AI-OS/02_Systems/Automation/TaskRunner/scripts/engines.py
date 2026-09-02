@@ -48,6 +48,7 @@ INBOX = os.path.join(TASK_RUNNER_DIR, "tasks", "inbox")
 LOGS = os.path.join(TASK_RUNNER_DIR, "tasks", "logs")
 
 import claude_chat
+import codex_chat
 import gemini_chat
 
 JOB_RE = re.compile(r"[a-z]{2,8}_[\w.-]{1,60}")
@@ -152,14 +153,10 @@ CODEX_BIN = os.environ.get("AIOS_CODEX_BIN", "codex")
 
 
 def _codex_available():
-    if not shutil.which(CODEX_BIN):
-        return False, ("Codex ist nicht installiert - "
-                       "`npm i -g @openai/codex`, dann `codex` und mit dem "
-                       "ChatGPT-Konto anmelden")
-    if not (os.environ.get("OPENAI_API_KEY") or
-            os.path.exists(os.path.expanduser("~/.codex/auth.json"))):
-        return False, "Codex ist installiert, aber nicht angemeldet - `codex` starten und einloggen"
-    return True, ""
+    # Asked of the CLI itself. Guessing from the presence of an auth file was
+    # the first version of this and it is the kind of guess that reports
+    # "ready" to someone who is about to get a login error.
+    return codex_chat.logged_in()
 
 
 def _gemini_available():
@@ -202,8 +199,8 @@ ENGINES = {
     "codex": {
         "label": "Codex",
         "note": "OpenAIs Codex-CLI, sobald installiert und angemeldet.",
-        "models": ["gpt-5.1-codex", "gpt-5.1-codex-mini"],
-        "default_model": "gpt-5.1-codex",
+        "models": codex_chat.MODELS,
+        "default_model": codex_chat.DEFAULT_MODEL,
         "available": _codex_available,
         "threads": "thread",
     },
@@ -251,14 +248,11 @@ def send(engine, message, model=None, thread=None, session=None):
             message, meta={"model": model, "thread": thread})}
 
     if engine == "codex":
-        # The flags are what Codex documents for headless use; they are not
-        # verified against a running install yet, because there is not one.
-        # If they are wrong the job's .err file will say so in full rather
-        # than the engine guessing on Felix's behalf.
         return {"engine": "codex", "job": _spawn(
             "cdx",
-            lambda _path, text: [CODEX_BIN, "exec", "--model", model,
-                                 "--skip-git-repo-check", text],
+            lambda prompt_path, _text: [
+                "python3", os.path.join(SCRIPT_DIR, "codex_chat.py"),
+                "--json", "--model", model, "--prompt-file", prompt_path],
             message, meta={"model": model}, cwd=claude_chat.PROJECT_DIR)}
 
     # aios: the same task file dispatch_task.py and telegram_bridge.py write.

@@ -4787,7 +4787,16 @@ class TestEngines(unittest.TestCase):
         spec.loader.exec_module(cls.en)
 
     def test_every_engine_reports_whether_it_can_answer(self):
-        rows = {e["id"]: e for e in self.en.catalogue()}
+        # Stubbed, not asked. Codex answers this by shelling out to its own
+        # CLI, and a unit test that spawns a process is a unit test that
+        # depends on what else is installed - and, as this one found, on
+        # whatever another test did to time.sleep.
+        original = self.en.ENGINES["codex"]["available"]
+        self.en.ENGINES["codex"]["available"] = lambda: (False, "nicht angemeldet")
+        try:
+            rows = {e["id"]: e for e in self.en.catalogue()}
+        finally:
+            self.en.ENGINES["codex"]["available"] = original
         self.assertEqual(set(rows), {"claude", "aios", "gemini", "codex"})
         for row in rows.values():
             self.assertTrue(row["models"], row["id"])
