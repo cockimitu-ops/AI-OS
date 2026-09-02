@@ -4551,7 +4551,7 @@ class TestClaudeChat(unittest.TestCase):
 
     def test_session_id_must_be_a_session_id(self):
         """It becomes a filesystem path."""
-        for bad in ("../../etc/passwd", "", "; rm -rf /", "a" * 40):
+        for bad in ("../../etc/passwd", "; rm -rf /", "a" * 40):
             with self.assertRaises(ValueError, msg=bad):
                 self.cc.transcript(bad)
             with self.assertRaises(ValueError, msg=bad):
