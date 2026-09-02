@@ -383,8 +383,16 @@ class TestCrashGuard(TaskRunnerTestCase):
             raise TestCrashGuard._StopLoop()
 
         self.runner.time.sleep = stop
-        with self.assertRaises(TestCrashGuard._StopLoop):
-            self.runner.run_worker()
+        # Crash-guard tests exercise the queue's error path. The production
+        # worker now delegates execution to a separate process, so keep this
+        # unit seam local and preserve the old direct task doubles below.
+        original_isolated = self.runner._run_task_isolated
+        self.runner._run_task_isolated = lambda path, filename: self.runner._run_task(path, filename)
+        try:
+            with self.assertRaises(TestCrashGuard._StopLoop):
+                self.runner.run_worker()
+        finally:
+            self.runner._run_task_isolated = original_isolated
 
     def test_poisoned_task_is_quarantined_instead_of_looping_forever(self):
         def boom(model, instruction):
@@ -419,6 +427,62 @@ class TestCrashGuard(TaskRunnerTestCase):
         self.assertEqual(order, ["first", "second"])
 
 
+
+class TestWorkerSupervisor(TaskRunnerTestCase):
+    """The persistent worker must be able to outlive an interpreter child that
+    ignores the in-process SIGALRM timeout."""
+
+    class _DoneProcess:
+        pid = 4242
+
+        def __init__(self, status=0, timeout=False):
+            self.status = status
+            self.timeout = timeout
+            self.wait_calls = []
+
+        def wait(self, timeout=None):
+            self.wait_calls.append(timeout)
+            if self.timeout and len(self.wait_calls) == 1:
+                raise self._timeout_error
+            return self.status
+
+    def setUp(self):
+        super().setUp()
+        self.original_popen = self.runner.subprocess.Popen
+        self.original_killpg = self.runner.os.killpg
+        self.runner.TASK_TIMEOUT_S = 1
+
+    def tearDown(self):
+        self.runner.subprocess.Popen = self.original_popen
+        self.runner.os.killpg = self.original_killpg
+        super().tearDown()
+
+    def test_successful_child_must_consume_its_inbox_file(self):
+        path = self.queue("still-there.md", "x")
+        proc = self._DoneProcess()
+        seen = {}
+        self.runner.subprocess.Popen = lambda args, **kwargs: seen.update(args=args, kwargs=kwargs) or proc
+        with self.assertRaisesRegex(RuntimeError, "without moving"):
+            self.runner._run_task_isolated(path, "still-there.md")
+        self.assertEqual(seen["args"][-2:], ["--run-one", "still-there.md"])
+        self.assertTrue(seen["kwargs"]["start_new_session"])
+
+    def test_nonzero_child_is_reported_to_the_crash_guard(self):
+        proc = self._DoneProcess(status=7)
+        self.runner.subprocess.Popen = lambda *args, **kwargs: proc
+        with self.assertRaisesRegex(RuntimeError, "status 7"):
+            self.runner._run_task_isolated(os.path.join(self.tmp.name, "gone.md"), "gone.md")
+
+    def test_timed_out_child_group_is_stopped_and_reported(self):
+        proc = self._DoneProcess(timeout=True)
+        proc._timeout_error = self.runner.subprocess.TimeoutExpired(["child"], 1)
+        killed = []
+        self.runner.subprocess.Popen = lambda *args, **kwargs: proc
+        self.runner.os.killpg = lambda pid, sig: killed.append((pid, sig))
+        with self.assertRaisesRegex(RuntimeError, "external worker deadline"):
+            self.runner._run_task_isolated(os.path.join(self.tmp.name, "gone.md"), "gone.md")
+        self.assertEqual(killed, [(4242, self.runner.signal.SIGTERM)])
+        self.assertEqual(proc.wait_calls, [1, 5])
 class TestOutputFormatting(TaskRunnerTestCase):
     """Bug: the formatter concatenated every assistant message, every code
     block AND every raw command output, so Telegram showed the worker's scratch

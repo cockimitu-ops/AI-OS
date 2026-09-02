@@ -107,6 +107,15 @@ INBOX = os.path.join(AIOS_DIR, "tasks", "inbox")
 COMPLETED = os.path.join(AIOS_DIR, "tasks", "completed")
 LOGS = os.path.join(AIOS_DIR, "tasks", "logs")
 
+# SIGALRM is useful as a fast, per-model best-effort timeout, but it runs
+# *inside* Open Interpreter. Third-party tool generators can catch an exception
+# raised by a signal handler and keep waiting for their child process. The
+# long-lived queue owner therefore needs an independent, external deadline.
+# Each task runs in its own process group below; if it outlives this ceiling,
+# the owner kills that group and quarantines the input through the existing
+# crash-loop guard.
+TASK_TIMEOUT_S = min(1800, max(60, int(os.environ.get("AIOS_TASK_TIMEOUT_S", "360"))))
+
 for folder in [INBOX, COMPLETED, LOGS]:
     os.makedirs(folder, exist_ok=True)
 
@@ -1132,7 +1141,7 @@ def run_worker():
         for task_path in task_files:
             filename = os.path.basename(task_path)
             try:
-                _run_task(task_path, filename)
+                _run_task_isolated(task_path, filename)
             except Exception as e:
                 # Anything the per-model handling above didn't already catch
                 # (unreadable task file, full disk, a rename failure, a library
@@ -1153,5 +1162,60 @@ def run_worker():
 
         time.sleep(2)
 
+
+def _stop_task_process(proc):
+    """Stop a timed-out task and every subprocess it started."""
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        proc.wait(timeout=5)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    proc.wait()
+
+
+def _run_task_isolated(task_path, filename):
+    """Run one inbox item outside the persistent queue process.
+
+    This is deliberately a process watchdog instead of another Python signal.
+    It remains authoritative even when Open Interpreter swallows a signal or a
+    terminal/plugin thread never returns. A new session makes the task child
+    the leader of an isolated process group, so timeout cleanup includes its
+    shell and descendants rather than leaving an orphan behind.
+    """
+    proc = subprocess.Popen(
+        [sys.executable, os.path.abspath(__file__), "--run-one", filename],
+        cwd=AIOS_DIR,
+        start_new_session=True,
+    )
+    try:
+        status = proc.wait(timeout=TASK_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        _stop_task_process(proc)
+        raise RuntimeError(
+            f"task exceeded the {TASK_TIMEOUT_S}s external worker deadline; "
+            "its process group was stopped"
+        )
+    if status:
+        raise RuntimeError(f"isolated task process exited with status {status}")
+    # A zero exit without consuming the task is a contract breach. Treat it as
+    # hard failure so the existing crash-loop guard records and quarantines it.
+    if os.path.exists(task_path):
+        raise RuntimeError("isolated task exited without moving its inbox file")
 if __name__ == "__main__":
-    run_worker()
+    if len(sys.argv) == 3 and sys.argv[1] == "--run-one":
+        filename = os.path.basename(sys.argv[2])
+        if filename != sys.argv[2] or not filename.endswith(".md"):
+            raise SystemExit("--run-one needs one inbox .md filename")
+        _run_task(os.path.join(INBOX, filename), filename)
+    elif len(sys.argv) == 1:
+        run_worker()
+    else:
+        raise SystemExit("usage: aios_runner.py [--run-one TASK.md]")
