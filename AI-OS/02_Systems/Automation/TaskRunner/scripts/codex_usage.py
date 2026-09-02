@@ -47,15 +47,22 @@ def read_rate_limits(force=False):
 
 
 def reached():
-    """-> (True, why) when the account itself says it is out."""
+    """-> (out, why, resets_at) using the account's own verdict and clock.
+
+    The reset timestamp is the part worth carrying: it turns "skip Codex for
+    an hour and hope" into "Codex is back at 21:35", which is both the honest
+    answer and the one Felix can plan around."""
     data = read_rate_limits()
     if not data.get("live"):
-        return False, ""
+        return False, "", None
+    windows = [w for w in (data.get("primary"), data.get("secondary")) if w]
+    full = [w for w in windows if (w.get("used_percent") or 0) >= 100]
+    resets = min((w["resets_at"] for w in full if w.get("resets_at")), default=None)
     if data.get("reached"):
-        return True, f"Codex-Kontingent erreicht ({data['reached']})"
+        return True, f"Codex-Kontingent erschöpft ({data['reached']})", resets
     if data.get("spend_control_reached"):
-        return True, "Codex-Ausgabengrenze erreicht"
-    return False, ""
+        return True, "Codex-Ausgabengrenze erreicht", resets
+    return False, "", None
 
 
 def _read_rate_limits():

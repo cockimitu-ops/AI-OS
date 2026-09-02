@@ -4897,8 +4897,17 @@ class TestLimitHandoff(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.saved = self.en.LIMIT_STATE
         self.en.LIMIT_STATE = os.path.join(self.tmp.name, "limits.json")
+        # Codex is asked about its live allowance now, so these tests would
+        # otherwise pass or fail depending on how much of Felix's real
+        # subscription is left this afternoon. Found the hard way: the day
+        # his account actually ran out, two of them turned red.
+        import codex_usage
+        self.saved_reached = codex_usage.reached
+        codex_usage.reached = lambda: (False, "", None)
 
     def tearDown(self):
+        import codex_usage
+        codex_usage.reached = self.saved_reached
         self.en.LIMIT_STATE = self.saved
         self.tmp.cleanup()
 
@@ -4953,12 +4962,16 @@ class TestLimitHandoff(unittest.TestCase):
         without spending a turn to find out."""
         import codex_usage
         real = codex_usage.reached
-        codex_usage.reached = lambda: (True, "Codex-Kontingent erreicht (primary)")
+        # The account gives a reset timestamp, and carrying it is the point:
+        # it turns "skip Codex for an hour and hope" into "back at 19:35".
+        codex_usage.reached = lambda: (True, "Codex-Kontingent erschöpft", 1788377700)
         try:
             row = self.en.limited("codex")
             self.assertIsNotNone(row)
             self.assertIn("Kontingent", row["message"])
             self.assertTrue(row["live"])
+            self.assertEqual(row["until"], 1788377700)
+            self.assertTrue(row["resets"])
         finally:
             codex_usage.reached = real
 

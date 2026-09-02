@@ -135,10 +135,15 @@ def limited(engine):
     if engine == "codex":
         try:
             import codex_usage
-            out, why = codex_usage.reached()
+            out, why, resets_at = codex_usage.reached()
             if out:
-                return {"at": time.time(), "message": why, "resets": None,
-                        "until": time.time() + LIMIT_ASSUME_S, "live": True}
+                # The account's own clock, when it gave one. Guessing an hour
+                # is what you do when nobody will tell you.
+                until = float(resets_at) if resets_at else time.time() + LIMIT_ASSUME_S
+                stamp = (datetime.fromtimestamp(float(resets_at)).strftime("%H:%M")
+                         if resets_at else None)
+                return {"at": time.time(), "message": why, "resets": stamp,
+                        "until": until, "live": True}
         except Exception:  # noqa: BLE001 - a usage read must never block routing
             pass
     row = _limits().get(engine)
