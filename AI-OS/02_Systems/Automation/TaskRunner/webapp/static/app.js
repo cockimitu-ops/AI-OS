@@ -2329,7 +2329,36 @@ async function loadProposals() {
     const safetyEl = document.getElementById("prop-safety");
     const safety = await api("/api/safety-controls");
     const freezeLabel = safety.global_freeze ? "Weiterarbeiten" : "Alles anhalten";
-    safetyEl.innerHTML = `<div class="card"><div class="row"><h3>Systemschutz</h3><button class="chip ${safety.global_freeze ? "danger" : ""}" id="safety-freeze">${freezeLabel}</button></div><div class="sub" style="margin-top:6px">${safety.global_freeze ? "Neue KI-Aufgaben sind pausiert." : "KI-Aufgaben dürfen laufen."} · Heute $${Number(safety.daily_spent_usd || 0).toFixed(2)} von $${Number(safety.daily_spend_cap || 0).toFixed(2)}</div><div class="chip-row" style="margin-top:10px"><button class="chip ${safety.router_mode === "cost" ? "on" : ""}" data-router="cost">Sparsam</button><button class="chip ${safety.router_mode === "speed" ? "on" : ""}" data-router="speed">Schnell</button><button class="chip ${safety.router_mode === "thorough" ? "on" : ""}" data-router="thorough">Gründlich</button><button class="chip" id="safety-cap">Tageslimit</button></div></div>`;
+    
+    safetyEl.innerHTML = `<div class="card">
+      <div class="row">
+        <h3>Systemschutz</h3>
+        <button class="chip ${safety.global_freeze ? "danger" : ""}" id="safety-freeze">${freezeLabel}</button>
+      </div>
+      <div class="sub" style="margin-top:6px">${safety.global_freeze ? "Neue KI-Aufgaben sind pausiert." : "KI-Aufgaben dürfen laufen."} · Heute $${Number(safety.daily_spent_usd || 0).toFixed(2)} von $${Number(safety.daily_spend_cap || 0).toFixed(2)}</div>
+      
+      <div class="chip-row" style="margin-top:10px">
+        <button class="chip ${safety.router_mode === "cost" ? "on" : ""}" data-router="cost">Sparsam</button>
+        <button class="chip ${safety.router_mode === "speed" ? "on" : ""}" data-router="speed">Schnell</button>
+        <button class="chip ${safety.router_mode === "thorough" ? "on" : ""}" data-router="thorough">Gründlich</button>
+        <button class="chip" id="safety-cap">Tageslimit</button>
+      </div>
+      
+      <h3 style="margin-top:15px">Erweitert</h3>
+      <div class="chip-row" style="margin-top:10px">
+        <button class="chip ${safety.paid_opt_in ? "on" : ""}" id="safety-paid">Paid Opt-in</button>
+        <button class="chip" id="safety-consensus">Konsensprüfung</button>
+        <button class="chip" id="safety-checkpoint-create">Restore Point</button>
+        <button class="chip" id="safety-checkpoint-list">Restore Points zeigen</button>
+        <button class="chip" id="safety-batch-approve">Batch Freigabe</button>
+        <button class="chip" id="safety-account-history">Kontohistorie prüfen</button>
+      </div>
+      <div id="safety-extra-out" class="out" style="display:none; margin-top:10px;"></div>
+    </div>`;
+
+    const outEl = document.getElementById("safety-extra-out");
+    function showOut(msg) { outEl.style.display = "block"; outEl.innerHTML = msg; }
+
     document.getElementById("safety-freeze")?.addEventListener("click", async (e) => {
       e.target.disabled = true;
       try { await api("/api/safety-controls", { method: "POST", body: JSON.stringify({ global_freeze: !safety.global_freeze }) }); loadProposals(); }
@@ -2347,6 +2376,59 @@ async function loadProposals() {
       try { await api("/api/safety-controls", { method: "POST", body: JSON.stringify({ daily_spend_cap: cap }) }); loadProposals(); }
       catch (err) { deviceSayProposal(`Fehler: ${err.message}`, true); }
     });
+    document.getElementById("safety-paid")?.addEventListener("click", async () => {
+      try { await api("/api/safety-controls", { method: "POST", body: JSON.stringify({ paid_opt_in: !safety.paid_opt_in }) }); loadProposals(); }
+      catch (err) { deviceSayProposal(`Fehler: ${err.message}`, true); }
+    });
+    document.getElementById("safety-consensus")?.addEventListener("click", async () => {
+      const prompt = window.prompt("Prompt für Konsensprüfung (Google Pro + Codex):");
+      if (!prompt) return;
+      try {
+        const res = await api("/api/consensus-start", { method: "POST", body: JSON.stringify({ prompt }) });
+        showOut(`Gestartet: ${res.id}<br>Status: ${res.status}`);
+      } catch (err) { showOut(`Fehler: ${err.message}`); }
+    });
+    document.getElementById("safety-checkpoint-create")?.addEventListener("click", async () => {
+      const label = window.prompt("Label für neuen Restore Point:");
+      if (!label) return;
+      try {
+        const res = await api("/api/checkpoint-create", { method: "POST", body: JSON.stringify({ label }) });
+        showOut(`Erstellt: ${res.id} (${res.files_count} Dateien)`);
+      } catch (err) { showOut(`Fehler: ${err.message}`); }
+    });
+    document.getElementById("safety-checkpoint-list")?.addEventListener("click", async () => {
+      try {
+        const res = await api("/api/checkpoints");
+        let html = "<b>Restore Points:</b><br>";
+        for (const c of res.checkpoints || []) {
+          html += `<div>${c.id} (${c.label}, ${c.files_count} Dateien) <button class="chip" onclick="restoreCkpt('${c.id}')">Restore</button></div>`;
+        }
+        showOut(html || "Keine Restore Points.");
+      } catch (err) { showOut(`Fehler: ${err.message}`); }
+    });
+    document.getElementById("safety-batch-approve")?.addEventListener("click", async () => {
+      const raw = window.prompt("IDs der Vorschläge kommagetrennt eingeben (z.B. 1,3,4):");
+      if (!raw) return;
+      const ids = raw.split(",").map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+      if (!ids.length) return;
+      try {
+        await api("/api/proposals-batch", { method: "POST", body: JSON.stringify({ ids, decision: "approved" }) });
+        loadProposals();
+      } catch (err) { showOut(`Fehler: ${err.message}`); }
+    });
+    document.getElementById("safety-account-history")?.addEventListener("click", () => {
+      alert("Erklärung: Die Gemini- und ChatGPT-Web-Kontohistorie kann nicht abgerufen werden, da die offiziellen CLI-Tools (Codex / Google AI Pro) keine entsprechenden Endpunkte bieten. Ein Browser-Scraping ist sicherheitshalber explizit untersagt und daher nicht verfügbar.");
+    });
+    
+    // global function for onclick restore
+    window.restoreCkpt = async function(id) {
+      if (!confirm(`Möchtest du WIRKLICH den Restore Point ${id} laden? (Destruktive Wiederherstellung)`)) return;
+      try {
+        const res = await api("/api/checkpoint-restore", { method: "POST", body: JSON.stringify({ id }) });
+        alert(`Wiederhergestellt: ${res.id}`);
+      } catch(err) { alert(`Fehler: ${err.message}`); }
+    };
+
     const d = await api("/api/proposals");
     setConnDot("ok");
 

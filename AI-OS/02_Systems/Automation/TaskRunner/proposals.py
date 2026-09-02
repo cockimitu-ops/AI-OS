@@ -352,20 +352,31 @@ def dispatch(chosen, inbox=None, agents_module=None):
     import agents as _agents  # local: proposals.py is imported by tools that
     if agents_module is not None:  # have no need for the agent registry
         _agents = agents_module
+    import safety_controls
+    try:
+        import engines as _eng
+    except ImportError:
+        import scripts.engines as _eng
+
     inbox = inbox or os.path.join(HERE, "tasks", "inbox")
     ai_items = [i for i in chosen if i.get("kind") == "ai"]
     human_items = [i for i in chosen if i.get("kind") != "ai"]
-    os.makedirs(inbox, exist_ok=True)
     for item in ai_items:
-        stamp = time.strftime("%Y%m%d_%H%M%S") + f"_{int(time.time() * 1e6) % 1000000:06d}"
-        path = os.path.join(inbox, f"task_approved_{stamp}.md")
         body = (_agents.directive(item["agent"])
                 if _agents.resolve(item.get("agent", "")) else "")
         body += APPROVED_PREAMBLE + f"{item['text']}\n"
-        tmp = f"{path}.part"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(body)
-        os.replace(tmp, path)
+        
+        allowed = ["claude", "codex", "google-pro"]
+        choice = safety_controls.choose_engine(allowed)
+        engine_id = choice.engine or "claude"
+        
+        if _eng.limited(engine_id):
+            nxt = _eng.next_engine(engine_id, exclude=["aios"])
+            if nxt and nxt in allowed:
+                engine_id = nxt
+                
+        _eng.send(engine_id, body, fallback=False)
+
     if human_items:
         add_todos(human_items)
     return len(ai_items)

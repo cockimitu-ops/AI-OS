@@ -4812,18 +4812,27 @@ class TestProposalDecisions(unittest.TestCase):
     def test_dispatch_queues_ai_work_and_lists_human_work(self):
         """Queueing a human-intervention item would hand the worker something
         it cannot possibly do - "publish the Gumroad listing" - and a free
-        model given an impossible task reports success rather than refusing."""
-        inbox = os.path.join(self.tmp.name, "inbox")
-        fake_agents = types.SimpleNamespace(directive=lambda a: "",
-                                            resolve=lambda a: None)
-        queued = self.pr.dispatch([
-            {"agent": "Tech_Scout", "kind": "ai", "text": "baue etwas"},
-            {"agent": "Business_Development", "kind": "human", "text": "ruf an"},
-        ], inbox=inbox, agents_module=fake_agents)
-        self.assertEqual(queued, 1)
-        files = os.listdir(inbox)
-        self.assertEqual(len(files), 1)
-        body = open(os.path.join(inbox, files[0]), encoding="utf-8").read()
+        model given an impossible task reports success rather than refusing.
+        Also verifies we use engines.send instead of writing to inbox directly."""
+        mock_send = unittest.mock.MagicMock()
+        mock_choose = unittest.mock.MagicMock(return_value=types.SimpleNamespace(engine="claude"))
+        
+        # We need to mock sys.modules to patch the local imports in dispatch
+        mock_engines = unittest.mock.MagicMock(send=mock_send, limited=lambda e: False)
+        mock_sc = unittest.mock.MagicMock(choose_engine=mock_choose)
+        
+        with unittest.mock.patch.dict("sys.modules", {"engines": mock_engines, "scripts.engines": mock_engines, "safety_controls": mock_sc, "scripts.safety_controls": mock_sc}):
+            inbox = os.path.join(self.tmp.name, "inbox")
+            fake_agents = types.SimpleNamespace(directive=lambda a: "",
+                                                resolve=lambda a: None)
+            queued = self.pr.dispatch([
+                {"agent": "Tech_Scout", "kind": "ai", "text": "baue etwas"},
+                {"agent": "Business_Development", "kind": "human", "text": "ruf an"},
+            ], inbox=inbox, agents_module=fake_agents)
+            self.assertEqual(queued, 1)
+            
+            mock_send.assert_called_once()
+            body = mock_send.call_args[0][1]
         self.assertIn("baue etwas", body)
         # The instruction to execute has to be explicit: two approved tasks
         # came back as fresh AI_PROPOSALs on 2026-09-01 because the agents

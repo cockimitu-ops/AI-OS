@@ -1499,3 +1499,64 @@ def post_safety_controls(body):
         return 200, safety_controls.update_settings(updates)
     except ValueError as exc:
         return 400, {"error": str(exc)}
+
+def post_consensus_start(body):
+    body = body or {}
+    prompt = body.get("prompt")
+    if not prompt:
+        return 400, {"error": "Prompt fehlt"}
+    try:
+        job = safety_controls.start_consensus(prompt)
+        return 200, job
+    except Exception as exc:
+        return 400, {"error": str(exc)}
+
+def get_consensus_result(body):
+    body = body or {}
+    cid = body.get("id")
+    if not cid:
+        return 400, {"error": "ID fehlt"}
+    try:
+        job = safety_controls.consensus_result(cid)
+        return 200, job
+    except Exception as exc:
+        return 400, {"error": str(exc)}
+
+def post_checkpoint_create(body):
+    body = body or {}
+    label = body.get("label", "ui_backup")
+    try:
+        ckpt = safety_controls.create_checkpoint(label)
+        return 200, ckpt
+    except Exception as exc:
+        return 400, {"error": str(exc)}
+
+def post_checkpoint_restore(body):
+    body = body or {}
+    cid = body.get("id")
+    if not cid:
+        return 400, {"error": "ID fehlt"}
+    try:
+        res = safety_controls.restore_checkpoint(cid)
+        return 200, res
+    except Exception as exc:
+        return 400, {"error": str(exc)}
+
+def get_checkpoints(body):
+    try:
+        ckpts = safety_controls.list_checkpoints()
+        return 200, {"checkpoints": ckpts}
+    except Exception as exc:
+        return 400, {"error": str(exc)}
+
+def post_proposals_batch(body):
+    body = body or {}
+    ids = body.get("ids", [])
+    decision = body.get("decision")
+    if not ids or not decision:
+        return 400, {"error": "ids oder decision fehlt"}
+    try:
+        res = safety_controls.batch_decide(ids, decision)
+        return 200, res
+    except Exception as exc:
+        return 400, {"error": str(exc)}

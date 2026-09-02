@@ -57,6 +57,44 @@ MODELS = ["auto", "gpt-5.1-codex", "gpt-5.1-codex-mini"]
 DEFAULT_MODEL = "auto"
 
 
+def _check_terra_available():
+    try:
+        proc = subprocess.Popen(
+            [BIN, "app-server", "--stdio"],
+            text=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=1
+        )
+        proc.stdin.write(json.dumps({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "AI-OS", "version": "1"}, "capabilities": None}}) + "\n")
+        proc.stdin.flush()
+        
+        import select
+        end = time.time() + 3
+        while time.time() < end:
+            ready, _, _ = select.select([proc.stdout], [], [], 1)
+            if ready and json.loads(proc.stdout.readline()).get("id") == 1:
+                break
+                
+        proc.stdin.write(json.dumps({"id": 2, "method": "model/list", "params": {}}) + "\n")
+        proc.stdin.flush()
+        
+        while time.time() < end:
+            ready, _, _ = select.select([proc.stdout], [], [], 1)
+            if ready:
+                line = proc.stdout.readline()
+                if '"id":2' in line or '"id": 2' in line:
+                    proc.terminate()
+                    data = json.loads(line)
+                    for m in data.get("result", {}).get("data", []):
+                        if m.get("id") == "gpt-5.6-terra":
+                            return True
+                    return False
+        proc.terminate()
+    except Exception:
+        pass
+    return False
+
+if _check_terra_available():
+    MODELS.insert(1, "gpt-5.6-terra")
+
 class CodexError(RuntimeError):
     pass
 
