@@ -2329,11 +2329,23 @@ async function loadProposals() {
     const safetyEl = document.getElementById("prop-safety");
     const safety = await api("/api/safety-controls");
     const freezeLabel = safety.global_freeze ? "Weiterarbeiten" : "Alles anhalten";
-    safetyEl.innerHTML = `<div class="card"><div class="row"><h3>Systemschutz</h3><button class="chip ${safety.global_freeze ? "danger" : ""}" id="safety-freeze">${freezeLabel}</button></div><div class="sub" style="margin-top:6px">${safety.global_freeze ? "Neue KI-Aufgaben sind pausiert." : "KI-Aufgaben dürfen laufen."} · Heute $${Number(safety.daily_spent_usd || 0).toFixed(2)} von $${Number(safety.daily_spend_cap || 0).toFixed(2)}</div></div>`;
+    safetyEl.innerHTML = `<div class="card"><div class="row"><h3>Systemschutz</h3><button class="chip ${safety.global_freeze ? "danger" : ""}" id="safety-freeze">${freezeLabel}</button></div><div class="sub" style="margin-top:6px">${safety.global_freeze ? "Neue KI-Aufgaben sind pausiert." : "KI-Aufgaben dürfen laufen."} · Heute $${Number(safety.daily_spent_usd || 0).toFixed(2)} von $${Number(safety.daily_spend_cap || 0).toFixed(2)}</div><div class="chip-row" style="margin-top:10px"><button class="chip ${safety.router_mode === "cost" ? "on" : ""}" data-router="cost">Sparsam</button><button class="chip ${safety.router_mode === "speed" ? "on" : ""}" data-router="speed">Schnell</button><button class="chip ${safety.router_mode === "thorough" ? "on" : ""}" data-router="thorough">Gründlich</button><button class="chip" id="safety-cap">Tageslimit</button></div></div>`;
     document.getElementById("safety-freeze")?.addEventListener("click", async (e) => {
       e.target.disabled = true;
       try { await api("/api/safety-controls", { method: "POST", body: JSON.stringify({ global_freeze: !safety.global_freeze }) }); loadProposals(); }
       catch (err) { deviceSayProposal(`Fehler: ${err.message}`, true); e.target.disabled = false; }
+    });
+    safetyEl.querySelectorAll("[data-router]").forEach((button) => button.addEventListener("click", async () => {
+      try { await api("/api/safety-controls", { method: "POST", body: JSON.stringify({ router_mode: button.dataset.router }) }); loadProposals(); }
+      catch (err) { deviceSayProposal(`Fehler: ${err.message}`, true); }
+    }));
+    document.getElementById("safety-cap")?.addEventListener("click", async () => {
+      const raw = window.prompt("Tägliches Limit für externe Bezahlmodelle in US-Dollar", String(safety.daily_spend_cap));
+      if (raw === null) return;
+      const cap = Number(raw.replace(",", "."));
+      if (!Number.isFinite(cap) || cap < 0) { deviceSayProposal("Bitte eine Zahl ab 0 eingeben.", true); return; }
+      try { await api("/api/safety-controls", { method: "POST", body: JSON.stringify({ daily_spend_cap: cap }) }); loadProposals(); }
+      catch (err) { deviceSayProposal(`Fehler: ${err.message}`, true); }
     });
     const d = await api("/api/proposals");
     setConnDot("ok");
