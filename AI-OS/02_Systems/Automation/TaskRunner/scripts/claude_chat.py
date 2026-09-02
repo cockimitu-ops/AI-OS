@@ -327,10 +327,6 @@ def send(session_id, message, project=None):
     p = _job_paths(job_id)
     with open(p["prompt"], "w", encoding="utf-8") as f:
         f.write(message)
-    with open(p["meta"], "w", encoding="utf-8") as f:
-        json.dump({"session_id": session_id, "started": time.time(),
-                   "message": message[:2000]}, f, ensure_ascii=False)
-
     # Written as a shell line so the rename can happen in the same detached
     # process: the presence of the .json file is then the only "is it done"
     # signal the poller needs, and it can never observe a half-written one.
@@ -341,11 +337,39 @@ def send(session_id, message, project=None):
         f" > {shlex.quote(p['part'])} 2> {shlex.quote(p['err'])};"
         f" mv {shlex.quote(p['part'])} {shlex.quote(p['out'])}"
     )
-    subprocess.Popen(["sh", "-c", cmd], cwd=project or PROJECT_DIR,
-                     stdin=subprocess.DEVNULL,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                     start_new_session=True)
+    proc = subprocess.Popen(["sh", "-c", cmd], cwd=project or PROJECT_DIR,
+                            stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            start_new_session=True)
+    # The pid is written so a job that died can be told apart from one that is
+    # merely slow. start_new_session detaches from the terminal session, NOT
+    # from systemd's control group - a `systemctl restart` of the webapp takes
+    # every child with it unless the unit says KillMode=process, which is a
+    # thing this learned the hard way (see the unit file).
+    with open(p["meta"], "w", encoding="utf-8") as f:
+        json.dump({"session_id": session_id, "started": time.time(),
+                   "pid": proc.pid, "message": message[:2000]}, f,
+                  ensure_ascii=False)
     return job_id
+
+
+def _alive(pid, job_id):
+    """Is that pid still this job? -> True if it is running and is ours.
+
+    Both halves matter. A bare os.kill(pid, 0) says only that SOMETHING has
+    that pid, and pids are reused - after a reboot the number could belong to
+    anything. The command line still carries the job id, so it can be checked
+    rather than assumed."""
+    if not pid:
+        # An older job from before the pid was recorded. Treated as alive so
+        # the timeout still governs it, rather than declaring it dead on the
+        # strength of a missing field.
+        return True
+    try:
+        with open(f"/proc/{int(pid)}/cmdline", "rb") as f:
+            return job_id.encode() in f.read()
+    except (OSError, ValueError):
+        return False
 
 
 def result(job_id):
@@ -369,10 +393,28 @@ def result(job_id):
             "session_id": data.get("session_id"),
         }
     try:
-        started = json.load(open(p["meta"], encoding="utf-8")).get("started", 0)
+        meta = json.load(open(p["meta"], encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {"ready": False, "lost": True, "error": "Job nicht mehr auffindbar"}
+    started = meta.get("started", 0)
     elapsed = int(time.time() - started)
+
+    # Is it still running at all? Asked rather than assumed, because the
+    # alternative is what actually happened: a job killed by a service
+    # restart looked exactly like a slow one for the full fifteen-minute
+    # timeout, and by then nobody was still watching the screen.
+    if not _alive(meta.get("pid"), job_id) and elapsed > 5:
+        err = ""
+        try:
+            with open(p["err"], encoding="utf-8") as f:
+                err = f.read().strip()[:300]
+        except OSError:
+            pass
+        return {"ready": True, "ok": False, "died": True,
+                "error": err or ("Der Prozess wurde beendet, bevor er "
+                                 "antworten konnte - meistens ein Neustart "
+                                 "des Dienstes. Nachricht nochmal schicken.")}
+
     if elapsed > SEND_TIMEOUT_S:
         err = ""
         try:

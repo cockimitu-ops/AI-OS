@@ -1,101 +1,148 @@
-// Atmosphere layer for AI-OS: the drifting particle field, the dither grain,
-// and the entrance choreography.
+// The painted layer for AI-OS.
 //
-// Two references drive this, both Felix's: "Can You Grasp Time" (Dogan Ural) -
-// a black void with a subject made of luminous filaments and starlight - and
-// efecto.app, a dither/ASCII art tool whose whole look is heavy monochrome
-// grain over a particle form. The brief was literally "unnötig viel Design",
-// so this leans in: real moving particles with parallax depth, a grain layer
-// on top of everything, a light sweep across the hero, numbers that count up,
-// and staggered entrances.
+// Felix's references for this pass were five TikToks; he picked Monet, and
+// asked for texture everywhere, as elaborate as it gets, with the battery
+// explicitly not a consideration ("Fick Akku ich Kauf powerbanks").
 //
-// The constraints that keep "excessive" from meaning "bad":
+// WHY THE CANVAS CHANGES WITH THE HOUR
 //
-//   * It pauses completely when the tab is hidden. An animation loop running
-//     in a backgrounded PWA all day is a battery bug wearing a costume.
-//   * prefers-reduced-motion turns off ALL motion - particles stop drifting
-//     (they still render as a static field, so the design survives), sweeps
-//     and entrances become instant. Motion sensitivity is not a preference
-//     to override for decoration.
-//   * Device pixel ratio is capped at 2. Felix's phone reports 2.75; that is
-//     ~90% more pixels to fill every frame for a field of soft dots nobody
-//     can resolve at that density anyway.
-//   * Particle count scales with viewport area, so a phone does not get a
-//     laptop's workload.
+// He left light-or-dark to me. Doing both is not a compromise here - it is
+// the actual subject. Monet painted the same haystack, the same cathedral
+// facade and the same lily pond over and over at different hours, because
+// the light was the painting and the object was only its excuse. So this is
+// one canvas under four lights: mist at dawn, cream and sage at midday, rose
+// and gold at dusk, prussian blue at night. Light in daylight, dark at two
+// in the morning, and never two designs.
 //
-// No dependencies, no build step - same as the rest of static/.
+// HOW IT IS PAINTED
+//
+// Not particles. Broken colour: forty-odd soft blobs of pigment drifting
+// over each other at a crawl, composited on a canvas an eighth of the screen
+// size and scaled up. The upscale IS the technique - a bilinear stretch of a
+// tiny buffer gives exactly the wet, edge-free blending that a hundred
+// hand-drawn gradients would cost a phone dearly to produce. It also means
+// the whole field costs about as much as a single large gradient per frame.
+//
+// Over that, motes: dust in a shaft of light rather than stars. Warm, slow,
+// few - the previous version's job was to look like a starfield, and this
+// one's is to look like air.
+//
+// The constraints that survive from the previous version, because they were
+// never about cost:
+//
+//   * It pauses completely when the tab is hidden.
+//   * prefers-reduced-motion stops all drift; the painting still renders as
+//     a still image, which is the correct behaviour for a painting.
+//   * Device pixel ratio is capped at 2.
+//
+// No dependencies, no build step.
 
 (() => {
   "use strict";
 
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-  // --- the particle field --------------------------------------------------
-
   const canvas = document.getElementById("fx-canvas");
   if (!canvas) return;
-  const ctx = canvas.getContext("2d", { alpha: true });
+  const ctx = canvas.getContext("2d", { alpha: false });
 
-  let W = 0, H = 0, dpr = 1;
-  let particles = [];
-  let rafId = null;
-  let lastFrame = 0;
+  // --- the light of the hour -----------------------------------------------
+  //
+  // Each palette is a ground (what the canvas is primed with) and the
+  // pigments dragged over it. Kept here rather than in CSS because the paint
+  // is drawn, not styled - style.css reads the same names through
+  // body[data-light] for everything that is not the canvas.
 
-  // Three depth bands. Far particles are small, dim and slow; near ones are
-  // larger, brighter and drift faster. That difference is the whole illusion
-  // of depth - a single uniform layer reads as flat noise, which is exactly
-  // what the previous CSS-gradient starfield looked like on a real phone.
-  // Density and brightness were tuned up hard after seeing the first version
-  // rendered: it was technically present and visually forgettable, which is
-  // the opposite of the brief. Roughly 2.5x the particles, brighter across
-  // every band, and a fourth "bokeh" band of a few big soft out-of-focus
-  // motes - the depth cue that stops a particle field reading as flat noise.
-  const BANDS = [
-    { count: 0.000190, r: [0.4, 1.0],  speed: [1.5, 4],   alpha: [0.25, 0.55], hue: "far"   },
-    { count: 0.000105, r: [0.9, 1.9],  speed: [4, 9],     alpha: [0.5, 0.85],  hue: "mid"   },
-    { count: 0.000034, r: [1.5, 3.0],  speed: [9, 17],    alpha: [0.7, 1.0],   hue: "near"  },
-    { count: 0.0000045, r: [5, 11],    speed: [14, 24],   alpha: [0.05, 0.11], hue: "bokeh" },
-  ];
+  const LIGHTS = {
+    dawn: {
+      ground: [206, 212, 219],
+      pigments: [[188, 200, 214], [214, 208, 200], [226, 214, 210],
+                 [170, 186, 198], [232, 226, 214], [196, 190, 206]],
+      mote: [255, 252, 244], moteAlpha: [0.10, 0.30],
+    },
+    day: {
+      ground: [233, 227, 213],
+      pigments: [[168, 184, 154], [127, 163, 195], [226, 214, 186],
+                 [205, 213, 190], [240, 233, 216], [186, 176, 200]],
+      mote: [255, 250, 232], moteAlpha: [0.14, 0.38],
+    },
+    dusk: {
+      ground: [198, 168, 150],
+      pigments: [[226, 178, 140], [166, 132, 158], [232, 201, 138],
+                 [140, 122, 150], [216, 158, 130], [180, 168, 190]],
+      mote: [255, 236, 200], moteAlpha: [0.16, 0.42],
+    },
+    night: {
+      ground: [22, 27, 43],
+      pigments: [[36, 46, 78], [58, 44, 84], [26, 54, 72],
+                 [18, 24, 40], [72, 60, 96], [30, 62, 84]],
+      mote: [214, 226, 255], moteAlpha: [0.10, 0.34],
+    },
+  };
 
-  // Palette straight off the reference: mostly cool white-blue filaments,
-  // with gold and violet as rare specks - never as fills.
-  function pickColor(band) {
-    const roll = Math.random();
-    if (band === "bokeh") {
-      return roll < 0.4 ? [185, 160, 255] : (roll < 0.7 ? [232, 201, 138] : [150, 190, 255]);
-    }
-    if (band === "near" && roll < 0.2) return [232, 201, 138];   // gold
-    if (roll < 0.1) return [185, 160, 255];                       // violet
-    if (roll < 0.58) return [207, 227, 255];                      // filament blue
-    return [255, 255, 255];
+  // Boundaries chosen for a person who is regularly awake at two in the
+  // morning: night runs long, dawn is short, and dusk starts early enough
+  // that a German winter evening is not still rendering midday.
+  function lightForHour(h) {
+    if (h >= 22 || h < 6) return "night";
+    if (h < 9) return "dawn";
+    if (h < 17) return "day";
+    return "dusk";
   }
 
-  function rand(range) { return range[0] + Math.random() * (range[1] - range[0]); }
+  let light = LIGHTS[lightForHour(new Date().getHours())];
+  let lightName = lightForHour(new Date().getHours());
 
-  function build() {
-    particles = [];
-    const area = W * H;
-    for (const band of BANDS) {
-      const n = Math.round(area * band.count);
-      for (let i = 0; i < n; i++) {
-        particles.push({
-          x: Math.random() * W,
-          y: Math.random() * H,
-          r: rand(band.r),
-          // Drift is upward and slightly sideways - dust rising through a
-          // shaft of light, matching the reference's trail direction rather
-          // than falling snow.
-          vy: -rand(band.speed) / 60,
-          vx: (Math.random() - 0.5) * rand(band.speed) / 220,
-          a: rand(band.alpha),
-          color: pickColor(band.hue),
-          // Each particle twinkles on its own slow cycle; a shared phase
-          // would make the whole field pulse in unison, which reads as a
-          // flicker bug rather than starlight.
-          phase: Math.random() * Math.PI * 2,
-          twinkle: 0.25 + Math.random() * 0.9,
-        });
-      }
+  // --- the paint -----------------------------------------------------------
+
+  // An eighth of the screen. Every pigment blob is drawn here as a hard-edged
+  // radial gradient and the browser's own image smoothing does the blending
+  // on the way up - which is both cheaper and softer than blurring at full
+  // size could ever be.
+  const SCALE = 8;
+  const paint = document.createElement("canvas");
+  const pctx = paint.getContext("2d", { alpha: false });
+
+  let W = 0, H = 0, dpr = 1, pw = 0, ph = 0;
+  let blobs = [], motes = [];
+  let rafId = null, lastFrame = 0, t = 0;
+
+  function rand(a, b) { return a + Math.random() * (b - a); }
+
+  function buildBlobs() {
+    blobs = [];
+    // Enough overlapping strokes that no single one is legible as a shape.
+    // Below about thirty the eye starts finding circles in it, which is the
+    // difference between broken colour and a lava lamp.
+    for (let i = 0; i < 42; i++) {
+      const c = light.pigments[i % light.pigments.length];
+      blobs.push({
+        x: Math.random(), y: Math.random(),
+        r: rand(0.18, 0.52),
+        c,
+        a: rand(0.30, 0.72),
+        // Two slow oscillators per blob rather than a velocity: paint does
+        // not travel in straight lines, and a drift that never repeats keeps
+        // the field from developing a visible direction.
+        ax: rand(0.02, 0.09), ay: rand(0.02, 0.09),
+        px: Math.random() * Math.PI * 2, py: Math.random() * Math.PI * 2,
+        sx: rand(0.05, 0.16), sy: rand(0.05, 0.16),
+      });
+    }
+  }
+
+  function buildMotes() {
+    motes = [];
+    const n = Math.round(W * H * 0.000075);
+    for (let i = 0; i < n; i++) {
+      motes.push({
+        x: Math.random() * W, y: Math.random() * H,
+        r: rand(0.6, 2.6),
+        a: rand(light.moteAlpha[0], light.moteAlpha[1]),
+        vy: -rand(1.5, 7) / 60,
+        vx: (Math.random() - 0.5) / 90,
+        phase: Math.random() * Math.PI * 2,
+        twinkle: 0.2 + Math.random() * 0.7,
+      });
     }
   }
 
@@ -108,58 +155,66 @@
     canvas.style.width = W + "px";
     canvas.style.height = H + "px";
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    build();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    pw = Math.max(2, Math.ceil(W / SCALE));
+    ph = Math.max(2, Math.ceil(H / SCALE));
+    paint.width = pw;
+    paint.height = ph;
+    buildBlobs();
+    buildMotes();
+  }
+
+  function paintField() {
+    const [gr, gg, gb] = light.ground;
+    pctx.fillStyle = `rgb(${gr},${gg},${gb})`;
+    pctx.fillRect(0, 0, pw, ph);
+    for (const b of blobs) {
+      const x = (b.x + Math.sin(b.px + t * b.sx) * b.ax) * pw;
+      const y = (b.y + Math.cos(b.py + t * b.sy) * b.ay) * ph;
+      const r = b.r * Math.max(pw, ph);
+      const g = pctx.createRadialGradient(x, y, 0, x, y, r);
+      const [cr, cg, cb] = b.c;
+      g.addColorStop(0, `rgba(${cr},${cg},${cb},${b.a})`);
+      g.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
+      pctx.fillStyle = g;
+      pctx.fillRect(x - r, y - r, r * 2, r * 2);
+    }
   }
 
   function draw(now) {
     const dt = lastFrame ? Math.min((now - lastFrame) / 16.67, 3) : 1;
     lastFrame = now;
-    ctx.clearRect(0, 0, W, H);
+    if (!reduceMotion) t += dt * 0.006;
 
-    for (const p of particles) {
+    paintField();
+    ctx.drawImage(paint, 0, 0, pw, ph, 0, 0, W, H);
+
+    const [mr, mg, mb] = light.mote;
+    for (const p of motes) {
       if (!reduceMotion) {
         p.x += p.vx * dt;
         p.y += p.vy * dt;
-        p.phase += 0.012 * p.twinkle * dt;
-        // Wrap rather than respawn: a particle reappearing at a random
-        // position is visible as a pop, while wrapping just continues the
-        // drift off one edge and back on the other.
+        p.phase += 0.010 * p.twinkle * dt;
+        // Wrapped rather than respawned: a mote reappearing somewhere new is
+        // a visible pop, drifting off one edge and back on the other is not.
         if (p.y < -4) { p.y = H + 4; p.x = Math.random() * W; }
         if (p.x < -4) p.x = W + 4;
         else if (p.x > W + 4) p.x = -4;
       }
-      const tw = reduceMotion ? 1 : 0.65 + 0.35 * Math.sin(p.phase);
-      const alpha = p.a * tw;
-      const [r, g, b] = p.color;
-
-      // The larger particles get a soft halo, which is what makes them read
-      // as light sources instead of dots. Only the near band gets it - doing
-      // it for every particle is a lot of overdraw for something invisible
-      // at 0.5px.
-      // Bokeh motes are ONLY their bloom - a hard core would make them read
-      // as a smudge on the screen rather than something out of focus.
-      const isBokeh = p.r > 4;
-      const haloR = isBokeh ? p.r : p.r * 5.5;
-      if (p.r > 1.1) {
-        const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, haloR);
-        grad.addColorStop(0, `rgba(${r},${g},${b},${alpha * (isBokeh ? 1 : 0.7)})`);
-        grad.addColorStop(isBokeh ? 0.55 : 0.4, `rgba(${r},${g},${b},${alpha * 0.22})`);
-        grad.addColorStop(1, `rgba(${r},${g},${b},0)`);
-        ctx.fillStyle = grad;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, haloR, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      if (!isBokeh) {
-        ctx.fillStyle = `rgba(${r},${g},${b},${alpha})`;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-        ctx.fill();
-      }
+      const alpha = p.a * (reduceMotion ? 1 : 0.6 + 0.4 * Math.sin(p.phase));
+      const halo = p.r * 4.5;
+      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, halo);
+      g.addColorStop(0, `rgba(${mr},${mg},${mb},${alpha})`);
+      g.addColorStop(1, `rgba(${mr},${mg},${mb},0)`);
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, halo, 0, Math.PI * 2);
+      ctx.fill();
     }
 
-    // Static field under reduced motion: draw once, then stop the loop
-    // entirely rather than re-rendering an identical frame 60 times a second.
+    // A still painting under reduced motion: rendered once, then the loop
+    // stops rather than redrawing an identical frame sixty times a second.
     if (reduceMotion) { rafId = null; return; }
     rafId = requestAnimationFrame(draw);
   }
@@ -171,23 +226,52 @@
     if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
   }
 
-  // A backgrounded PWA must cost nothing. This is the difference between an
-  // atmosphere and a battery complaint.
+  // Repainted when the hour crosses into a different light. Checked rather
+  // than scheduled, because a phone that was asleep from midnight to eight
+  // never runs a timer set for six.
+  function refreshLight() {
+    const name = lightForHour(new Date().getHours());
+    document.body.dataset.light = name;
+    if (name === lightName) return;
+    lightName = name;
+    light = LIGHTS[name];
+    buildBlobs();
+    buildMotes();
+    if (!rafId) { start(); }
+  }
+  setInterval(refreshLight, 60000);
+  refreshLight();
+
+  // A backgrounded PWA must cost nothing while it is not being looked at -
+  // "the battery does not matter" was about how lavish the painting may be,
+  // not about burning a phone in a pocket.
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) stop(); else start();
+    if (document.hidden) { stop(); } else { refreshLight(); start(); }
   });
 
   let resizeTimer = null;
   window.addEventListener("resize", () => {
     // Debounced: mobile browsers fire resize continuously while the URL bar
-    // collapses, and rebuilding the whole field on every one of those frames
-    // is a visible stutter during an ordinary scroll.
+    // collapses, and rebuilding the field on every one of those frames is a
+    // visible stutter during an ordinary scroll.
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => { resize(); if (!rafId) start(); }, 180);
   });
 
   resize();
   start();
+
+  // Exposed so a screenshot can be taken of any hour without waiting for it.
+  window.fxSetLight = function (name) {
+    if (!LIGHTS[name]) return false;
+    lightName = name;
+    light = LIGHTS[name];
+    document.body.dataset.light = name;
+    buildBlobs();
+    buildMotes();
+    if (!rafId) start();
+    return true;
+  };
 
   // --- entrance choreography ----------------------------------------------
 
@@ -212,12 +296,12 @@
     if (reduceMotion || end === 0) { el.textContent = String(end); return; }
     const startedAt = performance.now();
     const tick = (now) => {
-      const t = Math.min((now - startedAt) / duration, 1);
+      const t2 = Math.min((now - startedAt) / duration, 1);
       // easeOutExpo: fast out of the gate, long settle - reads as decisive
       // rather than as a loading spinner.
-      const eased = t === 1 ? 1 : 1 - Math.pow(2, -10 * t);
+      const eased = t2 === 1 ? 1 : 1 - Math.pow(2, -10 * t2);
       el.textContent = String(Math.round(end * eased));
-      if (t < 1) requestAnimationFrame(tick);
+      if (t2 < 1) requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
   };

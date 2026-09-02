@@ -4497,6 +4497,53 @@ class TestClaudeChat(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.cc.send("11111111-2222-3333-4444-555555555555", "   ")
 
+    def test_a_job_whose_process_died_is_reported_at_once(self):
+        """The failure this exists for: Felix sent a message from his phone at
+        06:40 on 2026-09-02, an unattended apt upgrade had needrestart bounce
+        the webapp at 06:44, and the detached turn died with it - the unit ran
+        KillMode=control-group, so "detached" was never true. He saw nothing
+        at all, because a dead job looked exactly like a slow one until the
+        fifteen-minute timeout, and by then nobody was watching."""
+        with tempfile.TemporaryDirectory() as tmp:
+            original = self.cc.JOBS_DIR
+            self.cc.JOBS_DIR = tmp
+            try:
+                job = "cc_20260902_064013_705894"
+                paths = self.cc._job_paths(job)
+                with open(paths["meta"], "w", encoding="utf-8") as f:
+                    # A pid that is certainly not this job.
+                    json.dump({"session_id": "x", "started": time.time() - 60,
+                               "pid": 999999}, f)
+                open(paths["err"], "w").close()
+                out = self.cc.result(job)
+            finally:
+                self.cc.JOBS_DIR = original
+        self.assertTrue(out["ready"])
+        self.assertFalse(out["ok"])
+        self.assertTrue(out["died"])
+
+    def test_a_job_without_a_pid_still_gets_its_timeout(self):
+        """Jobs written before the pid was recorded must not be declared dead
+        on the strength of a missing field."""
+        with tempfile.TemporaryDirectory() as tmp:
+            original = self.cc.JOBS_DIR
+            self.cc.JOBS_DIR = tmp
+            try:
+                job = "cc_alt"
+                paths = self.cc._job_paths(job)
+                with open(paths["meta"], "w", encoding="utf-8") as f:
+                    json.dump({"session_id": "x", "started": time.time() - 60}, f)
+                out = self.cc.result(job)
+            finally:
+                self.cc.JOBS_DIR = original
+        self.assertFalse(out["ready"])
+        self.assertEqual(out["elapsed"], 60)
+
+    def test_a_reused_pid_is_not_mistaken_for_the_job(self):
+        """os.kill(pid, 0) says only that SOMETHING has that pid, and pids are
+        reused. The command line still carries the job id."""
+        self.assertTrue(self.cc._alive(os.getpid(), "cc_nope") is False)
+
     def test_job_id_must_be_a_job_id(self):
         for bad in ("../x", "cc_../../etc", "nope"):
             with self.assertRaises(ValueError, msg=bad):

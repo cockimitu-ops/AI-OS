@@ -124,6 +124,24 @@ an answer survives the app being closed, the service restarting, or the phone
 changing network — the same lesson `/api/chat` learned when a 93-second reply
 arrived as "failed to fetch".
 
+That claim was false when it was first written, and it cost a real message.
+On 2026-09-02 Felix sent one from his phone at 06:40; an unattended apt
+upgrade had needrestart bounce this unit at 06:44, and the turn died with it.
+`start_new_session=True` detaches a child from the terminal session, not from
+systemd's control group, and the default `KillMode=control-group` kills
+everything in the group. The unit sets `KillMode=process` now. Three things
+follow from that morning, all three tested:
+
+- **The job outlives a restart of this service.** Verified by restarting it
+  mid-turn and collecting the answer afterwards.
+- **A dead job says so.** The pid is recorded and checked against
+  `/proc/<pid>/cmdline`, so a killed turn is reported in seconds instead of
+  looking identical to a slow one until the 15-minute timeout — which is what
+  actually happened, and by then nobody was still watching the screen.
+- **A closed page picks the answer back up.** The ticket is kept in
+  localStorage and polling resumes when the chat opens, because on a phone the
+  page not surviving is the normal case, not the exception.
+
 The local worker chat is still there behind `/api/chat` and is what the
 Telegram bridge uses.
 

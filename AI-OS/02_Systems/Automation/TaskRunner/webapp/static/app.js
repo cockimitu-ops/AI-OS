@@ -6,6 +6,11 @@
 const TOKEN_KEY = "aios_web_token";
 const THREAD_KEY = "aios_thread_id";
 const SESSION_KEY = "aios_claude_session";
+// The job currently being answered. Written down because a phone browser is
+// not a place a request survives: lock the screen, switch apps, or let the
+// page reload, and the poll that was waiting for the answer is gone with it -
+// while the answer itself carries on being written to a file on the server.
+const PENDING_KEY = "aios_claude_job";
 
 function getToken() { return localStorage.getItem(TOKEN_KEY) || ""; }
 function setToken(t) { localStorage.setItem(TOKEN_KEY, t.trim()); }
@@ -481,6 +486,43 @@ async function loadChat() {
   // which is "immer vom letzten genutzten chat" - open the app and you are
   // where you left off without choosing anything.
   await openSession(localStorage.getItem(SESSION_KEY) || "");
+  resumePending();
+}
+
+// Pick a turn back up that this page was not around for.
+//
+// Felix sent a message from his phone and never got an answer: an unattended
+// system upgrade restarted the webapp four minutes later and took the job
+// with it. He could not tell, because closing the chat also ended the only
+// thing that was watching for a reply. Now the ticket outlives the page.
+async function resumePending() {
+  let job;
+  try {
+    job = JSON.parse(localStorage.getItem(PENDING_KEY) || "null");
+  } catch (_) { return; }
+  if (!job || !job.id) return;
+  if (chatSession && job.session && job.session !== chatSession.id) return;
+  if (chatInFlight) return;
+  const bubble = addBubble("hole die Antwort von vorhin …", "bot pending");
+  chatInFlight = true;
+  try {
+    const res = await pollClaude(job.id, bubble);
+    bubble.remove();
+    localStorage.removeItem(PENDING_KEY);
+    chatInFlight = false;
+    // Re-read rather than write the reply into a bubble. The turn finished on
+    // the server, so it is already in the transcript - appending it here as
+    // well showed the answer twice.
+    if (res.ok) return openSession(job.session);
+    addBubble(res.error || "fehlgeschlagen", "bubble bot err");
+    return;
+  } catch (err) {
+    bubble.textContent = `Die Antwort ist nicht mehr da: ${err.message}`;
+    bubble.className = "bubble bot err";
+  } finally {
+    localStorage.removeItem(PENDING_KEY);
+    chatInFlight = false;
+  }
 }
 
 document.getElementById("chat-session").addEventListener("click", async () => {
@@ -564,6 +606,10 @@ chatForm.addEventListener("submit", async (e) => {
       body: JSON.stringify({ session_id: chatSession.id, message: text }),
     });
     setConnDot("ok");
+    try {
+      localStorage.setItem(PENDING_KEY, JSON.stringify(
+        { id: queued.job_id, session: chatSession.id, at: Date.now() }));
+    } catch (_) {}
     const res = await pollClaude(queued.job_id, pending);
     pending.textContent = res.reply || (res.ok ? "(keine Antwort)" : res.error || "fehlgeschlagen");
     pending.className = `bubble bot${res.ok ? "" : " err"}`;
@@ -580,6 +626,7 @@ chatForm.addEventListener("submit", async (e) => {
     pending.className = "bubble bot err";
     setConnDot("err");
   } finally {
+    try { localStorage.removeItem(PENDING_KEY); } catch (_) {}
     chatInFlight = false;
     document.getElementById("chat-send").disabled = false;
   }
