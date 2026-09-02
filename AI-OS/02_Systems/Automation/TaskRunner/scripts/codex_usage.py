@@ -30,7 +30,35 @@ def _read(proc, expected_id, timeout=TIMEOUT_S):
     raise RuntimeError("Codex usage response timed out")
 
 
-def read_rate_limits():
+# Spawning the app server costs a subprocess, and next_engine() asks about
+# every candidate. Cached like the login check, and short enough that hitting
+# a wall becomes visible within the minute.
+_CACHE_TTL_S = 45
+_cache = {"at": 0.0, "value": None}
+
+
+def read_rate_limits(force=False):
+    now = time.time()
+    if not force and _cache["value"] and now - _cache["at"] < _CACHE_TTL_S:
+        return _cache["value"]
+    value = _read_rate_limits()
+    _cache.update(at=now, value=value)
+    return value
+
+
+def reached():
+    """-> (True, why) when the account itself says it is out."""
+    data = read_rate_limits()
+    if not data.get("live"):
+        return False, ""
+    if data.get("reached"):
+        return True, f"Codex-Kontingent erreicht ({data['reached']})"
+    if data.get("spend_control_reached"):
+        return True, "Codex-Ausgabengrenze erreicht"
+    return False, ""
+
+
+def _read_rate_limits():
     """Return the account's real rate-limit snapshot, or a safe error record."""
     try:
         proc = subprocess.Popen([BIN, "app-server", "--stdio"], text=True,
@@ -45,11 +73,27 @@ def read_rate_limits():
         proc.stdin.flush()
         result = _read(proc, 2)
         limits = result.get("rateLimits") or {}
-        primary = limits.get("primary") or {}
+        # Both windows, and the account's own verdict. Reading only `primary`
+        # showed 13% of a 30-day window while Felix was standing in front of a
+        # wall - the short window and rateLimitReachedType are where a real
+        # refusal shows up, and they were being thrown away.
+        def window(row):
+            row = row or {}
+            if not row:
+                return None
+            return {"used_percent": row.get("usedPercent"),
+                    "window_minutes": row.get("windowDurationMins"),
+                    "resets_at": row.get("resetsAt")}
+
+        primary = window(limits.get("primary"))
         return {"live": True, "plan": limits.get("planType"),
-                "used_percent": primary.get("usedPercent"),
-                "window_minutes": primary.get("windowDurationMins"),
-                "resets_at": primary.get("resetsAt"),
+                # Kept flat as well so the existing cost view keeps working.
+                "used_percent": (primary or {}).get("used_percent"),
+                "window_minutes": (primary or {}).get("window_minutes"),
+                "resets_at": (primary or {}).get("resets_at"),
+                "primary": primary, "secondary": window(limits.get("secondary")),
+                "reached": limits.get("rateLimitReachedType"),
+                "spend_control_reached": bool(limits.get("spendControlReached")),
                 "credits": limits.get("credits") or {}}
     except (OSError, RuntimeError, ValueError) as exc:
         return {"live": False, "error": str(exc)[:180]}

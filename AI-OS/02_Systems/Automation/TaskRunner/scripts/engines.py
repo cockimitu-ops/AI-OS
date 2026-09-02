@@ -126,7 +126,21 @@ def clear_limit(engine):
 
 
 def limited(engine):
-    """-> the remembered limit if it is still believed, else None."""
+    """-> the limit if this engine is out, else None.
+
+    Two sources, and the first one matters more: some engines can be asked
+    outright how much allowance is left, which means a wall can be seen
+    before it is hit rather than after. The remembered refusal is the
+    fallback for the ones that only say no in the moment."""
+    if engine == "codex":
+        try:
+            import codex_usage
+            out, why = codex_usage.reached()
+            if out:
+                return {"at": time.time(), "message": why, "resets": None,
+                        "until": time.time() + LIMIT_ASSUME_S, "live": True}
+        except Exception:  # noqa: BLE001 - a usage read must never block routing
+            pass
     row = _limits().get(engine)
     if not row:
         return None

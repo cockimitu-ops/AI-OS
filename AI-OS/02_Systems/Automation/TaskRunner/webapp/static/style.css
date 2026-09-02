@@ -429,6 +429,9 @@ h2.section-title {
 /* --- chips / buttons --------------------------------------------------- */
 
 .chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+/* The alternatives shown when an engine runs out. Indented like a reply and
+   quiet, because it is an offer, not the answer. */
+.switch-row { align-self: flex-start; max-width: 92%; margin: 2px 0 6px; }
 .chip {
   font: inherit; font-size: 0.82rem; color: var(--text-dim);
   background: var(--pane); border: 1px solid var(--edge-soft);

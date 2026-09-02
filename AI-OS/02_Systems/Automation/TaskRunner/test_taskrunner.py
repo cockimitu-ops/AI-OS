@@ -4946,6 +4946,35 @@ class TestLimitHandoff(unittest.TestCase):
             for name, fn in avail.items():
                 self.en.ENGINES[name]["available"] = fn
 
+    def test_an_account_that_says_it_is_out_is_believed_before_the_wall(self):
+        """Some engines can be asked how much allowance is left, which means a
+        limit can be seen before it is hit rather than after. Codex reports
+        its own rateLimitReachedType; when that is set, routing skips it
+        without spending a turn to find out."""
+        import codex_usage
+        real = codex_usage.reached
+        codex_usage.reached = lambda: (True, "Codex-Kontingent erreicht (primary)")
+        try:
+            row = self.en.limited("codex")
+            self.assertIsNotNone(row)
+            self.assertIn("Kontingent", row["message"])
+            self.assertTrue(row["live"])
+        finally:
+            codex_usage.reached = real
+
+    def test_a_usage_read_that_fails_never_blocks_routing(self):
+        """Knowing the allowance is a convenience; being able to route is not.
+        A broken usage read must fall through to the remembered refusal."""
+        import codex_usage
+        real = codex_usage.reached
+        def boom():
+            raise RuntimeError("app server unreachable")
+        codex_usage.reached = boom
+        try:
+            self.assertIsNone(self.en.limited("codex"))
+        finally:
+            codex_usage.reached = real
+
     def test_an_engine_that_is_out_is_not_asked_again(self):
         """Sending into a wall that answered "session limit" five minutes ago
         is not respecting a choice, it is wasting a turn."""

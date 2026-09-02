@@ -654,7 +654,7 @@ async function loadSessionListInto(root) {
 
 // Backs off from 1.5s to 6s. A Claude turn on a large session is minutes, not
 // seconds, so a tight poll would be thousands of pointless requests.
-async function pollEngine(engine, job, bubble) {
+async function pollEngine(engine, job, bubble, onHandoff) {
   const started = Date.now();
   let wait = 1500;
   for (;;) {
@@ -681,6 +681,7 @@ async function pollEngine(engine, job, bubble) {
       chatLog.insertBefore(note, bubble);
       engine = res.engine;
       job = res.job;
+      if (onHandoff) onHandoff(res.engine);
       chatLog.scrollTop = chatLog.scrollHeight;
       continue;
     }
@@ -703,22 +704,30 @@ chatInput.addEventListener("keydown", (e) => {
   }
 });
 
-chatForm.addEventListener("submit", async (e) => {
+chatForm.addEventListener("submit", (e) => {
   e.preventDefault();
-  if (chatInFlight) return;
   const text = chatInput.value.trim();
   if (!text) return;
-  const spec = engineSpec();
-  if (spec && !spec.available) {
-    addBubble(spec.reason, "bot err");
-    return;
-  }
   chatInput.value = "";
   chatInput.style.height = "auto";
+  sendMessage(text);
+});
+
+// Split out of the submit handler so a "ask Google instead" button can send
+// the same question again without retyping it.
+async function sendMessage(text) {
+  if (chatInFlight) return;
+  const spec = engineSpec();
+  if (spec && !spec.available) {
+    const bubble = addBubble(spec.reason, "bot err");
+    renderEngineSwitch(null, text);
+    return;
+  }
   addBubble(text, "me");
   const pending = addBubble("denkt nach …", "bot pending");
   chatInFlight = true;
   document.getElementById("chat-send").disabled = true;
+  let askedEngine = chatEngine;
   try {
     const queued = await api("/api/engine-send", {
       method: "POST",
@@ -734,12 +743,13 @@ chatForm.addEventListener("submit", async (e) => {
       note.className = "bubble tool";
       note.textContent = `↪ ${queued.handed_off.note}`;
       chatLog.insertBefore(note, pending);
+      askedEngine = queued.engine;
     }
     try {
       localStorage.setItem(PENDING_KEY, JSON.stringify(
         { id: queued.job, engine: queued.engine, session: chatSession?.id, at: Date.now() }));
     } catch (_) {}
-    const res = await pollEngine(queued.engine, queued.job, pending);
+    const res = await pollEngine(queued.engine, queued.job, pending, (to) => { askedEngine = to; });
     pending.textContent = res.reply || (res.ok ? "(keine Antwort)" : res.error || "fehlgeschlagen");
     pending.className = `bubble bot${res.ok ? "" : " err"}`;
     const bits = [];
@@ -752,18 +762,54 @@ chatForm.addEventListener("submit", async (e) => {
       note.textContent = bits.join(" · ");
       chatLog.appendChild(note);
     }
+    // Whether it was handed off or simply refused, the alternatives go on
+    // screen. A limit is the one moment where the next tap should not be
+    // "open the picker, find the engine, retype the question".
+    if (!res.ok || askedEngine !== chatEngine) {
+      renderEngineSwitch(null, text, askedEngine);
+    }
     chatLog.scrollTop = chatLog.scrollHeight;
     refreshCostPill();
   } catch (err) {
     pending.textContent = `Fehler: ${err.message}`;
     pending.className = "bubble bot err";
     setConnDot("err");
+    renderEngineSwitch(null, text, askedEngine);
   } finally {
     try { localStorage.removeItem(PENDING_KEY); } catch (_) {}
     chatInFlight = false;
     document.getElementById("chat-send").disabled = false;
   }
-});
+}
+
+
+// --- switching engines the moment one runs out ------------------------------
+//
+// The automatic handoff answers the question "how do I get an answer at all".
+// It does not answer "I would rather Google took this one". Felix asked for a
+// direct button, so a limit now also puts the alternatives on screen: one tap
+// re-asks the same question somewhere else and remembers the choice.
+
+function renderEngineSwitch(before, message, exclude) {
+  const skip = new Set([exclude || chatEngine]);
+  const options = engineList.filter((e) => e.available && !skip.has(e.id));
+  if (!options.length || !message) return;
+  const row = document.createElement("div");
+  row.className = "chip-row switch-row";
+  row.innerHTML = `<span class="hint" style="width:100%;margin:0 0 4px">Stattdessen fragen:</span>`
+    + options.map((e) => `<button class="chip" data-switch="${e.id}">${escapeHtml(e.label)}</button>`).join("");
+  chatLog.insertBefore(row, before || null);
+  chatLog.scrollTop = chatLog.scrollHeight;
+  row.querySelectorAll("[data-switch]").forEach((el) => el.addEventListener("click", () => {
+    if (window.fxTap) window.fxTap();
+    chatEngine = el.dataset.switch;
+    try { localStorage.setItem(ENGINE_KEY, chatEngine); } catch (_) {}
+    row.remove();
+    const spec = engineSpec();
+    setChatBar(`${spec ? spec.label : chatEngine} · ${currentModel() || ""}`, "");
+    sendMessage(message);
+  }));
+}
 
 // --- device control --------------------------------------------------------
 
