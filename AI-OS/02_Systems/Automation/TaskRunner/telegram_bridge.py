@@ -29,6 +29,7 @@ import memory
 import proposals
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts"))
 import study_agent  # noqa: E402  (capture path for /lernen)
+import shared_briefing  # noqa: E402
 
 
 def _split_agent_prefix(text):
@@ -84,6 +85,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     instruction = update.message.text.strip()
     if not instruction:
         return
+
+    # Every user turn, on every channel, before it is dispatched anywhere -
+    # see shared_briefing.py's module docstring for why.
+    shared_briefing.record_event("telegram", instruction)
 
     # Per-chat thread: the conversation you are already in is the unit of
     # memory, which is what makes a bare "now do the same for X" work.

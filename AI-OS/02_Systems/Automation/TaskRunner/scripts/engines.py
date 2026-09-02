@@ -51,6 +51,8 @@ import claude_chat
 import codex_chat
 import gemini_chat
 import antigravity_chat
+import conversation_store
+import shared_briefing
 
 JOB_RE = re.compile(r"[a-z]{2,8}_[\w.-]{1,60}")
 # A turn that has produced nothing for this long is not slow, it is gone.
@@ -335,19 +337,31 @@ def catalogue():
     return out
 
 
-def send(engine, message, model=None, thread=None, session=None, fallback=True):
+def send(engine, message, model=None, thread=None, session=None, fallback=True,
+        conversation_id=None, _record_input=True):
     """Ask one engine. -> a ticket that result() can collect.
 
     If that engine is already known to be out - it refused within the last
     hour and has not reset - the work goes to the next one instead and the
     ticket says so. Sending into a wall that answered "session limit" five
-    minutes ago is not respecting a choice, it is wasting a turn."""
+    minutes ago is not respecting a choice, it is wasting a turn.
+
+    conversation_id, when given, must already exist (created through
+    conversation_store.create() / POST /api/conversations). It does two
+    things: non-Claude engines get the conversation's recent turns prepended
+    as bounded context (they have no memory of their own - Claude does, via
+    its native session), and the user's turn is recorded once. _record_input
+    is False only on the internal recursive calls this function makes to
+    itself (a limit handoff) - the turn was already recorded by the call
+    that discovered the limit, and recording it again would duplicate it."""
     spec = ENGINES.get(engine)
     if not spec:
         raise ValueError(f"unbekannte Engine: {engine!r}")
     ok, reason = spec["available"]()
     if not ok:
         raise ValueError(reason)
+    if conversation_id and not conversation_store.exists(conversation_id):
+        raise ValueError(f"unbekannte conversation_id: {conversation_id!r}")
 
     row = limited(engine) if fallback else None
     if row:
@@ -357,7 +371,8 @@ def send(engine, message, model=None, thread=None, session=None, fallback=True):
                     + (f" (zurück {row['resets']})" if row.get("resets") else "")
                     + f" — {ENGINES[nxt]['label']} übernimmt.")
             _tell_felix(note + f"\n\nFrage: {message.strip()[:300]}")
-            ticket = send(nxt, message, thread=thread, fallback=False)
+            ticket = send(nxt, message, thread=thread, fallback=False,
+                         conversation_id=conversation_id, _record_input=False)
             ticket["handed_off"] = {"from": engine, "to": nxt,
                                     "note": note, "limit": row}
             return ticket
@@ -368,29 +383,44 @@ def send(engine, message, model=None, thread=None, session=None, fallback=True):
     if model not in spec["models"]:
         raise ValueError(f"{spec['label']} kennt das Modell {model!r} nicht")
 
-    if engine == "claude":
-        return {"engine": "claude",
-                "job": claude_chat.send(session or "", message, model=model)}
+    outgoing = message
+    if conversation_id:
+        if engine != "claude":
+            # Claude keeps its own memory in its native session; every other
+            # engine is a one-shot call, and this bounded block IS its
+            # memory of the conversation so far.
+            context = conversation_store.format_context(conversation_id)
+            if context:
+                outgoing = f"{context}\n\n## Neue Nachricht\n{message}"
+        elif not session:
+            record = conversation_store.read(conversation_id)
+            session = (record or {}).get("session_id") or None
+        if _record_input:
+            conversation_store.append(conversation_id, "user", message)
 
-    if engine == "google-pro":
-        return {"engine": "google-pro", "job": _spawn(
+    if engine == "claude":
+        ticket = {"engine": "claude",
+                 "job": claude_chat.send(session or "", message, model=model)}
+    elif engine == "google-pro":
+        ticket = {"engine": "google-pro", "job": _spawn(
             "gpro",
             lambda prompt_path, _text: [
                 "python3", os.path.join(SCRIPT_DIR, "antigravity_chat.py"),
                 "--json", "--model", model, "--prompt-file", prompt_path],
-            message, meta={"model": model, "thread": thread}, cwd=claude_chat.PROJECT_DIR)}
-
-
-    if engine == "codex":
-        return {"engine": "codex", "job": _spawn(
+            outgoing, meta={"model": model, "thread": thread}, cwd=claude_chat.PROJECT_DIR)}
+    elif engine == "codex":
+        ticket = {"engine": "codex", "job": _spawn(
             "cdx",
             lambda prompt_path, _text: [
                 "python3", os.path.join(SCRIPT_DIR, "codex_chat.py"),
                 "--json", "--model", model, "--prompt-file", prompt_path],
-            message, meta={"model": model}, cwd=claude_chat.PROJECT_DIR)}
-
-    # aios: the same task file dispatch_task.py and telegram_bridge.py write.
-    return {"engine": "aios", "job": _aios_send(message, thread, model)}
+            outgoing, meta={"model": model}, cwd=claude_chat.PROJECT_DIR)}
+    else:
+        # aios: the same task file dispatch_task.py and telegram_bridge.py
+        # write.
+        ticket = {"engine": "aios", "job": _aios_send(outgoing, thread, model)}
+    ticket["conversation_id"] = conversation_id
+    return ticket
 
 
 def _aios_send(message, thread, model):
@@ -405,12 +435,22 @@ def _aios_send(message, thread, model):
     if not message:
         raise ValueError("nach dem @agent-Präfix steht nichts")
     memory_thread = f"web_{thread or 'engine'}"
+    # The thread directive must stay the very first thing in the file -
+    # aios_runner.py's parser only recognises it anchored at position 0 - so
+    # anything else added here goes after it and after the agent directive,
+    # never before.
     body = (memory.directive(memory_thread)
             + (agents.directive(agent) if agent else ""))
     # The worker reads its model preference from the task itself, so "free"
     # and "paid" are a line in the file rather than a second code path.
     if model in ("free", "paid"):
         body += f"<!-- models: {model} -->\n"
+    # aios_runner.py loads Knowledge_Core.md itself but knows nothing of the
+    # shared event journal - unlike codex/google-pro, which pick it up
+    # automatically through shared_briefing.prepend() inside their own ask().
+    activity = shared_briefing.recent_activity()
+    if activity:
+        body += activity + "\n\n"
     body += message
     for d in (INBOX, LOGS):
         os.makedirs(d, exist_ok=True)
@@ -444,7 +484,28 @@ def job_message(engine, job):
         return ""
 
 
-def result(engine, job, fallback=True, notify=True):
+def _record_conversation(engine, job, res, conversation_id):
+    """Idempotent on job (append() itself dedupes by job_id) - a client that
+    polls the same finished ticket twice, or a browser and a background
+    watcher racing the same job, must never produce two stored replies.
+
+    Only a genuine success is stored, same rule memory.py already uses for
+    the local worker: "ERROR: all models failed" replayed as context on the
+    next turn teaches nothing and wastes the budget a real turn needs."""
+    if not conversation_id or not res.get("ready") or not res.get("ok"):
+        return
+    conversation_store.append(conversation_id, "assistant", res.get("reply") or "",
+                              job_id=job, model=res.get("model"))
+    if engine == "claude" and res.get("session_id"):
+        conversation_store.set_session_id(conversation_id, res["session_id"])
+    try:
+        import knowledge_store
+        knowledge_store.save(conversation_id, engine, text=None, source="auto")
+    except Exception:  # noqa: BLE001 - a knowledge-save failure must not cost
+        pass            # the reply itself
+
+
+def result(engine, job, fallback=True, notify=True, conversation_id=None):
     """Collect that ticket - and if it died on a limit, hand the work on.
 
     The handoff returns a NEW ticket rather than an answer: the next engine
@@ -452,10 +513,12 @@ def result(engine, job, fallback=True, notify=True):
     which is the same thing it was already doing."""
     res = _raw_result(engine, job)
     if not (res.get("ready") and not res.get("ok") and is_limit(res.get("error"))):
+        _record_conversation(engine, job, res, conversation_id)
         return res
 
     row = mark_limited(engine, res.get("error"))
     if not fallback:
+        _record_conversation(engine, job, res, conversation_id)
         return res
     message = job_message(engine, job)
     nxt = next_engine(engine)
@@ -467,13 +530,16 @@ def result(engine, job, fallback=True, notify=True):
                         + (f" (zurück {row['resets']})" if row.get("resets") else "")
                         + (". Keine andere Engine ist gerade frei."
                            if not nxt else ". Die Frage ist nicht mehr auffindbar."))
+        _record_conversation(engine, job, res, conversation_id)
         return res
 
     try:
-        ticket = send(nxt, message, thread=_job_thread(engine, job))
+        ticket = send(nxt, message, thread=_job_thread(engine, job),
+                      conversation_id=conversation_id, _record_input=False)
     except ValueError as e:
         res["limit"] = row
         res["error"] = f"{ENGINES[engine]['label']} am Limit, {nxt} auch nicht möglich: {e}"
+        _record_conversation(engine, job, res, conversation_id)
         return res
 
     note = (f"{ENGINES[engine]['label']} ist am Limit"
@@ -483,7 +549,8 @@ def result(engine, job, fallback=True, notify=True):
         _tell_felix(note + f"\n\nFrage: {message[:300]}")
     return {"ready": False, "handed_off": {"from": engine, "to": nxt,
                                            "note": note, "limit": row},
-            "engine": nxt, "job": ticket["job"], "elapsed": 0}
+            "engine": nxt, "job": ticket["job"], "elapsed": 0,
+            "conversation_id": conversation_id}
 
 
 def _job_thread(engine, job):

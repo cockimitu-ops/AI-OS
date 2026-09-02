@@ -310,14 +310,23 @@ def _job_paths(job_id):
 
 
 def send(session_id, message, project=None, model=None):
-    """Continue a session with one message. -> job id, immediately.
+    """Continue a session with one message, or start a new one. -> job id,
+    immediately.
+
+    An empty session_id means "start fresh": omitting --resume entirely
+    rather than raising was the one thing this could not do before - the
+    only way to get a new Claude conversation from the web app was to
+    already have a session id, which nothing could ever hand you the first
+    time. `claude -p` without --resume creates one, and its id comes back in
+    the job's result (see result() below), the same as after any other turn.
 
     Detached on purpose. A turn regularly takes minutes, and a phone browser
     will not hold a request open that long - the web chat already learned
     this once (see api.py's post_chat). The job writes its result to a file,
     so the answer also survives the app being closed, the webapp restarting,
     or the phone changing network."""
-    if not SESSION_ID_RE.fullmatch(session_id or ""):
+    session_id = (session_id or "").strip()
+    if session_id and not SESSION_ID_RE.fullmatch(session_id):
         raise ValueError("ungültige session id")
     message = (message or "").strip()
     if not message:
@@ -327,12 +336,14 @@ def send(session_id, message, project=None, model=None):
     p = _job_paths(job_id)
     with open(p["prompt"], "w", encoding="utf-8") as f:
         f.write(message)
+    resume_part = f"--resume {shlex.quote(session_id)} " if session_id else ""
+    model_part = f"--model {shlex.quote(model)} " if model else ""
     # Written as a shell line so the rename can happen in the same detached
     # process: the presence of the .json file is then the only "is it done"
     # signal the poller needs, and it can never observe a half-written one.
     cmd = (
-        f"{shlex.quote(CLAUDE_BIN)} -p --resume {shlex.quote(session_id)}"
-        f" --output-format json --dangerously-skip-permissions"
+        f"{shlex.quote(CLAUDE_BIN)} -p {resume_part}{model_part}"
+        f"--output-format json --dangerously-skip-permissions"
         f" < {shlex.quote(p['prompt'])}"
         f" > {shlex.quote(p['part'])} 2> {shlex.quote(p['err'])};"
         f" mv {shlex.quote(p['part'])} {shlex.quote(p['out'])}"

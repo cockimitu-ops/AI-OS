@@ -26,18 +26,22 @@ from datetime import datetime
 
 import agents
 import claude_chat
+import conversation_store
 import cost_board
 import engines
 import gemini_chat
+import knowledge_store
 import memory
 import money_board
 import dmarc_prospector
 import flip_log
+import notifications
 import phone
 import phone_root
 import phone_stream
 import pico
 import proposals
+import shared_briefing
 import snipe_rank
 import study_agent
 import vault_write
@@ -1095,6 +1099,10 @@ def post_chat(body):
     if not message:
         return 400, {"error": "no message text after the @agent prefix"}
 
+    # Every user turn, on every channel, before it is dispatched anywhere -
+    # see shared_briefing.py's module docstring for why.
+    shared_briefing.record_event("web-chat", message, engine="aios")
+
     # `web_` prefix on the client-generated id keeps this namespace distinct
     # from Telegram's `tg_<chat_id>` threads on disk - two front doors, never
     # the same conversation by accident.
@@ -1216,9 +1224,11 @@ def get_claude_transcript(body):
 
 def post_claude_send(body):
     body = body or {}
+    message = body.get("message") or ""
+    shared_briefing.record_event("web-claude", message, engine="claude")
     try:
-        job_id = claude_chat.send((body.get("session_id") or "").strip(),
-                                  body.get("message") or "")
+        job_id = claude_chat.send((body.get("session_id") or "").strip(), message,
+                                  model=(body.get("model") or None))
     except ValueError as e:
         return 400, {"error": str(e)}
     return 200, {"job_id": job_id, "pending": True}
@@ -1300,13 +1310,18 @@ def get_engines(_body):
 
 def post_engine_send(body):
     body = body or {}
+    engine = (body.get("engine") or "claude").strip()
+    message = body.get("message") or ""
+    conversation_id = (body.get("conversation_id") or "").strip() or None
+    # Before dispatch, unconditionally - see shared_briefing.py.
+    shared_briefing.record_event("web-engine", message, engine=engine)
     try:
         ticket = engines.send(
-            (body.get("engine") or "claude").strip(),
-            body.get("message") or "",
+            engine, message,
             model=(body.get("model") or None),
             thread=(body.get("thread") or None),
-            session=(body.get("session") or None))
+            session=(body.get("session") or None),
+            conversation_id=conversation_id)
     except ValueError as e:
         return 400, {"error": str(e)}
     return 200, {"pending": True, **ticket}
@@ -1315,10 +1330,113 @@ def post_engine_send(body):
 def post_engine_result(body):
     body = body or {}
     try:
-        return 200, engines.result((body.get("engine") or "").strip(),
-                                   (body.get("job") or "").strip())
+        return 200, engines.result(
+            (body.get("engine") or "").strip(),
+            (body.get("job") or "").strip(),
+            conversation_id=(body.get("conversation_id") or "").strip() or None)
     except ValueError as e:
         return 400, {"error": str(e)}
+
+
+def post_background_task(body):
+    """Same engine dispatch as post_engine_send, plus a server-side watcher so
+    the completion is there even if the browser that started it never polls
+    again - the whole reason Felix asked for this being that a background
+    task is supposed to be exactly that: started, then left alone."""
+    body = body or {}
+    engine = (body.get("engine") or "claude").strip()
+    if engine not in engines.ENGINES:
+        return 400, {"error": f"unbekannte Engine: {engine!r}"}
+    message = (body.get("message") or "").strip()
+    if not message:
+        return 400, {"error": "message is required"}
+    conversation_id = (body.get("conversation_id") or "").strip() or None
+    if conversation_id and not conversation_store.exists(conversation_id):
+        return 400, {"error": f"unbekannte conversation_id: {conversation_id!r}"}
+    if not conversation_id:
+        try:
+            conversation_id = conversation_store.create(engine, title=message)
+        except ValueError as e:
+            return 400, {"error": str(e)}
+    shared_briefing.record_event("background-task", message, engine=engine)
+    try:
+        ticket = engines.send(engine, message, conversation_id=conversation_id)
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    notifications.watch_job(ticket["engine"], ticket["job"],
+                            conversation_id=conversation_id,
+                            preview=message[:120])
+    return 200, {"pending": True, "background": True, **ticket}
+
+
+def get_notifications(body):
+    unread_only = bool((body or {}).get("unread_only"))
+    limit = min(int((body or {}).get("limit") or 50), 200)
+    return 200, {"notifications": notifications.list_notifications(
+        unread_only=unread_only, limit=limit)}
+
+
+def post_notification_read(body):
+    ok = notifications.mark_read((body or {}).get("id"))
+    if not ok:
+        return 400, {"error": "unbekannte notification id"}
+    return 200, {"ok": True}
+
+
+def post_knowledge_save(body):
+    """The manual half of knowledge capture - the automatic half runs after
+    every successful engine reply, see engines._record_conversation(). Both
+    end up in the same store with the same source references."""
+    body = body or {}
+    conversation_id = (body.get("conversation_id") or "").strip() or None
+    if not conversation_id:
+        return 400, {"error": "conversation_id is required"}
+    if not conversation_store.exists(conversation_id):
+        return 400, {"error": f"unbekannte conversation_id: {conversation_id!r}"}
+    record = conversation_store.read(conversation_id)
+    text = body.get("text")
+    saved = knowledge_store.save(conversation_id, record.get("engine"),
+                                 text=(text.strip() if isinstance(text, str) and text.strip()
+                                       else None))
+    return 200, {"ok": True, "saved": saved}
+
+
+# --- conversations: one picker across all four engines ----------------------
+
+def post_conversations(body):
+    """list / create / read, all through one endpoint and one action field -
+    three tiny handlers were not worth three routes for what is, underneath,
+    one small store. See conversation_store.py for the persistence itself."""
+    body = body or {}
+    action = (body.get("action") or "").strip()
+    engine = (body.get("engine") or "").strip() or None
+
+    if action == "list":
+        return 200, {"conversations": conversation_store.list_conversations(
+            engine=engine, limit=min(int(body.get("limit") or 50), 200))}
+
+    if action == "create":
+        if not engine:
+            return 400, {"error": "engine is required"}
+        if engine not in engines.ENGINES:
+            return 400, {"error": f"unbekannte Engine: {engine!r}"}
+        try:
+            conversation_id = conversation_store.create(
+                engine, title=(body.get("title") or "").strip() or None)
+        except ValueError as e:
+            return 400, {"error": str(e)}
+        return 200, {"conversation": conversation_store.read(conversation_id)}
+
+    if action == "read":
+        conversation_id = (body.get("conversation_id") or "").strip()
+        if not conversation_id:
+            return 400, {"error": "conversation_id is required"}
+        record = conversation_store.read(conversation_id)
+        if not record:
+            return 404, {"error": f"unbekannte conversation_id: {conversation_id!r}"}
+        return 200, {"conversation": record}
+
+    return 400, {"error": f"unbekannte action: {action!r} (list|create|read)"}
 
 
 def get_gemini_thread(body):
