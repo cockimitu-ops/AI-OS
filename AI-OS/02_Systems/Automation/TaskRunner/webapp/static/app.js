@@ -11,6 +11,7 @@ const SESSION_KEY = "aios_claude_session";
 // page reload, and the poll that was waiting for the answer is gone with it -
 // while the answer itself carries on being written to a file on the server.
 const PENDING_KEY = "aios_claude_job";
+const LIGHT_KEY = "aios_light";
 
 function getToken() { return localStorage.getItem(TOKEN_KEY) || ""; }
 function setToken(t) { localStorage.setItem(TOKEN_KEY, t.trim()); }
@@ -2187,3 +2188,62 @@ function renderSnipeHealth(data) {
     }));
   litPanels(catsEl);
 }
+
+
+// --- the light, by hand ----------------------------------------------------
+//
+// fx.js follows the clock by default, which is the point of the design - the
+// app is cream at noon and prussian blue at two in the morning because Monet
+// painted the same haystack under both. But "what does dusk look like" is a
+// question you answer by looking, not by waiting until seven, so the clock
+// can be overruled.
+
+const LIGHT_NAMES = [
+  { id: "auto", label: "Uhrzeit", ground: null },
+  { id: "dawn", label: "Morgen", ground: "#ced4db" },
+  { id: "day", label: "Tag", ground: "#e9e3d5" },
+  { id: "dusk", label: "Abend", ground: "#c6a896" },
+  { id: "night", label: "Nacht", ground: "#161b2b" },
+];
+
+function applyStoredLight() {
+  let choice = "auto";
+  try { choice = localStorage.getItem(LIGHT_KEY) || "auto"; } catch (_) {}
+  if (window.fxSetLight) window.fxSetLight(choice === "auto" ? null : choice);
+  const btn = document.getElementById("light-btn");
+  if (btn) btn.classList.toggle("on", choice !== "auto");
+}
+
+function openLightSheet() {
+  if (window.fxTap) window.fxTap();
+  let choice = "auto";
+  try { choice = localStorage.getItem(LIGHT_KEY) || "auto"; } catch (_) {}
+  const raw = window.fxLight ? window.fxLight().name : "";
+  const now = (LIGHT_NAMES.find((l) => l.id === raw) || {}).label || raw;
+  openSheet(`
+    <p class="hint">Dasselbe Bild unter vier Lichtern. Normal folgt es der
+      Uhr — gerade ${escapeHtml(now)}.</p>
+    <div class="light-row">
+      ${LIGHT_NAMES.map((l) => `
+        <button class="light-swatch ${l.id === choice ? "on" : ""}" data-light="${l.id}">
+          <i style="background:${l.ground
+            ? l.ground
+            : "linear-gradient(135deg,#ced4db 0 25%,#e9e3d5 25% 50%,#c6a896 50% 75%,#161b2b 75%)"}"></i>
+          <span>${escapeHtml(l.label)}</span>
+        </button>`).join("")}
+    </div>`,
+    (root) => root.querySelectorAll("[data-light]").forEach((el) =>
+      el.addEventListener("click", () => {
+        const pick = el.dataset.light;
+        try { localStorage.setItem(LIGHT_KEY, pick); } catch (_) {}
+        applyStoredLight();
+        // Left open on purpose: picking a light is something you do two or
+        // three times in a row to compare them, and a sheet that closes after
+        // each tap turns that into six taps.
+        root.querySelectorAll("[data-light]").forEach((o) =>
+          o.classList.toggle("on", o.dataset.light === pick));
+      })));
+}
+
+document.getElementById("light-btn")?.addEventListener("click", openLightSheet);
+applyStoredLight();

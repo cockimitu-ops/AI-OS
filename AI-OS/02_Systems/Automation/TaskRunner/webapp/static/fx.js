@@ -89,6 +89,11 @@
     return "dusk";
   }
 
+  // A light Felix picked by hand, or null for "follow the clock". It has to
+  // live here rather than in the caller, because refreshLight() runs every
+  // minute and would otherwise paint over a deliberate choice within sixty
+  // seconds of it being made.
+  let manual = null;
   let light = LIGHTS[lightForHour(new Date().getHours())];
   let lightName = lightForHour(new Date().getHours());
 
@@ -230,7 +235,7 @@
   // than scheduled, because a phone that was asleep from midnight to eight
   // never runs a timer set for six.
   function refreshLight() {
-    const name = lightForHour(new Date().getHours());
+    const name = manual || lightForHour(new Date().getHours());
     document.body.dataset.light = name;
     if (name === lightName) return;
     lightName = name;
@@ -262,8 +267,16 @@
   start();
 
   // Exposed so a screenshot can be taken of any hour without waiting for it.
+  // Pick a light by hand, or pass nothing to hand it back to the clock.
   window.fxSetLight = function (name) {
+    if (!name || name === "auto") {
+      manual = null;
+      refreshLight();
+      return true;
+    }
     if (!LIGHTS[name]) return false;
+    manual = name;
+    if (name === lightName && document.body.dataset.light === name) return true;
     lightName = name;
     light = LIGHTS[name];
     document.body.dataset.light = name;
@@ -271,6 +284,12 @@
     buildMotes();
     if (!rafId) start();
     return true;
+  };
+
+  // What is being painted, and whether the clock or Felix decided it.
+  window.fxLight = function () {
+    return { name: lightName, auto: !manual,
+             names: Object.keys(LIGHTS) };
   };
 
   // --- entrance choreography ----------------------------------------------
