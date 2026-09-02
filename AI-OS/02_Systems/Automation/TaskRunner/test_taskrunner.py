@@ -4797,7 +4797,7 @@ class TestEngines(unittest.TestCase):
             rows = {e["id"]: e for e in self.en.catalogue()}
         finally:
             self.en.ENGINES["codex"]["available"] = original
-        self.assertEqual(set(rows), {"claude", "aios", "gemini", "google-pro", "codex"})
+        self.assertEqual(set(rows), {"claude", "aios", "google-pro", "codex"})
         for row in rows.values():
             self.assertTrue(row["models"], row["id"])
             self.assertIn(row["default_model"], row["models"], row["id"])
@@ -4938,7 +4938,6 @@ class TestLimitHandoff(unittest.TestCase):
             self.en.mark_limited("codex", "quota")
             self.assertEqual(self.en.next_engine("claude"), "google-pro")
             self.en.mark_limited("google-pro", "quota")
-            self.en.mark_limited("gemini", "quota")
             self.assertEqual(self.en.next_engine("claude"), "aios")
             self.en.mark_limited("aios", "quota")
             # Nowhere left. Saying so beats routing into a fourth wall.

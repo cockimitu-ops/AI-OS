@@ -2392,6 +2392,7 @@ applyStoredLight();
 function renderProviders(rows) {
   const el = document.getElementById("cost-providers");
   if (!el) return;
+  const reset = (value) => value ? new Date(typeof value === "number" ? value * 1000 : value).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
   el.innerHTML = rows.map((p) => {
     let body = "";
     let tone = p.available ? "var(--good)" : "var(--text-faint)";
@@ -2399,38 +2400,35 @@ function renderProviders(rows) {
 
     if (!p.available) {
       body = `<div class="sub">${escapeHtml(p.reason)}</div>`;
+    } else if ((p.id === "google-pro" || p.id === "codex") && p.subscription_usage) {
+      const u = p.subscription_usage;
+      if (!u.live) {
+        tone = "var(--gold)"; head = "nicht abrufbar";
+        body = `<div class="sub">${escapeHtml(u.error || "Kontingent gerade nicht abrufbar")}</div>`;
+      } else if (p.id === "codex") {
+        const used = Number(u.used_percent || 0), remaining = Math.max(0, 100 - used);
+        head = `${remaining}% übrig`;
+        body = `<div class="sub">${escapeHtml(u.plan || "Codex")}-Abo · ${used}% im ${Math.round((u.window_minutes || 0) / 1440)}-Tage-Fenster verbraucht</div>
+          <div class="meter ${used > 80 ? "warn" : ""}" style="margin-top:8px"><i style="width:${used.toFixed(1)}%"></i></div>
+          <div class="sub" style="margin-top:6px">Zurückgesetzt: ${reset(u.resets_at)}</div>`;
+      } else {
+        const buckets = u.buckets || [];
+        const lowest = buckets.reduce((n, b) => Math.min(n, Number(b.remaining_percent ?? 100)), 100);
+        head = `${lowest}% übrig`;
+        body = buckets.map((b) => `<div class="sub" style="margin-top:5px"><b>${escapeHtml(b.name || "Limit")}</b>: ${Number(b.remaining_percent || 0)}% übrig · zurück ${reset(b.resets_at)}</div>`).join("");
+      }
     } else if (p.id === "claude" && p.limit) {
       if (p.limit.hit) {
         tone = "var(--bad)";
         head = p.limit.resets ? `Limit — zurück ${p.limit.resets}` : "Limit erreicht";
-        body = `<div class="sub">${escapeHtml(p.limit.message)}</div>
-                <div class="sub" style="opacity:.65;margin-top:4px">zuletzt vor ${p.limit.ago_hours} h</div>`;
-      } else {
-        body = `<div class="sub">Kein Limit-Fehler in den letzten Läufen.
-          Es gibt keine Abfrage dafür — man erfährt es erst, wenn eine Antwort
-          daran scheitert.</div>`;
-      }
+        body = `<div class="sub">${escapeHtml(p.limit.message)}</div><div class="sub" style="opacity:.65;margin-top:4px">zuletzt vor ${p.limit.ago_hours} h</div>`;
+      } else body = `<div class="sub">Kein Limit-Fehler in den letzten Läufen.</div>`;
     } else if (p.id === "aios" && p.limit) {
       const pct = Math.min(100, (p.limit.spent_usd / (p.limit.budget_usd || 1)) * 100);
       if (p.limit.hit) { tone = "var(--bad)"; head = "Monatslimit erreicht"; }
-      body = `<div class="sub">$${usd(p.limit.spent_usd)} von $${usd(p.limit.budget_usd)} diesen Monat</div>
-              <div class="meter ${pct > 80 ? "warn" : ""}" style="margin-top:8px"><i style="width:${pct.toFixed(1)}%"></i></div>`;
-    } else if (p.id === "gemini") {
-      const used = (p.models_state || []).filter((m) => m.calls);
-      const blocked = (p.models_state || []).filter((m) => m.last_error);
-      if (blocked.length) { tone = "var(--gold)"; head = `${blocked.length} Modell(e) blockiert`; }
-      body = `<div class="sub">Kontingent gilt pro Modell — ein 429 auf dem
-                einen sagt nichts über das andere.</div>`
-        + (used.length ? `<div class="sub" style="margin-top:6px">${used.map((m) =>
-            `${escapeHtml(m.model)}: ${m.calls}× · ${(m.prompt_tokens || 0) + (m.output_tokens || 0)} tok`).join("<br>")}</div>` : "")
-        + (blocked.length ? `<div class="sub" style="margin-top:6px;color:var(--bad)">${blocked.map((m) =>
-            `${escapeHtml(m.model)}: ${escapeHtml((m.last_error || "").slice(0, 90))}`).join("<br>")}</div>` : "");
+      body = `<div class="sub">$${usd(p.limit.spent_usd)} von $${usd(p.limit.budget_usd)} diesen Monat</div><div class="meter ${pct > 80 ? "warn" : ""}" style="margin-top:8px"><i style="width:${pct.toFixed(1)}%"></i></div>`;
     }
-    return `<div class="card">
-      <div class="row"><h3>${escapeHtml(p.label)}</h3>
-        <span class="sub" style="color:${tone}">${escapeHtml(head)}</span></div>
-      ${body}
-    </div>`;
+    return `<div class="card"><div class="row"><h3>${escapeHtml(p.label)}</h3><span class="sub" style="color:${tone}">${escapeHtml(head)}</span></div>${body}</div>`;
   }).join("");
   litPanels(el);
 }

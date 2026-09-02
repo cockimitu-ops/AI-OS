@@ -39,6 +39,12 @@ AI-OS/02_Systems/Automation/TaskRunner/spend/openrouter_calls.jsonl
 AI-OS/02_Systems/Automation/TaskRunner/spend/claude_cost_cache.json
 # One directory per phone-sent Claude turn: the prompt Felix typed, the reply,
 # and its cost. His conversations, not source.
+# Per-turn engine jobs: the prompt, the reply and its cost. Runtime, and it
+# is Felix's conversations.
+AI-OS/02_Systems/Automation/TaskRunner/engine_jobs/*
+!AI-OS/02_Systems/Automation/TaskRunner/engine_jobs/.gitkeep
+AI-OS/02_Systems/Automation/TaskRunner/spend/engine_limits.json
+AI-OS/02_Systems/Automation/TaskRunner/spend/gemini_state.json
 AI-OS/02_Systems/Automation/TaskRunner/claude_jobs/*
 !AI-OS/02_Systems/Automation/TaskRunner/claude_jobs/.gitkeep
 # Live screen frames pulled off a phone.

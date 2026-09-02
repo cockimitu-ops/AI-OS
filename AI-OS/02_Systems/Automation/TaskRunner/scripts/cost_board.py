@@ -32,9 +32,10 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
+import antigravity_chat
 import claude_chat
+import codex_usage
 import engines
-import gemini_chat
 import spend_guard
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -279,13 +280,10 @@ def provider_limits():
                "models": spec["models"]}
         if spec["id"] == "claude":
             row["limit"] = claude_limit()
-        elif spec["id"] == "gemini":
-            # Per model, because the quota is per model: measured on
-            # 2026-09-02, gemini-3.1-pro-preview answered 429 while
-            # gemini-3-flash-preview answered fine, on the same key.
-            row["models_state"] = [
-                {"model": m, **(gemini_chat.state().get(m) or {})}
-                for m in spec["models"]]
+        elif spec["id"] == "google-pro":
+            row["subscription_usage"] = antigravity_chat.usage()
+        elif spec["id"] == "codex":
+            row["subscription_usage"] = codex_usage.read_rate_limits()
         elif spec["id"] == "aios":
             ledger = spend_guard.load_ledger()
             budget = float(os.environ.get("OPENROUTER_MONTHLY_BUDGET_USD",

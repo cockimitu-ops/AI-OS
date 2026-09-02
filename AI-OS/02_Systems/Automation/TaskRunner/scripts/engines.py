@@ -77,7 +77,7 @@ RESET_RE = re.compile(
 
 # Who takes over from whom. Roughly capability-descending, and every engine
 # appears so that a chain never runs out of somewhere to go.
-FALLBACK_ORDER = ["claude", "codex", "google-pro", "gemini", "aios"]
+FALLBACK_ORDER = ["claude", "codex", "google-pro", "aios"]
 LIMIT_STATE = os.path.join(TASK_RUNNER_DIR, "spend", "engine_limits.json")
 # How long a remembered limit is trusted when the engine did not say when it
 # resets. Long enough not to retry into the same wall every thirty seconds,
@@ -284,14 +284,6 @@ ENGINES = {
         "available": lambda: (True, ""),
         "threads": "thread",
     },
-    "gemini": {
-        "label": "Google",
-        "note": "Direkt an Googles API. Eigenes Kontingent pro Modell.",
-        "models": gemini_chat.MODELS,
-        "default_model": gemini_chat.DEFAULT_MODEL,
-        "available": _gemini_available,
-        "threads": "thread",
-    },
     "google-pro": {
         "label": "Google AI Pro",
         "note": "Google AI Pro über Antigravity CLI, mit dem angemeldeten Konto.",
@@ -303,7 +295,7 @@ ENGINES = {
 
     "codex": {
         "label": "Codex",
-        "note": "OpenAIs Codex-CLI, sobald installiert und angemeldet.",
+        "note": "OpenAIs Codex-CLI, angemeldet und bereit.",
         "models": codex_chat.MODELS,
         "default_model": codex_chat.DEFAULT_MODEL,
         "available": _codex_available,
@@ -360,15 +352,6 @@ def send(engine, message, model=None, thread=None, session=None, fallback=True):
     if engine == "claude":
         return {"engine": "claude",
                 "job": claude_chat.send(session or "", message, model=model)}
-
-    if engine == "gemini":
-        return {"engine": "gemini", "job": _spawn(
-            "gem",
-            lambda prompt_path, _text: [
-                "python3", os.path.join(SCRIPT_DIR, "gemini_chat.py"),
-                "--json", "--model", model, "--thread", thread or "web",
-                "--prompt-file", prompt_path],
-            message, meta={"model": model, "thread": thread})}
 
     if engine == "google-pro":
         return {"engine": "google-pro", "job": _spawn(

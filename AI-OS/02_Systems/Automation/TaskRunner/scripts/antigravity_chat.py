@@ -32,6 +32,24 @@ def available():
     return True, ""
 
 
+def usage():
+    """Live Google AI Pro Gemini allowance from Antigravity's signed-in account."""
+    argv = [BIN, "-p", "/usage", "--output-format", "json", "--print-timeout", "30s"]
+    try:
+        proc = subprocess.run(argv, cwd=PROJECT_DIR, capture_output=True, timeout=45)
+        data = json.loads((proc.stdout or b"").decode("utf-8", "replace"))
+        groups = ((data.get("command") or {}).get("data") or {}).get("groups") or []
+        gemini = next((g for g in groups if g.get("name") == "Gemini Models"), None)
+        if proc.returncode or not gemini:
+            raise GoogleProError("Google AI Pro usage is unavailable")
+        return {"live": True, "buckets": [{
+            "name": b.get("name"), "remaining_percent": round(float(b.get("remaining_fraction", 0)) * 100),
+            "resets_at": b.get("reset_time")
+        } for b in gemini.get("buckets") or []]}
+    except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired, GoogleProError) as exc:
+        return {"live": False, "error": str(exc)[:180]}
+
+
 def ask(message, model=None, cwd=None):
     """One non-interactive account-backed Google AI Pro turn."""
     model = model or DEFAULT_MODEL
