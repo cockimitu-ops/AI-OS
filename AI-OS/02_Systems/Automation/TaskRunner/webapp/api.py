@@ -1452,3 +1452,33 @@ def get_gemini_thread(body):
                                "tool": False}
                               for t in turns],
                  "total_messages": len(turns)}
+
+# --- proposal ideas: asynchronous Google Pro research ----------------------
+
+_ideas_lock = threading.Lock()
+_ideas_running = False
+
+
+def post_suggestions_generate(body):
+    """Ask Google Pro for novel proposals without blocking the phone request."""
+    global _ideas_running
+    body = body or {}
+    extra = body.get("prompt", "")
+    if not isinstance(extra, str):
+        return 400, {"error": "prompt must be text"}
+    extra = extra.strip()[:2000]
+    with _ideas_lock:
+        if _ideas_running:
+            return 409, {"error": "Ideensuche läuft bereits"}
+        _ideas_running = True
+
+    def run():
+        global _ideas_running
+        try:
+            safety_controls.suggest_more(prompt=extra or None)
+        finally:
+            with _ideas_lock:
+                _ideas_running = False
+
+    threading.Thread(target=run, name="aios-idea-scout", daemon=True).start()
+    return 202, {"started": True, "message": "Google Pro sucht neue Vorschläge."}
