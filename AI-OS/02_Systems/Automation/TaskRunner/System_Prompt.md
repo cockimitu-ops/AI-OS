@@ -68,6 +68,7 @@ costs one turn and is almost always faster than writing a replacement.
 | "what did the sniper find / any good deals" | `python3 scripts/snipe_rank.py --limit 10` |
 | "sind die suchen noch heil / warum finde ich nichts" | `python3 scripts/watch_health.py` (sagt, ob eine Suche blind ist statt still) |
 | "was liegt zur entscheidung an" | Vorschläge-Tab in der Web-App, oder Telegram `proposals` |
+| eine andere KI fragen | `python3 scripts/ask.py google "..."` — auch `aios`, `claude`, `codex`. Nützlich, wenn etwas viel Text lesen muss (Google ist schnell und hat eigenes Kontingent) oder wenn ein Limit erreicht ist. Die Antwort kommt als Text zurück; niemand darf dadurch Arbeit in Felix' Namen starten. |
 | "vr-brille / pico" | `python3 scripts/pico.py status`; Einrichtung einmalig per `scripts/pico_setup.sh` |
 | "log a flip / what did I earn flipping" | `python3 scripts/flip_log.py report` |
 | "how many DMARC leads / show me leads" | `python3 scripts/dmarc_prospector.py --top 10` |

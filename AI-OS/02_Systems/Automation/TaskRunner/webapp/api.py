@@ -27,6 +27,8 @@ from datetime import datetime
 import agents
 import claude_chat
 import cost_board
+import engines
+import gemini_chat
 import memory
 import money_board
 import dmarc_prospector
@@ -1275,3 +1277,50 @@ def post_todo_done(body):
     if error:
         return 400, {"error": error}
     return 200, {"ok": True, "done": [d.get("text", "") for d in done]}
+
+
+# --- engines: four things that can answer -----------------------------------
+#
+# The chat used to be wired to one of them. On 2026-09-02 Felix wrote twice
+# from his phone and got "You've hit your session limit · resets 11:30am"
+# both times - three hours of nothing from a machine with three other engines
+# idle on it. engines.py is the switch; this is its front door.
+
+def get_engines(_body):
+    return 200, {"engines": engines.catalogue()}
+
+
+def post_engine_send(body):
+    body = body or {}
+    try:
+        ticket = engines.send(
+            (body.get("engine") or "claude").strip(),
+            body.get("message") or "",
+            model=(body.get("model") or None),
+            thread=(body.get("thread") or None),
+            session=(body.get("session") or None))
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    return 200, {"pending": True, **ticket}
+
+
+def post_engine_result(body):
+    body = body or {}
+    try:
+        return 200, engines.result((body.get("engine") or "").strip(),
+                                   (body.get("job") or "").strip())
+    except ValueError as e:
+        return 400, {"error": str(e)}
+
+
+def get_gemini_thread(body):
+    """Google keeps its own conversation, so it can be re-read like Claude's.
+
+    Without this, switching engines would look like the history had been
+    thrown away - it had not, it just lives somewhere else."""
+    turns = gemini_chat.load_thread(((body or {}).get("thread") or "web").strip())
+    return 200, {"messages": [{"role": "user" if t["role"] == "user" else "assistant",
+                               "text": t.get("text", ""), "ts": t.get("ts"),
+                               "tool": False}
+                              for t in turns],
+                 "total_messages": len(turns)}

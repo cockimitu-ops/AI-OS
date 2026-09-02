@@ -1,0 +1,1 @@
+{"is_error": false, "result": "Ein Kontrollgruppen-Kill in systemd bezeichnet das automatische Beenden sämtlicher Prozesse innerhalb einer Control Group, um sicherzustellen, dass nach dem Stoppen eines Dienstes keine verwaisten Hintergrundprozesse zurückbleiben.", "model": "gemini-3-flash-preview", "usage": {"prompt": 21, "output": 48, "total": 416}}

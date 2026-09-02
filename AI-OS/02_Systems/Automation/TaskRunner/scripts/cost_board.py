@@ -26,12 +26,15 @@ Stdlib only.
 """
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
 import claude_chat
+import engines
+import gemini_chat
 import spend_guard
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -217,8 +220,86 @@ def claude_summary(project=None):
     }
 
 
+# --- what is left, per provider -------------------------------------------
+#
+# Felix asked for "eine Ansicht wie viel ich von meinen Limits noch habe",
+# and the honest answer differs per provider, which is the whole difficulty:
+#
+#   OpenRouter  a real prepaid balance. A number, and it is theirs.
+#   Claude      a session limit with no API to ask. The only time anyone
+#               learns about it is when a turn fails saying so - which cost
+#               $6.79 and three hours on 2026-09-02 - so the last refusal is
+#               remembered and shown until it expires.
+#   Google      per-model quota, also only visible in a refusal (429). Same
+#               treatment: the API's own words, per model, not a guess.
+#   Codex       nothing yet, and saying "unbekannt" beats inventing a bar.
+#
+# Nothing here is extrapolated into a percentage. A limit gauge that is
+# guessed is worse than no gauge, because it gets believed.
+
+LIMIT_RE = re.compile(r"(limit|quota|exceeded|erschöpft|rate.?limit)", re.I)
+RESET_RE = re.compile(r"resets?\s+([0-9]{1,2}[:.][0-9]{2}\s*(?:am|pm)?[^\n.]{0,24})", re.I)
+
+
+def claude_limit(limit=25):
+    """The most recent thing Claude said about its own limit. -> dict.
+
+    There is no endpoint for this. The session limit exists, it stops work
+    dead, and the only place it is ever stated is inside a failed turn."""
+    jobs = os.path.join(TASK_RUNNER_DIR, "claude_jobs")
+    try:
+        names = sorted((n for n in os.listdir(jobs) if n.endswith(".json")),
+                       reverse=True)[:limit]
+    except OSError:
+        return {"known": False}
+    for name in names:
+        try:
+            with open(os.path.join(jobs, name), encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        text = str(data.get("result") or "")
+        if not data.get("is_error") or not LIMIT_RE.search(text):
+            continue
+        stat = os.stat(os.path.join(jobs, name))
+        reset = RESET_RE.search(text)
+        return {"known": True, "hit": True, "message": text[:200],
+                "resets": reset.group(1).strip() if reset else None,
+                "when": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="minutes"),
+                "ago_hours": round((time.time() - stat.st_mtime) / 3600, 1)}
+    return {"known": True, "hit": False}
+
+
+def provider_limits():
+    """One row per engine, with whatever is actually knowable about it."""
+    rows = []
+    for spec in engines.catalogue():
+        row = {"id": spec["id"], "label": spec["label"],
+               "available": spec["available"], "reason": spec["reason"],
+               "models": spec["models"]}
+        if spec["id"] == "claude":
+            row["limit"] = claude_limit()
+        elif spec["id"] == "gemini":
+            # Per model, because the quota is per model: measured on
+            # 2026-09-02, gemini-3.1-pro-preview answered 429 while
+            # gemini-3-flash-preview answered fine, on the same key.
+            row["models_state"] = [
+                {"model": m, **(gemini_chat.state().get(m) or {})}
+                for m in spec["models"]]
+        elif spec["id"] == "aios":
+            ledger = spend_guard.load_ledger()
+            budget = float(os.environ.get("OPENROUTER_MONTHLY_BUDGET_USD",
+                                          spend_guard.DEFAULT_MONTHLY_BUDGET_USD))
+            spent = spend_guard.month_spent(ledger)
+            row["limit"] = {"known": True, "hit": spent >= budget,
+                            "spent_usd": round(spent, 4), "budget_usd": budget}
+        rows.append(row)
+    return rows
+
+
 def board(project=None):
     return {"openrouter": openrouter(), "claude": claude_summary(project),
+            "providers": provider_limits(),
             "generated": datetime.now(timezone.utc).isoformat(timespec="seconds")}
 
 

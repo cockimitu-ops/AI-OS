@@ -392,19 +392,43 @@ function litPanels(root) {
   });
 }
 
-// --- chat: a real Claude Code session --------------------------------------
+// --- chat: four engines, one conversation ----------------------------------
 //
-// This is not the local worker (that one still exists behind /api/chat and is
-// what the Telegram bridge talks to). This continues the SAME Claude Code
-// session Felix has at his desk, which is what he asked for: "ich will genau
-// in dem chat hier weiterschreiben von meinem handy aus". The transcript is
-// the real one, read off disk; sending resumes the session by id.
+// This used to be wired to Claude alone. On 2026-09-02 Felix wrote twice from
+// his phone and got "You've hit your session limit · resets 11:30am (UTC)"
+// both times - three hours of nothing from a machine with three other engines
+// sitting idle on it. So the engine is a choice now, and so is the model.
+//
+// The four are not interchangeable and the picker does not pretend they are:
+// Claude resumes the real session from the desk, AI-OS is the local worker
+// with its agents and its task queue, Google is its own API with its own
+// per-model quota, Codex appears when it is installed and signed in.
+
+const ENGINE_KEY = "aios_engine";
+const MODEL_KEY = "aios_models";
 
 const chatLog = document.getElementById("chat-log");
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
 let chatInFlight = false;
-let chatSession = null;   // { id, title, ... }
+let chatSession = null;        // the Claude session, when Claude is chosen
+let engineList = [];
+let chatEngine = "claude";
+let chatModels = {};
+
+try { chatEngine = localStorage.getItem(ENGINE_KEY) || "claude"; } catch (_) {}
+try { chatModels = JSON.parse(localStorage.getItem(MODEL_KEY) || "{}"); } catch (_) {}
+
+function engineSpec(id) {
+  return engineList.find((e) => e.id === (id || chatEngine)) || null;
+}
+
+function currentModel() {
+  const spec = engineSpec();
+  if (!spec) return null;
+  const chosen = chatModels[chatEngine];
+  return spec.models.includes(chosen) ? chosen : spec.default_model;
+}
 
 function addBubble(text, cls) {
   const div = document.createElement("div");
@@ -418,7 +442,7 @@ function addBubble(text, cls) {
 function renderTranscript(data) {
   chatLog.innerHTML = "";
   if (!data.messages || !data.messages.length) {
-    chatLog.innerHTML = `<div class="empty-state">Diese Sitzung ist leer.</div>`;
+    chatLog.innerHTML = `<div class="empty-state">Noch nichts in dieser Unterhaltung.</div>`;
     return;
   }
   if (data.total_messages > data.messages.length) {
@@ -430,10 +454,9 @@ function renderTranscript(data) {
     chatLog.appendChild(more);
   }
   // Runs of tool calls are folded into one line. A coding session is mostly
-  // machine steps - the transcript above was 20 screens of "⚙ Bash: cat >"
-  // with the conversation buried in it. The steps are still there, one tap
-  // away, because sometimes the step IS the answer ("did it actually run
-  // the migration?").
+  // machine steps - the first render was twenty screens of "cat > file <<EOF"
+  // with the conversation buried in it. One tap expands them, because
+  // sometimes the step IS the answer.
   let run = [];
   const flushRun = () => {
     if (!run.length) return;
@@ -457,9 +480,15 @@ function renderTranscript(data) {
   chatLog.scrollTop = chatLog.scrollHeight;
 }
 
-async function openSession(sessionId, limit) {
+function setChatBar(title, meta, live) {
   const bar = document.getElementById("chat-session");
-  bar.querySelector(".session-title").textContent = "lädt…";
+  bar.querySelector(".session-title").textContent = title;
+  bar.querySelector(".session-meta").textContent = meta || "";
+  bar.classList.toggle("live", !!live);
+}
+
+async function openSession(sessionId, limit) {
+  setChatBar("lädt…", "");
   try {
     const data = await api("/api/claude-transcript", {
       method: "POST",
@@ -472,9 +501,8 @@ async function openSession(sessionId, limit) {
     }
     chatSession = { id: data.session_id, title: data.title, stats: data.stats };
     localStorage.setItem(SESSION_KEY, data.session_id);
-    bar.querySelector(".session-title").textContent = data.title || data.session_id.slice(0, 8);
-    bar.querySelector(".session-meta").textContent =
-      `${data.total_messages} · $${usd(data.stats?.usd)}`;
+    setChatBar(`Claude · ${data.title || data.session_id.slice(0, 8)}`,
+               `${data.total_messages} · $${usd(data.stats?.usd)}`);
     renderTranscript(data);
   } catch (err) {
     setConnDot("err");
@@ -483,39 +511,58 @@ async function openSession(sessionId, limit) {
 }
 
 async function loadChat() {
-  // No session remembered: the server picks the most recently written one,
-  // which is "immer vom letzten genutzten chat" - open the app and you are
-  // where you left off without choosing anything.
-  await openSession(localStorage.getItem(SESSION_KEY) || "");
+  try {
+    engineList = (await api("/api/engines")).engines || [];
+  } catch (_) { engineList = []; }
+  const spec = engineSpec();
+  if (spec && !spec.available) {
+    // The chosen engine cannot answer right now. Say so instead of failing
+    // at the moment he presses send.
+    setChatBar(`${spec.label} · nicht bereit`, "");
+    chatLog.innerHTML = `<div class="empty-state">${escapeHtml(spec.reason)}</div>`;
+    return resumePending();
+  }
+  if (chatEngine === "claude") {
+    await openSession(localStorage.getItem(SESSION_KEY) || "");
+  } else if (chatEngine === "gemini") {
+    setChatBar(`${spec ? spec.label : "Google"} · ${currentModel() || ""}`, "");
+    try {
+      renderTranscript(await api("/api/gemini-thread", {
+        method: "POST", body: JSON.stringify({ thread: getThreadId() }),
+      }));
+    } catch (err) {
+      chatLog.innerHTML = `<div class="empty-state">Fehler: ${escapeHtml(err.message)}</div>`;
+    }
+  } else {
+    setChatBar(`${spec ? spec.label : chatEngine} · ${currentModel() || ""}`, "");
+    chatLog.innerHTML = `<div class="empty-state">Schreib etwas — ${escapeHtml(spec ? spec.label : chatEngine)} antwortet.</div>`;
+  }
   resumePending();
 }
 
 // Pick a turn back up that this page was not around for.
 //
-// Felix sent a message from his phone and never got an answer: an unattended
-// system upgrade restarted the webapp four minutes later and took the job
-// with it. He could not tell, because closing the chat also ended the only
-// thing that was watching for a reply. Now the ticket outlives the page.
+// Felix sent a message from his phone and never got an answer: a system
+// upgrade restarted the webapp four minutes later and took the job with it.
+// He could not tell, because closing the chat also ended the only thing
+// watching for a reply. Now the ticket outlives the page.
 async function resumePending() {
   let job;
-  try {
-    job = JSON.parse(localStorage.getItem(PENDING_KEY) || "null");
-  } catch (_) { return; }
-  if (!job || !job.id) return;
-  if (chatSession && job.session && job.session !== chatSession.id) return;
-  if (chatInFlight) return;
+  try { job = JSON.parse(localStorage.getItem(PENDING_KEY) || "null"); } catch (_) { return; }
+  if (!job || !job.id || chatInFlight) return;
   const bubble = addBubble("hole die Antwort von vorhin …", "bot pending");
   chatInFlight = true;
   try {
-    const res = await pollClaude(job.id, bubble);
+    const res = await pollEngine(job.engine || "claude", job.id, bubble);
     bubble.remove();
     localStorage.removeItem(PENDING_KEY);
     chatInFlight = false;
-    // Re-read rather than write the reply into a bubble. The turn finished on
-    // the server, so it is already in the transcript - appending it here as
-    // well showed the answer twice.
-    if (res.ok) return openSession(job.session);
-    addBubble(res.error || "fehlgeschlagen", "bubble bot err");
+    if (res.ok && (job.engine || "claude") === "claude" && job.session) {
+      // Re-read rather than write the reply into a bubble: the turn finished
+      // on the server, so it is already in the transcript.
+      return openSession(job.session);
+    }
+    addBubble(res.reply || res.error || "fehlgeschlagen", `bot${res.ok ? "" : " err"}`);
     return;
   } catch (err) {
     bubble.textContent = `Die Antwort ist nicht mehr da: ${err.message}`;
@@ -526,32 +573,88 @@ async function resumePending() {
   }
 }
 
-document.getElementById("chat-session").addEventListener("click", async () => {
+// --- the picker ------------------------------------------------------------
+
+document.getElementById("chat-session").addEventListener("click", openEnginePicker);
+
+async function openEnginePicker() {
   if (window.fxTap) window.fxTap();
   openSheet(`<div class="hint">Wird geladen…</div>`);
   try {
+    engineList = (await api("/api/engines")).engines || [];
+  } catch (err) {
+    return openSheet(`<div class="empty-state">Fehler: ${escapeHtml(err.message)}</div>`);
+  }
+  const spec = engineSpec();
+  const models = spec ? spec.models : [];
+  openSheet(`
+    <p class="hint">Wer antwortet.</p>
+    ${engineList.map((e) => `
+      <button class="sheet-item ${e.id === chatEngine ? "on" : ""}" data-engine="${e.id}"
+              ${e.available ? "" : 'style="opacity:.55"'}>
+        <span style="flex:1;min-width:0">
+          <span style="display:block">${escapeHtml(e.label)}${e.available ? "" : " · nicht bereit"}</span>
+          <span class="si-sub" style="margin:0">${escapeHtml(e.available ? e.note : e.reason)}</span>
+        </span>
+      </button>`).join("")}
+    <h2 class="section-title">Modell</h2>
+    <div class="chip-row">
+      ${models.map((m) => `<button class="chip ${m === currentModel() ? "on" : ""}" data-model="${escapeHtml(m)}">${escapeHtml(m)}</button>`).join("")}
+    </div>
+    ${chatEngine === "claude" ? `
+      <h2 class="section-title">Sitzung</h2>
+      <div id="sheet-sessions"><div class="hint">Wird geladen…</div></div>` : ""}`,
+    (root) => {
+      root.querySelectorAll("[data-engine]").forEach((el) =>
+        el.addEventListener("click", () => {
+          chatEngine = el.dataset.engine;
+          try { localStorage.setItem(ENGINE_KEY, chatEngine); } catch (_) {}
+          closeSheet();
+          loadChat();
+        }));
+      root.querySelectorAll("[data-model]").forEach((el) =>
+        el.addEventListener("click", () => {
+          chatModels[chatEngine] = el.dataset.model;
+          try { localStorage.setItem(MODEL_KEY, JSON.stringify(chatModels)); } catch (_) {}
+          root.querySelectorAll("[data-model]").forEach((o) =>
+            o.classList.toggle("on", o === el));
+          if (chatEngine !== "claude") {
+            const sp = engineSpec();
+            setChatBar(`${sp ? sp.label : chatEngine} · ${currentModel()}`, "");
+          }
+        }));
+      if (chatEngine === "claude") loadSessionListInto(root);
+    });
+}
+
+async function loadSessionListInto(root) {
+  const host = root.querySelector("#sheet-sessions");
+  if (!host) return;
+  try {
     const d = await api("/api/claude-sessions");
-    openSheet(d.sessions.map((s) => `
+    host.innerHTML = d.sessions.map((s) => `
       <button class="sheet-item ${s.id === chatSession?.id ? "on" : ""}" data-sid="${s.id}">
         <span style="flex:1;min-width:0">
           <span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
             ${escapeHtml(s.title)}${s.active ? " ·  läuft gerade" : ""}</span>
           <span class="si-sub" style="margin:0">${s.messages} Nachrichten · ${ago(s.updated_ago)} · $${usd(s.stats.usd)}</span>
         </span>
-      </button>`).join("") || `<div class="empty-state">Keine Sitzungen gefunden.</div>`,
-      (root) => root.querySelectorAll(".sheet-item").forEach((el) =>
-        el.addEventListener("click", () => {
-          closeSheet();
-          openSession(el.dataset.sid);
-        })));
+      </button>`).join("") || `<div class="empty-state">Keine Sitzungen.</div>`;
+    host.querySelectorAll("[data-sid]").forEach((el) =>
+      el.addEventListener("click", () => {
+        closeSheet();
+        openSession(el.dataset.sid);
+      }));
   } catch (err) {
-    openSheet(`<div class="empty-state">Fehler: ${escapeHtml(err.message)}</div>`);
+    host.innerHTML = `<div class="empty-state">${escapeHtml(err.message)}</div>`;
   }
-});
+}
 
-// Backs off from 1.5s to 6s. A Claude turn on a large session is minutes,
-// not seconds, so a tight poll would be thousands of pointless requests.
-async function pollClaude(jobId, bubble) {
+// --- sending ---------------------------------------------------------------
+
+// Backs off from 1.5s to 6s. A Claude turn on a large session is minutes, not
+// seconds, so a tight poll would be thousands of pointless requests.
+async function pollEngine(engine, job, bubble) {
   const started = Date.now();
   let wait = 1500;
   for (;;) {
@@ -559,19 +662,17 @@ async function pollClaude(jobId, bubble) {
     wait = Math.min(wait * 1.3, 6000);
     let res;
     try {
-      res = await api("/api/claude-result", {
-        method: "POST", body: JSON.stringify({ job_id: jobId }),
+      res = await api("/api/engine-result", {
+        method: "POST", body: JSON.stringify({ engine, job }),
       });
     } catch (err) {
       // A failed poll is not a failed answer - the phone may have lost the
-      // tailnet for a moment. Keep trying; the result is on disk either way.
+      // tailnet for a moment. The result is on disk either way.
       bubble.textContent = `… (offline? ${Math.round((Date.now() - started) / 1000)}s)`;
       continue;
     }
     if (res.ready) return res;
     if (res.lost) throw new Error(res.error || "Job verloren");
-    // Showing the count is the point: "still thinking, 40s" reads as slow,
-    // a frozen "…" reads as broken.
     bubble.textContent = `denkt nach … ${res.elapsed ?? 0}s`;
   }
 }
@@ -582,8 +683,7 @@ chatInput.addEventListener("input", () => {
 });
 chatInput.addEventListener("keydown", (e) => {
   // Enter sends on a hardware keyboard, newline on a phone: shift+Enter is
-  // not reachable on a touch keyboard, so on a phone Enter has to be able to
-  // make a paragraph.
+  // not reachable on a touch keyboard, so there Enter has to make a paragraph.
   if (e.key === "Enter" && !e.shiftKey && window.matchMedia("(pointer: fine)").matches) {
     e.preventDefault();
     chatForm.requestSubmit();
@@ -592,9 +692,14 @@ chatInput.addEventListener("keydown", (e) => {
 
 chatForm.addEventListener("submit", async (e) => {
   e.preventDefault();
-  if (chatInFlight || !chatSession) return;
+  if (chatInFlight) return;
   const text = chatInput.value.trim();
   if (!text) return;
+  const spec = engineSpec();
+  if (spec && !spec.available) {
+    addBubble(spec.reason, "bot err");
+    return;
+  }
   chatInput.value = "";
   chatInput.style.height = "auto";
   addBubble(text, "me");
@@ -602,23 +707,31 @@ chatForm.addEventListener("submit", async (e) => {
   chatInFlight = true;
   document.getElementById("chat-send").disabled = true;
   try {
-    const queued = await api("/api/claude-send", {
+    const queued = await api("/api/engine-send", {
       method: "POST",
-      body: JSON.stringify({ session_id: chatSession.id, message: text }),
+      body: JSON.stringify({
+        engine: chatEngine, model: currentModel(), message: text,
+        thread: getThreadId(),
+        session: chatEngine === "claude" ? chatSession?.id : undefined,
+      }),
     });
     setConnDot("ok");
     try {
       localStorage.setItem(PENDING_KEY, JSON.stringify(
-        { id: queued.job_id, session: chatSession.id, at: Date.now() }));
+        { id: queued.job, engine: queued.engine, session: chatSession?.id, at: Date.now() }));
     } catch (_) {}
-    const res = await pollClaude(queued.job_id, pending);
+    const res = await pollEngine(queued.engine, queued.job, pending);
     pending.textContent = res.reply || (res.ok ? "(keine Antwort)" : res.error || "fehlgeschlagen");
     pending.className = `bubble bot${res.ok ? "" : " err"}`;
-    if (res.usd) {
-      const cost = document.createElement("div");
-      cost.className = "bubble tool";
-      cost.textContent = `$${usd(res.usd)} · ${Math.round((res.duration_ms || 0) / 1000)}s`;
-      chatLog.appendChild(cost);
+    const bits = [];
+    if (res.usd) bits.push(`$${usd(res.usd)}`);
+    if (res.usage && res.usage.total) bits.push(`${res.usage.total} tok`);
+    if (res.model) bits.push(res.model);
+    if (bits.length) {
+      const note = document.createElement("div");
+      note.className = "bubble tool";
+      note.textContent = bits.join(" · ");
+      chatLog.appendChild(note);
     }
     chatLog.scrollTop = chatLog.scrollHeight;
     refreshCostPill();
@@ -1549,6 +1662,8 @@ async function loadCosts() {
           $${usd(o.budget_left_usd)} übrig</div>
       </div>`;
 
+    renderProviders(d.providers || []);
+
     const u = o.usage || {};
     cardsEl.innerHTML = `
       <div class="signals">
@@ -2247,3 +2362,56 @@ function openLightSheet() {
 
 document.getElementById("light-btn")?.addEventListener("click", openLightSheet);
 applyStoredLight();
+
+
+// --- what is left, per provider --------------------------------------------
+//
+// Nothing here is extrapolated into a percentage. Only OpenRouter has a real
+// balance; Claude and Google only ever state a limit inside a refusal, and a
+// guessed gauge is worse than none because it gets believed.
+
+function renderProviders(rows) {
+  const el = document.getElementById("cost-providers");
+  if (!el) return;
+  el.innerHTML = rows.map((p) => {
+    let body = "";
+    let tone = p.available ? "var(--good)" : "var(--text-faint)";
+    let head = p.available ? "bereit" : "nicht bereit";
+
+    if (!p.available) {
+      body = `<div class="sub">${escapeHtml(p.reason)}</div>`;
+    } else if (p.id === "claude" && p.limit) {
+      if (p.limit.hit) {
+        tone = "var(--bad)";
+        head = p.limit.resets ? `Limit — zurück ${p.limit.resets}` : "Limit erreicht";
+        body = `<div class="sub">${escapeHtml(p.limit.message)}</div>
+                <div class="sub" style="opacity:.65;margin-top:4px">zuletzt vor ${p.limit.ago_hours} h</div>`;
+      } else {
+        body = `<div class="sub">Kein Limit-Fehler in den letzten Läufen.
+          Es gibt keine Abfrage dafür — man erfährt es erst, wenn eine Antwort
+          daran scheitert.</div>`;
+      }
+    } else if (p.id === "aios" && p.limit) {
+      const pct = Math.min(100, (p.limit.spent_usd / (p.limit.budget_usd || 1)) * 100);
+      if (p.limit.hit) { tone = "var(--bad)"; head = "Monatslimit erreicht"; }
+      body = `<div class="sub">$${usd(p.limit.spent_usd)} von $${usd(p.limit.budget_usd)} diesen Monat</div>
+              <div class="meter ${pct > 80 ? "warn" : ""}" style="margin-top:8px"><i style="width:${pct.toFixed(1)}%"></i></div>`;
+    } else if (p.id === "gemini") {
+      const used = (p.models_state || []).filter((m) => m.calls);
+      const blocked = (p.models_state || []).filter((m) => m.last_error);
+      if (blocked.length) { tone = "var(--gold)"; head = `${blocked.length} Modell(e) blockiert`; }
+      body = `<div class="sub">Kontingent gilt pro Modell — ein 429 auf dem
+                einen sagt nichts über das andere.</div>`
+        + (used.length ? `<div class="sub" style="margin-top:6px">${used.map((m) =>
+            `${escapeHtml(m.model)}: ${m.calls}× · ${(m.prompt_tokens || 0) + (m.output_tokens || 0)} tok`).join("<br>")}</div>` : "")
+        + (blocked.length ? `<div class="sub" style="margin-top:6px;color:var(--bad)">${blocked.map((m) =>
+            `${escapeHtml(m.model)}: ${escapeHtml((m.last_error || "").slice(0, 90))}`).join("<br>")}</div>` : "");
+    }
+    return `<div class="card">
+      <div class="row"><h3>${escapeHtml(p.label)}</h3>
+        <span class="sub" style="color:${tone}">${escapeHtml(head)}</span></div>
+      ${body}
+    </div>`;
+  }).join("");
+  litPanels(el);
+}

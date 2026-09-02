@@ -1,0 +1,8 @@
+{
+ "gemini-3-flash-preview": {
+  "calls": 6,
+  "last": "2026-09-02T11:47:54+00:00",
+  "output_tokens": 80,
+  "prompt_tokens": 91
+ }
+}

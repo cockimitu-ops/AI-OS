@@ -4770,6 +4770,138 @@ class TestProposalDecisions(unittest.TestCase):
 
 
 
+class TestEngines(unittest.TestCase):
+    """Four things that can answer, behind one interface.
+
+    The chat used to be wired to one of them. On 2026-09-02 Felix wrote twice
+    from his phone and got "You've hit your session limit · resets 11:30am"
+    both times - three hours of nothing from a machine with three other
+    engines idle on it."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "engines_mod", os.path.join(HERE, "scripts", "engines.py"))
+        cls.en = importlib.util.module_from_spec(spec)
+        sys.path.insert(0, os.path.join(HERE, "scripts"))
+        spec.loader.exec_module(cls.en)
+
+    def test_every_engine_reports_whether_it_can_answer(self):
+        rows = {e["id"]: e for e in self.en.catalogue()}
+        self.assertEqual(set(rows), {"claude", "aios", "gemini", "codex"})
+        for row in rows.values():
+            self.assertTrue(row["models"], row["id"])
+            self.assertIn(row["default_model"], row["models"], row["id"])
+            # An engine that cannot answer has to say why, in words that name
+            # the next step - "nicht verfügbar" is not an answer.
+            if not row["available"]:
+                self.assertTrue(row["reason"].strip(), row["id"])
+
+    def test_an_unavailable_engine_refuses_before_it_is_asked(self):
+        """Better at the door than three minutes later in a job file."""
+        original = self.en.ENGINES["codex"]["available"]
+        self.en.ENGINES["codex"]["available"] = lambda: (False, "nicht installiert")
+        try:
+            with self.assertRaises(ValueError) as caught:
+                self.en.send("codex", "hallo")
+            self.assertIn("nicht installiert", str(caught.exception))
+        finally:
+            self.en.ENGINES["codex"]["available"] = original
+
+    def test_an_unknown_engine_or_model_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.en.send("openai", "hallo")
+        with self.assertRaises(ValueError) as caught:
+            self.en.send("aios", "hallo", model="gpt-9")
+        self.assertIn("gpt-9", str(caught.exception))
+
+    def test_an_empty_message_never_reaches_an_engine(self):
+        with self.assertRaises(ValueError):
+            self.en.send("aios", "   ")
+
+    def test_the_worker_gets_the_same_task_file_it_always_did(self):
+        """Not a second dispatch path. The queue, the agent prefix and the
+        memory directive are what telegram_bridge.py and dispatch_task.py
+        already write; this only chooses which engine writes one."""
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox, logs = os.path.join(tmp, "inbox"), os.path.join(tmp, "logs")
+            original = (self.en.INBOX, self.en.LOGS)
+            self.en.INBOX, self.en.LOGS = inbox, logs
+            try:
+                name = self.en.send("aios", "was steht an?", model="free")["job"]
+                body = open(os.path.join(inbox, name), encoding="utf-8").read()
+            finally:
+                self.en.INBOX, self.en.LOGS = original
+        self.assertTrue(name.startswith("task_web_"))
+        self.assertIn("was steht an?", body)
+        self.assertIn("<!-- models: free -->", body)
+
+    def test_a_job_that_printed_prose_is_still_shown(self):
+        """A CLI that fails often fails in English rather than in JSON, and
+        showing what it said beats reporting that it was unparseable."""
+        with tempfile.TemporaryDirectory() as tmp:
+            original = self.en.JOBS_DIR
+            self.en.JOBS_DIR = tmp
+            try:
+                job = "gem_x"
+                with open(self.en._paths(job)["out"], "w", encoding="utf-8") as f:
+                    f.write("command not found: codex")
+                out = self.en._collect(job)
+            finally:
+                self.en.JOBS_DIR = original
+        self.assertTrue(out["ready"])
+        self.assertIn("command not found", out["reply"])
+
+    def test_a_dead_job_is_reported_rather_than_waited_out(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            original = self.en.JOBS_DIR
+            self.en.JOBS_DIR = tmp
+            try:
+                job = "gem_dead"
+                with open(self.en._paths(job)["meta"], "w", encoding="utf-8") as f:
+                    json.dump({"started": time.time() - 60, "pid": 999999}, f)
+                out = self.en._collect(job)
+            finally:
+                self.en.JOBS_DIR = original
+        self.assertTrue(out["ready"])
+        self.assertFalse(out["ok"])
+        self.assertTrue(out["died"])
+
+
+class TestAskAnotherEngine(unittest.TestCase):
+    """One AI asking another. The mechanism is a command line, because every
+    engine here can already run one - anything richer would be a protocol
+    only some of them speak."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "ask_mod", os.path.join(HERE, "scripts", "ask.py"))
+        cls.ask = importlib.util.module_from_spec(spec)
+        sys.path.insert(0, os.path.join(HERE, "scripts"))
+        spec.loader.exec_module(cls.ask)
+
+    def test_a_chain_of_asks_is_bounded(self):
+        """Two agents that can each ask the other is a machine that can spin
+        forever on someone else's money."""
+        with unittest.mock.patch.dict(os.environ,
+                                      {"AIOS_ASK_DEPTH": str(self.ask.MAX_DEPTH)}):
+            ok, text = self.ask.ask("google", "hallo")
+        self.assertFalse(ok)
+        self.assertIn("tief", text)
+        self.assertIn(str(self.ask.MAX_DEPTH), text)
+
+    def test_names_people_actually_use_resolve(self):
+        self.assertEqual(self.ask.ALIASES["google"], "gemini")
+        self.assertEqual(self.ask.ALIASES["worker"], "aios")
+
+    def test_an_unknown_engine_lists_the_known_ones(self):
+        ok, text = self.ask.ask("openai", "hallo")
+        self.assertFalse(ok)
+        self.assertIn("google", text)
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 

@@ -209,3 +209,52 @@ looks like.
 Three consecutive empty runs is "blind" rather than one, because one empty
 run IS a market and crying wolf about it teaches the same lesson the false
 alerts did. The daily message says nothing at all when everything is fine.
+
+
+## Four engines, one chat
+
+The chat was wired to Claude alone. On 2026-09-02 Felix wrote twice from his
+phone and got "You've hit your session limit · resets 11:30am (UTC)" both
+times — three hours of nothing from a machine with three other engines idle
+on it, and one of those turns had already cost $6.79 before it hit the wall.
+
+`scripts/engines.py` is the switch. `/api/engines` lists what can answer
+right now, `/api/engine-send` and `/api/engine-result` are the same
+ticket-then-poll pattern everything else here uses.
+
+| engine | what it is | limit |
+|---|---|---|
+| `claude` | the real Claude Code session, resumed | session limit, no API to ask |
+| `aios` | the local worker: agents, task queue, free chain then GLM | the monthly OpenRouter cap |
+| `gemini` | Google's API directly, own history per thread | per **model** quota |
+| `codex` | OpenAI's Codex CLI, once installed and signed in | unknown until then |
+
+They are not interchangeable and the picker does not pretend they are — each
+row says what it is and, when it cannot answer, what to do about it.
+
+**Google's quota is per model.** Measured on the same key on 2026-09-02:
+`gemini-3.1-pro-preview` answered 429 "you exceeded your current quota" while
+`gemini-3-flash-preview` answered fine, and the 2.5 family returned "no
+longer available to new users". So the model picker matters, and the cost tab
+reports the API's own words per model rather than one number for "Google".
+
+### What is left, per provider
+
+Nothing on that screen is extrapolated into a percentage. Only OpenRouter has
+a real balance to report. Claude and Google state a limit **only inside a
+refusal**, so the last refusal is remembered and shown with its reset time; a
+guessed gauge would be worse than none, because it would get believed.
+
+### Asking each other
+
+`scripts/ask.py google "…"` — also `aios`, `claude`, `codex`. A command line
+on purpose: every engine here can already run one, so it is the single
+interface all four share. Useful when something has to read a wall of text
+(Google is fast and has its own quota), and useful when one of them has run
+out.
+
+Two limits are deliberate. The answer comes back as text to whoever asked —
+nothing is queued, approved or sent, so the propose/approve gate stays the
+only path from an idea to an action. And `AIOS_ASK_DEPTH` bounds the chain at
+three, because two agents that can each ask the other is a machine that can
+spin forever on someone else's money.
