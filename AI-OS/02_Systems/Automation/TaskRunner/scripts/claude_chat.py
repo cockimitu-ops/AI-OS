@@ -309,7 +309,7 @@ def _job_paths(job_id):
     }
 
 
-def send(session_id, message, project=None):
+def send(session_id, message, project=None, model=None):
     """Continue a session with one message. -> job id, immediately.
 
     Detached on purpose. A turn regularly takes minutes, and a phone browser
@@ -348,7 +348,7 @@ def send(session_id, message, project=None):
     # thing this learned the hard way (see the unit file).
     with open(p["meta"], "w", encoding="utf-8") as f:
         json.dump({"session_id": session_id, "started": time.time(),
-                   "pid": proc.pid, "message": message[:2000]}, f,
+                   "pid": proc.pid, "message": message[:2000], "model": model}, f,
                   ensure_ascii=False)
     return job_id
 
