@@ -2332,9 +2332,23 @@ async function loadProposals() {
     // Pending is what agents have proposed since the last round. The nightly
     // job turns it into a round at 20:00; this is the other twenty-three
     // hours, when something is waiting and you want to look now.
-    openEl.innerHTML = (!d.review.length && d.pending)
+    const ideaButton = `<button class="pill-btn wide" id="prop-ideas-btn">Google Pro: weitere Ideen finden</button>`;
+    const roundButton = (!d.review.length && d.pending)
       ? `<button class="pill-btn wide" id="prop-open-btn">${d.pending} neue${d.pending === 1 ? "r" : ""} Vorschlag${d.pending === 1 ? "" : "e"} — Runde öffnen</button>`
       : (d.pending ? `<p class="hint">${d.pending} weitere warten auf die nächste Runde.</p>` : "");
+    openEl.innerHTML = ideaButton + roundButton;
+    document.getElementById("prop-ideas-btn")?.addEventListener("click", async (e) => {
+      e.target.disabled = true;
+      e.target.textContent = "Google Pro denkt nach …";
+      try {
+        await api("/api/suggestions-generate", { method: "POST", body: "{}" });
+        deviceSayProposal("Google Pro sammelt neue Vorschläge. Ich zeige sie hier, sobald sie fertig sind.");
+      } catch (err) {
+        deviceSayProposal(`Fehler: ${err.message}`, true);
+        e.target.disabled = false;
+        e.target.textContent = "Google Pro: weitere Ideen finden";
+      }
+    });
     document.getElementById("prop-open-btn")?.addEventListener("click", async (e) => {
       e.target.disabled = true;
       await api("/api/proposal-open", { method: "POST", body: "{}" });

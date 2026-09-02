@@ -98,6 +98,7 @@ API_ROUTES = {
     ("POST", "/api/knowledge-save"): api.post_knowledge_save,
     ("POST", "/api/conversations"): api.post_conversations,
     ("POST", "/api/gemini-thread"): api.get_gemini_thread,
+    ("POST", "/api/suggestions-generate"): api.post_suggestions_generate,
     ("GET", "/api/proposals"): api.get_proposals,
     ("POST", "/api/proposal-decide"): api.post_proposal_decide,
     ("POST", "/api/proposal-open"): api.post_proposal_open,
