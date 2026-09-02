@@ -29,32 +29,135 @@
    a new design, not a new subject. */
 
 :root {
-  --bg: #000000;
-  --text: #eef3fa;
-  --text-dim: #97a3b4;
-  --text-faint: #5c6675;
-  --accent: #cfe3ff;         /* the filament white-blue */
-  --gold: #e8c98a;
-  --violet: #b9a0ff;
-  --good: #8fe3b0;
-  --bad: #ff9a9a;
-
-  /* Glass. Two fills: a pane, and a brighter one for the focused layer. */
-  --pane: rgba(150, 178, 215, 0.055);
-  --pane-2: rgba(160, 190, 230, 0.085);
-  --pane-solid: rgba(10, 13, 19, 0.72);
-  --edge: rgba(207, 227, 255, 0.16);   /* the lit top edge */
-  --edge-soft: rgba(207, 227, 255, 0.06);
-  --blur: saturate(150%) blur(22px);
-
-  --e1: 0 1px 2px rgba(0,0,0,0.5);
-  --e2: 0 18px 44px -18px rgba(0,0,0,0.9), 0 2px 10px rgba(0,0,0,0.4);
-  --e3: 0 -8px 60px -12px rgba(0,0,0,0.95), 0 2px 24px rgba(0,0,0,0.6);
-
+  /* Tokens only - every colour below is set per light, further down. The
+     stylesheet never names a colour again after this block, which is what
+     makes four palettes a data change rather than four stylesheets. */
   --r: 20px;
   --r-sm: 13px;
   --pad: 16px;
   --tabbar-h: 62px;
+  --blur: saturate(140%) blur(20px);
+  --e1: 0 1px 2px rgba(0,0,0,0.18);
+  --e2: 0 18px 44px -18px rgba(0,0,0,0.42), 0 2px 10px rgba(0,0,0,0.18);
+  --e3: 0 -8px 60px -12px rgba(0,0,0,0.45), 0 2px 24px rgba(0,0,0,0.3);
+}
+
+/* --- the light of the hour ------------------------------------------------
+   Monet painted the same haystack at dawn, noon and dusk because the light
+   was the subject and the haystack was only its excuse. fx.js paints the
+   canvas under four lights and stamps body[data-light]; these are the same
+   four lights for everything that is not the canvas.
+
+   Felix answered "hell muss nicht aber kann, entscheide du". This is that
+   decision: both, and neither as a toggle - light in daylight, dark at two
+   in the morning, and never two designs to maintain. */
+
+body[data-light="dawn"] {
+  --bg: #ced4db;
+  --text: #1c2230;
+  --text-dim: #4e5769;
+  --text-faint: #79839a;
+  --accent: #3d6b96;
+  --gold: #9a7434;
+  --violet: #6b5c96;
+  --good: #2f6f4e;
+  --bad: #9c3b3b;
+  --pane: rgba(255,255,255,0.42);
+  --pane-2: rgba(255,255,255,0.60);
+  --pane-solid: rgba(238,241,246,0.80);
+  --edge: rgba(255,255,255,0.95);
+  --edge-soft: rgba(28,34,48,0.10);
+  --hero-a: rgba(255,255,255,0.72);
+  --hero-b: rgba(214,220,229,0.66);
+  --veil: radial-gradient(120% 80% at 50% 30%,
+          rgba(255,255,255,0.34), rgba(206,212,219,0.10) 70%, rgba(150,160,175,0.16));
+  --me-a: #3d6b96; --me-b: #2f5a80; --me-ink: #f4f8ff;
+  --code-bg: rgba(255,255,255,0.62);
+  --scrim: rgba(60,66,78,0.42);
+  --grain-blend: multiply;
+  --grain-opacity: 0.05;
+}
+
+body[data-light="day"] {
+  --bg: #e9e3d5;
+  --text: #241f18;
+  --text-dim: #5a5245;
+  --text-faint: #8a8272;
+  --accent: #4a6f4a;
+  --gold: #8a6a25;
+  --violet: #6a5b84;
+  --good: #33683f;
+  --bad: #9a3a30;
+  --pane: rgba(255,253,247,0.46);
+  --pane-2: rgba(255,253,247,0.66);
+  --pane-solid: rgba(247,243,232,0.82);
+  --edge: rgba(255,255,255,0.96);
+  --edge-soft: rgba(36,31,24,0.10);
+  --hero-a: rgba(255,253,246,0.76);
+  --hero-b: rgba(226,220,203,0.68);
+  --veil: radial-gradient(120% 80% at 50% 30%,
+          rgba(255,252,242,0.36), rgba(233,227,213,0.10) 70%, rgba(170,162,142,0.16));
+  --me-a: #4a6f4a; --me-b: #3b5c3c; --me-ink: #f6faf2;
+  --code-bg: rgba(255,253,247,0.66);
+  --scrim: rgba(70,64,52,0.42);
+  --grain-blend: multiply;
+  --grain-opacity: 0.055;
+}
+
+body[data-light="dusk"] {
+  --bg: #c6a896;
+  --text: #2a1d21;
+  --text-dim: #5d454b;
+  --text-faint: #8c6f74;
+  --accent: #8c4a3c;
+  --gold: #8a6320;
+  --violet: #6d4f78;
+  --good: #3d6a4c;
+  --bad: #93302f;
+  --pane: rgba(255,246,238,0.42);
+  --pane-2: rgba(255,246,238,0.62);
+  --pane-solid: rgba(246,232,222,0.80);
+  --edge: rgba(255,248,240,0.92);
+  --edge-soft: rgba(42,29,33,0.12);
+  --hero-a: rgba(255,246,236,0.74);
+  --hero-b: rgba(216,184,166,0.68);
+  --veil: radial-gradient(120% 80% at 50% 30%,
+          rgba(255,240,222,0.32), rgba(198,168,150,0.10) 70%, rgba(120,88,80,0.20));
+  --me-a: #8c4a3c; --me-b: #6f3a30; --me-ink: #fff3ec;
+  --code-bg: rgba(255,246,238,0.60);
+  --scrim: rgba(70,46,44,0.46);
+  --grain-blend: multiply;
+  --grain-opacity: 0.06;
+}
+
+/* Night is also the default: fx.js stamps the attribute on load, and until
+   it does the page must still have colours. Falling back to the dark one is
+   the safe direction - a flash of dark before dawn is a flash, a flash of
+   nothing is an unreadable screen. */
+body, body[data-light="night"] {
+  --bg: #161b2b;
+  --text: #e7ecf6;
+  --text-dim: #96a1b8;
+  --text-faint: #5f6a83;
+  --accent: #b9cff0;
+  --gold: #e8c98a;
+  --violet: #b9a0ff;
+  --good: #8fe3b0;
+  --bad: #ff9a9a;
+  --pane: rgba(150,178,215,0.075);
+  --pane-2: rgba(160,190,230,0.11);
+  --pane-solid: rgba(16,21,36,0.76);
+  --edge: rgba(200,220,255,0.20);
+  --edge-soft: rgba(200,220,255,0.075);
+  --hero-a: rgba(30,38,60,0.86);
+  --hero-b: rgba(14,18,32,0.90);
+  --veil: radial-gradient(120% 80% at 50% 30%,
+          rgba(0,0,0,0.18), rgba(0,0,0,0.42) 70%, rgba(0,0,0,0.58));
+  --me-a: #cfe0f8; --me-b: #a9c1e4; --me-ink: #0b1020;
+  --code-bg: rgba(0,0,0,0.42);
+  --scrim: rgba(0,0,0,0.6);
+  --grain-blend: overlay;
+  --grain-opacity: 0.035;
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -65,28 +168,13 @@ html, body {
   font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
   font-size: 16px;
   overscroll-behavior: none;
-  /* The sky. On html/body, which never scroll (#screens owns per-screen
-     scrolling), so it stays a fixed backdrop behind every screen instead of
-     sliding away - and fills the space under a short list rather than
-     leaving dead black there. */
-  background-color: var(--bg);
-  background-image:
-    radial-gradient(60% 38% at 50% 14%, rgba(150,190,255,0.15), transparent 72%),
-    radial-gradient(55% 50% at 68% 58%, rgba(180,160,255,0.075), transparent 72%),
-    radial-gradient(45% 32% at 28% 84%, rgba(220,190,140,0.05), transparent 75%),
-    radial-gradient(1.6px 1.6px at 20% 35%, rgba(255,255,255,0.8), transparent 100%),
-    radial-gradient(1.2px 1.2px at 82% 12%, rgba(255,255,255,0.55), transparent 100%),
-    radial-gradient(2px 2px at 45% 68%, rgba(210,225,255,0.85), transparent 100%),
-    radial-gradient(1px 1px at 65% 40%, rgba(255,255,255,0.45), transparent 100%),
-    radial-gradient(1.4px 1.4px at 10% 80%, rgba(255,255,255,0.6), transparent 100%),
-    radial-gradient(1px 1px at 90% 60%, rgba(232,201,138,0.5), transparent 100%),
-    radial-gradient(1.3px 1.3px at 35% 15%, rgba(255,255,255,0.5), transparent 100%),
-    radial-gradient(1px 1px at 55% 90%, rgba(255,255,255,0.42), transparent 100%);
-  background-size:
-    100% 100%, 100% 100%, 100% 100%,
-    130px 130px, 210px 210px, 95px 95px, 175px 175px,
-    280px 280px, 240px 240px, 150px 150px, 320px 320px;
+  /* No gradients here any more. The old design drew its sky in CSS - three
+     washes and eight layers of stars - because there was nothing else to
+     draw it. fx.js paints now, and two skies fighting each other is worse
+     than either of them alone. */
+  transition: background-color 900ms ease, color 900ms ease;
 }
+
 body { display: flex; flex-direction: column; }
 
 /* The veil sits between the sky and the content: without it, bright stars
@@ -94,9 +182,8 @@ body { display: flex; flex-direction: column; }
    Opacity is driven per screen - Today wants the sky, a data table does not. */
 #fx-veil {
   position: fixed; inset: 0; z-index: 0; pointer-events: none;
-  background: radial-gradient(120% 80% at 50% 30%,
-              rgba(0,0,0,0.30), rgba(0,0,0,0.72) 70%, rgba(0,0,0,0.85));
-  transition: opacity 500ms ease;
+  background: var(--veil);
+  transition: opacity 500ms ease, background 900ms ease;
 }
 body[data-screen="screen-today"] #fx-veil { opacity: 0.55; }
 body[data-screen="screen-chat"] #fx-veil { opacity: 0.9; }
@@ -107,7 +194,7 @@ body[data-screen="screen-devices"] #fx-veil { opacity: 0.95; }
    flat gradient and one that looks like a photographed surface. */
 #fx-grain {
   position: fixed; inset: -50%; z-index: 60; pointer-events: none;
-  opacity: 0.035; mix-blend-mode: overlay;
+  opacity: var(--grain-opacity); mix-blend-mode: var(--grain-blend);
   background-image: url("data:image/svg+xml;utf8,\
 <svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'>\
 <filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/></filter>\
@@ -148,7 +235,7 @@ body[data-screen="screen-devices"] #fx-veil { opacity: 0.95; }
 .panel::before {
   content: ""; position: absolute; inset: 0; pointer-events: none;
   background: radial-gradient(200px 160px at var(--mx, 30%) var(--my, 0%),
-              rgba(207,227,255,0.10), transparent 70%);
+              var(--edge), transparent 70%);
   opacity: 0; transition: opacity 420ms ease;
 }
 .panel.lit::before { opacity: 1; }
@@ -169,15 +256,14 @@ body[data-screen="screen-devices"] #fx-veil { opacity: 0.95; }
 .brand {
   font-weight: 600; font-size: 0.98rem; letter-spacing: 0.18em;
   color: var(--accent);
-  text-shadow: 0 0 22px rgba(207,227,255,0.35);
 }
 .topbar-right { display: flex; align-items: center; gap: 10px; }
 .dot {
   width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint);
   box-shadow: 0 0 0 0 rgba(143,227,176,0.5);
 }
-.dot.ok { background: var(--good); box-shadow: 0 0 10px rgba(143,227,176,0.6); }
-.dot.err { background: var(--bad); box-shadow: 0 0 10px rgba(255,154,154,0.6); }
+.dot.ok { background: var(--good); }
+.dot.err { background: var(--bad); }
 
 .cost-pill {
   font: inherit; font-size: 0.76rem; font-variant-numeric: tabular-nums;
@@ -225,13 +311,13 @@ h2.section-title {
 .hero {
   position: relative;
   border-radius: 24px; padding: 22px 20px 20px; margin-bottom: 22px;
-  background: linear-gradient(165deg, rgba(24,32,48,0.86), rgba(6,8,13,0.9));
+  background: linear-gradient(165deg, var(--hero-a), var(--hero-b));
   -webkit-backdrop-filter: var(--blur);
   backdrop-filter: var(--blur);
   border: 1px solid transparent;
   background-image:
-    linear-gradient(165deg, rgba(24,32,48,0.86), rgba(6,8,13,0.9)),
-    linear-gradient(to bottom, rgba(207,227,255,0.30), var(--edge-soft) 40%, transparent);
+    linear-gradient(165deg, var(--hero-a), var(--hero-b)),
+    linear-gradient(to bottom, var(--edge), var(--edge-soft) 45%, transparent);
   background-origin: border-box; background-clip: padding-box, border-box;
   box-shadow: var(--e2);
   overflow: hidden;
@@ -241,7 +327,7 @@ h2.section-title {
      the single most important thing on the screen. */
   content: ""; position: absolute; top: -60%; left: -60%;
   width: 80%; height: 220%;
-  background: linear-gradient(105deg, transparent, rgba(207,227,255,0.10), transparent);
+  background: linear-gradient(105deg, transparent, var(--edge), transparent);
   transform: rotate(8deg);
   animation: sweep 9s ease-in-out 1.2s infinite;
 }
@@ -280,7 +366,7 @@ h2.section-title {
   min-width: 3.2ch; text-align: right;
 }
 .stat-row .num.zero { color: var(--text-faint); }
-.stat-row .num.hot { color: var(--accent); text-shadow: 0 0 20px rgba(207,227,255,0.4); }
+.stat-row .num.hot { color: var(--accent); }
 .stat-row .label { flex: 1; font-size: 0.92rem; color: var(--text-dim); }
 
 /* --- cards / signals --------------------------------------------------- */
@@ -329,14 +415,14 @@ h2.section-title {
 }
 .chip:active { transform: scale(0.97); }
 .chip.on {
-  color: #05070c; background: var(--accent); border-color: var(--accent);
-  font-weight: 600; box-shadow: 0 0 22px rgba(207,227,255,0.3);
+  color: var(--me-ink); background: var(--accent); border-color: var(--accent);
+  font-weight: 600;
 }
 .chip[disabled] { opacity: 0.4; }
 .chip.danger { color: var(--bad); border-color: rgba(255,154,154,0.3); }
 
 .pill-btn {
-  font: inherit; font-size: 0.85rem; font-weight: 600; color: #05070c;
+  font: inherit; font-size: 0.85rem; font-weight: 600; color: var(--me-ink);
   background: var(--accent); border: none; border-radius: 999px;
   padding: 10px 18px; cursor: pointer;
 }
@@ -359,7 +445,7 @@ h2.section-title {
 .out {
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-size: 0.74rem; line-height: 1.5; color: var(--text-dim);
-  background: rgba(0,0,0,0.5); border: 1px solid var(--edge-soft);
+  background: var(--code-bg); border: 1px solid var(--edge-soft);
   border-radius: var(--r-sm); padding: 12px;
   white-space: pre-wrap; word-break: break-word;
   max-height: 42vh; overflow: auto; margin: 0;
@@ -413,10 +499,10 @@ td strong { color: var(--text); font-weight: 600; }
   font-size: 0.9rem; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
 }
 .bubble.me {
-  align-self: flex-end; color: #05070c; font-weight: 500;
-  background: linear-gradient(160deg, #dbe9ff, #b9cdf0);
+  align-self: flex-end; color: var(--me-ink); font-weight: 500;
+  background: linear-gradient(160deg, var(--me-a), var(--me-b));
   border-bottom-right-radius: 6px;
-  box-shadow: 0 6px 18px -8px rgba(207,227,255,0.5);
+  box-shadow: var(--e1);
 }
 .bubble.bot {
   align-self: flex-start; color: var(--text);
@@ -450,7 +536,7 @@ td strong { color: var(--text); font-weight: 600; }
 .chat-form textarea:focus { outline: none; }
 .send-btn {
   width: 38px; height: 38px; flex-shrink: 0; border-radius: 50%;
-  border: none; background: var(--accent); color: #05070c; cursor: pointer;
+  border: none; background: var(--accent); color: var(--me-ink); cursor: pointer;
   display: grid; place-items: center;
 }
 .send-btn svg { width: 19px; height: 19px; }
@@ -466,7 +552,7 @@ td strong { color: var(--text); font-weight: 600; }
 
 .device-stage {
   position: relative; border-radius: var(--r); overflow: hidden;
-  background: #000; border: 1px solid var(--edge-soft);
+  background: rgba(0,0,0,0.85); border: 1px solid var(--edge-soft);
   box-shadow: var(--e2);
   max-height: 62vh; margin: 0 auto; display: grid; place-items: center;
 }
@@ -479,7 +565,7 @@ td strong { color: var(--text); font-weight: 600; }
   opacity: 0; transition: opacity 260ms ease;
 }
 .device-stage .layer.on { opacity: 1; }
-.device-stage video.layer { background: #000; }
+.device-stage video.layer { background: rgba(0,0,0,0.85); }
 .stage-wake {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
   z-index: 4;
@@ -502,7 +588,7 @@ body.stage-fs .topbar, body.stage-fs .tabbar { display: none; }
   transform: translateX(-50%); z-index: 95;
   display: flex; gap: 7px; flex-wrap: wrap; justify-content: center;
   max-width: 96vw; padding: 7px;
-  border-radius: 999px; background: rgba(0,0,0,0.55);
+  border-radius: 999px; background: var(--pane-solid);
   -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
   /* Fades out of the way; any touch on the stage brings it back. */
   opacity: 0.32; transition: opacity 220ms ease;
@@ -514,10 +600,10 @@ body.stage-fs .stage-badge { opacity: 0.35; }
   position: absolute; top: 10px; left: 10px; z-index: 2;
   font-size: 0.62rem; letter-spacing: 0.14em; text-transform: uppercase;
   padding: 4px 9px; border-radius: 999px;
-  background: rgba(0,0,0,0.55); color: var(--text-faint);
+  background: var(--code-bg); color: var(--text-dim);
   -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
 }
-.stage-badge.live { color: #05070c; background: var(--good); font-weight: 700; }
+.stage-badge.live { color: var(--me-ink); background: var(--good); font-weight: 700; }
 .stagebar { display: flex; gap: 8px; margin: 10px 0 14px; flex-wrap: wrap; }
 
 .tap-ripple {
@@ -559,22 +645,22 @@ body.stage-fs .stage-badge { opacity: 0.35; }
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   border: 1px solid transparent;
   background-image:
-    linear-gradient(165deg, rgba(24,32,48,0.86), rgba(6,8,13,0.9)),
-    linear-gradient(to bottom, rgba(207,227,255,0.28), transparent 60%);
+    linear-gradient(165deg, var(--hero-a), var(--hero-b)),
+    linear-gradient(to bottom, var(--edge), transparent 60%);
   background-origin: border-box; background-clip: padding-box, border-box;
   box-shadow: var(--e2);
 }
 .balance .amount {
   font-size: 3rem; font-weight: 200; letter-spacing: -0.04em;
   font-variant-numeric: tabular-nums; line-height: 1;
-  color: var(--accent); text-shadow: 0 0 40px rgba(207,227,255,0.35);
+  color: var(--accent);
 }
-.balance .amount.low { color: var(--gold); text-shadow: 0 0 40px rgba(232,201,138,0.35); }
+.balance .amount.low { color: var(--gold); }
 .balance .cap { font-size: 0.68rem; letter-spacing: 0.2em; text-transform: uppercase;
   color: var(--text-faint); margin-bottom: 14px; }
 .balance .sub { font-size: 0.8rem; color: var(--text-dim); margin: 12px 0 18px; }
 .meter {
-  height: 4px; border-radius: 999px; background: rgba(255,255,255,0.08);
+  height: 4px; border-radius: 999px; background: var(--edge-soft);
   overflow: hidden; margin: 16px 0 0;
 }
 .meter i { display: block; height: 100%; border-radius: 999px;
@@ -582,8 +668,8 @@ body.stage-fs .stage-badge { opacity: 0.35; }
 .meter.warn i { background: linear-gradient(90deg, var(--gold), var(--bad)); }
 .topup {
   display: inline-block; text-decoration: none; font-size: 0.85rem; font-weight: 600;
-  color: #05070c; background: var(--accent); border-radius: 999px;
-  padding: 11px 22px; box-shadow: 0 0 26px rgba(207,227,255,0.28);
+  color: var(--me-ink); background: var(--accent); border-radius: 999px;
+  padding: 11px 22px; box-shadow: var(--e1);
 }
 
 /* --- tab bar ----------------------------------------------------------- */
@@ -602,14 +688,13 @@ body.stage-fs .stage-badge { opacity: 0.35; }
 }
 .tab svg { width: 21px; height: 21px; stroke-width: 1.6; }
 .tab.active { color: var(--accent); }
-.tab.active svg { filter: drop-shadow(0 0 8px rgba(207,227,255,0.55)); }
 .tab span { transition: opacity 200ms ease; }
 
 /* --- sheet ------------------------------------------------------------- */
 
 .sheet-wrap { position: fixed; inset: 0; z-index: 70; display: flex; align-items: flex-end; }
 .sheet-wrap.hidden { display: none; }
-.sheet-scrim { position: absolute; inset: 0; background: rgba(0,0,0,0.6);
+.sheet-scrim { position: absolute; inset: 0; background: var(--scrim);
   -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
 .sheet {
   position: relative; width: 100%; max-height: 82vh; overflow-y: auto;
@@ -637,7 +722,7 @@ body.stage-fs .stage-badge { opacity: 0.35; }
 /* --- modal ------------------------------------------------------------- */
 
 .modal { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center;
-  background: rgba(0,0,0,0.72); padding: var(--pad); }
+  background: var(--scrim); padding: var(--pad); }
 .modal.hidden { display: none; }
 .modal-box { width: 100%; max-width: 380px; border-radius: 22px; padding: 24px; }
 .modal-box h2 { margin: 0 0 8px; font-size: 1.1rem; }
