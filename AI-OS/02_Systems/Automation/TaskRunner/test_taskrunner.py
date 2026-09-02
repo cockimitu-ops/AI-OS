@@ -4560,6 +4560,169 @@ class TestSpendCallLog(unittest.TestCase):
 
 
 
+class TestWatchHealth(unittest.TestCase):
+    """Is each saved search still working? On 2026-09-01 all five had been
+    parsing zero listings for an unknown number of days, the runs reported
+    success because fetching worked, and the home screen said "0 Funde
+    insgesamt" - which is exactly what a slow market looks like."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "watch_health", os.path.join(HERE, "scripts", "watch_health.py"))
+        cls.wh = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.wh)
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.tmp.name, "health.json")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_a_working_watch_is_ok(self):
+        row = self.wh.record("monitore", 25, 2, path=self.path)
+        self.assertEqual(self.wh.status_of(row), "ok")
+        self.assertEqual(row["consecutive_zero"], 0)
+
+    def test_one_empty_run_is_only_quiet(self):
+        """A single empty run is a market, not a fault. Alerting on it would
+        teach him to ignore the alert, which is how the real outage stayed
+        invisible."""
+        self.wh.record("monitore", 25, path=self.path)
+        row = self.wh.record("monitore", 0, path=self.path)
+        self.assertEqual(self.wh.status_of(row), "quiet")
+
+    def test_three_empty_runs_is_blind(self):
+        for _ in range(self.wh.BLIND_AFTER):
+            row = self.wh.record("werkzeug", 0, path=self.path)
+        self.assertEqual(self.wh.status_of(row), "blind")
+        self.assertEqual([p["watch"] for p in self.wh.problems(path=self.path)],
+                         ["werkzeug"])
+
+    def test_a_recovery_clears_the_count(self):
+        for _ in range(5):
+            self.wh.record("werkzeug", 0, path=self.path)
+        row = self.wh.record("werkzeug", 20, path=self.path)
+        self.assertEqual(self.wh.status_of(row), "ok")
+        self.assertEqual(row["consecutive_zero"], 0)
+
+    def test_a_watch_that_stopped_running_is_stale(self):
+        """Different fault, different fix: the parser is fine and the timer
+        is not."""
+        old = (self.wh._now()
+               - timedelta(hours=self.wh.STALE_AFTER_HOURS + 2))
+        row = self.wh.record("monitore", 25, path=self.path, now=old)
+        self.assertEqual(self.wh.status_of(row), "stale")
+
+    def test_history_is_bounded(self):
+        now = self.wh._now()
+        for days in range(self.wh.HISTORY_DAYS + 15):
+            self.wh.record("monitore", 5, path=self.path,
+                           now=now - timedelta(days=days))
+        row = self.wh.load(self.path)["monitore"]
+        self.assertLessEqual(len(row["history"]), self.wh.HISTORY_DAYS + 1)
+
+    def test_the_report_stays_quiet_when_nothing_is_wrong(self):
+        """A daily "everything is fine" is the fastest way to make a daily
+        check invisible."""
+        self.wh.record("monitore", 25, path=self.path)
+        text = self.wh.format_report(path=self.path)
+        self.assertIn("alle 1", text)
+        self.assertNotIn("•", text)
+
+    def test_the_report_names_what_is_broken(self):
+        self.wh.record("monitore", 25, path=self.path)
+        for _ in range(self.wh.BLIND_AFTER):
+            self.wh.record("werkzeug", 0, path=self.path)
+        text = self.wh.format_report(path=self.path)
+        self.assertIn("werkzeug", text)
+        self.assertNotIn("monitore", text)
+
+
+class TestProposalDecisions(unittest.TestCase):
+    """The accept/decline gate, now that a screen can drive it as well as a
+    Telegram message. Both go through the same dispatch, because two copies
+    of the rule deciding what the worker may be handed is exactly the kind of
+    duplication that drifts apart quietly."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "proposals_decide", os.path.join(HERE, "proposals.py"))
+        cls.pr = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.pr)
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = (self.pr.PROPOSALS_DIR, self.pr.PENDING_PATH,
+                      self.pr.REVIEW_PATH, self.pr.ARCHIVE_PATH, self.pr.TODO_PATH)
+        self.pr.PROPOSALS_DIR = self.tmp.name
+        self.pr.PENDING_PATH = os.path.join(self.tmp.name, "pending.json")
+        self.pr.REVIEW_PATH = os.path.join(self.tmp.name, "review.json")
+        self.pr.ARCHIVE_PATH = os.path.join(self.tmp.name, "archive.jsonl")
+        self.pr.TODO_PATH = os.path.join(self.tmp.name, "todo.json")
+        self.pr._atomic_write(self.pr.REVIEW_PATH, json.dumps([
+            {"agent": "Tech_Scout", "kind": "ai", "text": "eins"},
+            {"agent": "Business_Development", "kind": "human", "text": "zwei"},
+        ]))
+
+    def tearDown(self):
+        (self.pr.PROPOSALS_DIR, self.pr.PENDING_PATH, self.pr.REVIEW_PATH,
+         self.pr.ARCHIVE_PATH, self.pr.TODO_PATH) = self.saved
+        self.tmp.cleanup()
+
+    def test_deciding_one_leaves_the_others(self):
+        item, error = self.pr.decide_one(1, True)
+        self.assertIsNone(error)
+        self.assertEqual(item["text"], "eins")
+        self.assertEqual([p["text"] for p in self.pr.load_review()], ["zwei"])
+
+    def test_a_decision_is_archived_with_its_verdict(self):
+        self.pr.decide_one(2, False)
+        lines = [json.loads(l) for l in
+                 open(self.pr.ARCHIVE_PATH, encoding="utf-8").read().splitlines()]
+        self.assertEqual(lines[0]["decision"], "declined")
+        self.assertEqual(lines[0]["text"], "zwei")
+
+    def test_the_same_proposal_cannot_be_decided_twice(self):
+        """It leaves the review the moment it is decided - the archive is
+        written first precisely so a crash between the two costs a duplicate
+        task rather than a proposal that can be approved again."""
+        self.pr.decide_one(1, True)
+        self.pr.decide_one(1, True)
+        _, error = self.pr.decide_one(1, True)
+        self.assertIsNotNone(error)
+
+    def test_an_out_of_range_number_is_an_error(self):
+        _, error = self.pr.decide_one(9, True)
+        self.assertIn("9", error)
+
+    def test_dispatch_queues_ai_work_and_lists_human_work(self):
+        """Queueing a human-intervention item would hand the worker something
+        it cannot possibly do - "publish the Gumroad listing" - and a free
+        model given an impossible task reports success rather than refusing."""
+        inbox = os.path.join(self.tmp.name, "inbox")
+        fake_agents = types.SimpleNamespace(directive=lambda a: "",
+                                            resolve=lambda a: None)
+        queued = self.pr.dispatch([
+            {"agent": "Tech_Scout", "kind": "ai", "text": "baue etwas"},
+            {"agent": "Business_Development", "kind": "human", "text": "ruf an"},
+        ], inbox=inbox, agents_module=fake_agents)
+        self.assertEqual(queued, 1)
+        files = os.listdir(inbox)
+        self.assertEqual(len(files), 1)
+        body = open(os.path.join(inbox, files[0]), encoding="utf-8").read()
+        self.assertIn("baue etwas", body)
+        # The instruction to execute has to be explicit: two approved tasks
+        # came back as fresh AI_PROPOSALs on 2026-09-01 because the agents
+        # were behaving correctly for their own personas.
+        self.assertIn("DO THIS NOW", body)
+        self.assertNotIn("ruf an", body)
+        self.assertEqual([t["text"] for t in self.pr.load_todos()], ["ruf an"])
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 

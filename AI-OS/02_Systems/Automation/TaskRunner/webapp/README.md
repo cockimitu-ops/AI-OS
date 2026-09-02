@@ -145,3 +145,49 @@ deliberately separate halves:
 
 Per-transcript results are cached on `(mtime, size)` — the session archive is
 ~45 MB and one session alone is 23 of them.
+
+## Proposals, on a screen
+
+`/api/proposals` lists whatever is waiting, `/api/proposal-decide` takes one
+accept or decline, `/api/proposal-open` turns the pending queue into a round
+outside the nightly 20:00 job. The lifecycle still belongs to
+`proposals.py` - and `proposals.dispatch()`, which decides what an approval
+turns into, is shared with the Telegram bridge rather than reimplemented
+here. Approving an AI item queues a task; approving a human one adds to
+Felix's list, because handing the worker "publish the Gumroad listing" gets
+a cheerful report that it is done.
+
+Telegram takes a batch ("approve 1 3") because typing it out is the
+interaction. A screen wants the opposite: one decision, one tap, and the list
+is shorter.
+
+## The Pico 4
+
+Listed as a device before it is reachable, on purpose - an absent row reads
+as "not supported", a row that says why it is offline reads as "one cable
+away". `scripts/pico_setup.sh` does the once-only pairing over USB
+(developer mode, `adb tcpip`, optionally sideloading Tailscale), and prints
+the `AIOS_PICO_HOST` line to paste into `.env`.
+
+PICO OS is Android, so the panel works unchanged: state, input, app launch,
+screenshots and the same H.264 stream. Three differences are real -
+it is not rooted and does not need to be (the `su` detour is Xiaomi's
+restriction, not Android's), its screen is a stereo pair so the size must be
+read rather than assumed, and it composites constantly, which means the
+still-screen problem that dogs the phones does not exist there.
+
+## Sniper health
+
+`scripts/watch_health.py` records, per saved search, whether it parsed
+anything - fed by the sniper on every run, read by `aios-snipe-health.timer`
+at 11:00 and by the Snipes tab.
+
+It exists because of one incident. On 2026-09-01 all five watches had gone
+completely blind: the site restyled, every CSS-class regex missed, and each
+run parsed zero listings while reporting success, because fetching worked.
+The home screen said "0 Funde insgesamt", which is exactly what a slow market
+looks like.
+
+Three consecutive empty runs is "blind" rather than one, because one empty
+run IS a market and crying wolf about it teaches the same lesson the false
+alerts did. The daily message says nothing at all when everything is fine.

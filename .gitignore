@@ -27,6 +27,8 @@ AI-OS/02_Systems/Automation/TaskRunner/backups/*.tar.gz
 AI-OS/02_Systems/Automation/TaskRunner/health/state.json
 AI-OS/02_Systems/Automation/TaskRunner/schedules/state.json
 AI-OS/02_Systems/Automation/TaskRunner/watches/state.json
+# Per-search health record: runtime data, rebuilt by the next sniper run.
+AI-OS/02_Systems/Automation/TaskRunner/watches/health.json
 AI-OS/02_Systems/Automation/TaskRunner/prospects/domains.json
 AI-OS/02_Systems/Automation/TaskRunner/prospects/results.json
 AI-OS/02_Systems/Automation/TaskRunner/prospects/reported.json

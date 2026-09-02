@@ -317,6 +317,90 @@ def close_review(chosen, rejected, now=None):
     _atomic_write(REVIEW_PATH, "[]")
 
 
+# The instruction to EXECUTE is explicit, and it has to be. Observed
+# 2026-09-01: two approved tasks came back as prose and as another
+# AI_PROPOSAL rather than as work. The agents were behaving correctly for
+# their own personas - Tech_Scout's prompt says to output only proposal lines
+# - so an approved task looked to them like another proposal round. Nothing
+# was done, and both were logged as completed.
+APPROVED_PREAMBLE = (
+    "<!-- notify -->\n"
+    "(Approved by Felix from tonight's review.)\n\n"
+    "DO THIS NOW. This is not a proposal round - Felix has already approved "
+    "it and is expecting the work to be done. Do NOT reply with AI_PROPOSAL "
+    "or HUMAN_PROPOSAL; that output is ignored here. Make the actual change, "
+    "then report in plain words what you changed and where. If it turns out "
+    "to be impossible or the premise is wrong - a file or repository that "
+    "does not exist, for instance - say that plainly instead of doing "
+    "something adjacent.\n\n")
+
+
+def dispatch(chosen, inbox=None, agents_module=None):
+    """Turn approved proposals into work. -> how many tasks were queued.
+
+    Lives here rather than in whichever front door happened to approve them.
+    It was written inside telegram_bridge.py, which was fine while Telegram
+    was the only way to say yes; the web app is a second one, and two copies
+    of the rule that decides what the worker is allowed to be handed is
+    exactly the kind of duplication that drifts apart quietly.
+
+    Approval branches on who can actually do the work. Queueing a
+    human-intervention item would hand the worker something it cannot
+    possibly do - "publish the Gumroad listing" - and a free model given an
+    impossible task tends to report success rather than refuse. Those go on
+    Felix's own list instead."""
+    import agents as _agents  # local: proposals.py is imported by tools that
+    if agents_module is not None:  # have no need for the agent registry
+        _agents = agents_module
+    inbox = inbox or os.path.join(HERE, "tasks", "inbox")
+    ai_items = [i for i in chosen if i.get("kind") == "ai"]
+    human_items = [i for i in chosen if i.get("kind") != "ai"]
+    os.makedirs(inbox, exist_ok=True)
+    for item in ai_items:
+        stamp = time.strftime("%Y%m%d_%H%M%S") + f"_{int(time.time() * 1e6) % 1000000:06d}"
+        path = os.path.join(inbox, f"task_approved_{stamp}.md")
+        body = (_agents.directive(item["agent"])
+                if _agents.resolve(item.get("agent", "")) else "")
+        body += APPROVED_PREAMBLE + f"{item['text']}\n"
+        tmp = f"{path}.part"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(body)
+        os.replace(tmp, path)
+    if human_items:
+        add_todos(human_items)
+    return len(ai_items)
+
+
+def decide_one(index, approve, now=None):
+    """Accept or decline a single proposal by its number. -> (item, error).
+
+    Telegram takes a batch - "approve 1 3" - because typing it out is the
+    interaction. A screen with a row per proposal wants the opposite: one
+    decision, one tap, and the list is shorter. Both write the same archive
+    and both go through dispatch()."""
+    review = load_review()
+    if not review:
+        return None, "Es liegt gerade nichts zur Entscheidung."
+    try:
+        index = int(index)
+    except (TypeError, ValueError):
+        return None, "Ungültige Nummer."
+    if not 1 <= index <= len(review):
+        return None, f"Vorschlag {index} gibt es nicht - es sind {len(review)}."
+    item = review[index - 1]
+    remaining = [p for i, p in enumerate(review, 1) if i != index]
+    stamp = now or time.strftime("%Y-%m-%d %H:%M")
+    os.makedirs(PROPOSALS_DIR, exist_ok=True)
+    with open(ARCHIVE_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps({**item, "decision": "approved" if approve else "declined",
+                            "decided": stamp}, ensure_ascii=False) + "\n")
+    # Written before the work is queued: a crash between the two costs a
+    # dispatched task that is no longer in the review, which is recoverable.
+    # The other order costs a proposal that can be approved twice.
+    _atomic_write(REVIEW_PATH, json.dumps(remaining, indent=2, ensure_ascii=False))
+    return item, None
+
+
 def format_review(review):
     """The 20:00 Telegram message, grouped by who has to do the work.
 

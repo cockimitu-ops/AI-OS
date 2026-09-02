@@ -37,6 +37,8 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
+import watch_health
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 TASK_RUNNER_DIR = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, SCRIPT_DIR)
@@ -457,17 +459,29 @@ def run(dry_run=False, only=None, reseed=False, backfill=False):
             time.sleep(random.uniform(*DELAY_BETWEEN_WATCHES))
 
         url = build_url(cfg)
+        watch_name = os.path.splitext(fname)[0]
         try:
             listings = parse_listings(fetch(url))
         except urllib.error.HTTPError as e:
             failures.append(f"{fname}: HTTP {e.code}")
+            if not dry_run:
+                watch_health.record(watch_name, 0)
             continue
         except Exception as e:  # noqa: BLE001 - one bad watch must not kill the rest
             failures.append(f"{fname}: {type(e).__name__}: {e}")
+            if not dry_run:
+                watch_health.record(watch_name, 0)
             continue
 
         if not listings:
             failures.append(f"{fname}: 0 listings parsed (layout may have changed)")
+            # Recorded, not just printed. This exact state - fetch fine, parse
+            # empty, run "successful" - is what hid five dead watches behind
+            # the words "0 Funde insgesamt" for days. A line in the journal
+            # vanishes on the next run; a count of consecutive empty runs is
+            # the difference between a quiet market and a broken parser.
+            if not dry_run:
+                watch_health.record(watch_name, 0)
             continue
 
         # A watch's first run only records what is already there. Without this,
@@ -475,7 +489,6 @@ def run(dry_run=False, only=None, reseed=False, backfill=False):
         # new at all, which trains you to ignore the alerts - the one failure
         # mode that makes the whole tool worthless.
         seeding = reseed or fname not in state["seeded"]
-        watch_name = os.path.splitext(fname)[0]
         hits = 0
 
         scanned += len(listings)
@@ -500,6 +513,9 @@ def run(dry_run=False, only=None, reseed=False, backfill=False):
                 if matches(listing, cfg):
                     finds.append(dict(listing, watch=watch_name,
                                       found_at=now_iso, backfilled=True))
+
+        if not dry_run:
+            watch_health.record(watch_name, len(listings), hits)
 
         if seeding:
             first = True

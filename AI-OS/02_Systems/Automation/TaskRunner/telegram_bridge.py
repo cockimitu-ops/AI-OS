@@ -127,53 +127,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _md_lite_to_telegram_html(error), parse_mode=ParseMode.HTML)
             return
 
-        # Approval branches on who can actually do the work. Queueing a
-        # human-intervention item would hand the worker something it cannot
-        # possibly do - "publish the Gumroad listing" - and a free model
-        # given an impossible task tends to report success rather than
-        # refuse. Those go on Felix's list instead.
-        ai_items = [i for i in chosen if i.get("kind") == "ai"]
+        # One rule for what an approval turns into, wherever the yes came
+        # from - the web app approves the same proposals. See
+        # proposals.dispatch() for why it branches on who can do the work.
+        queued = proposals.dispatch(chosen)
         human_items = [i for i in chosen if i.get("kind") != "ai"]
-
-        for item in ai_items:
-            stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            name = f"task_approved_{stamp}.md"
-            path = os.path.join(INBOX, name)
-            body = (agents.directive(item["agent"])
-                    if agents.resolve(item.get("agent", "")) else "")
-            # The instruction to EXECUTE is explicit, and it has to be.
-            # Observed 2026-09-01: two approved tasks came back as prose and
-            # as another AI_PROPOSAL rather than as work. The agents were
-            # behaving correctly for their own personas - Tech_Scout's prompt
-            # says to output only proposal lines - so an approved task looked
-            # to them like another proposal round. Nothing was done, and both
-            # were logged as completed.
-            body += ("<!-- notify -->\n"
-                     "(Approved by Felix from tonight's review.)\n\n"
-                     "DO THIS NOW. This is not a proposal round - Felix has "
-                     "already approved it and is expecting the work to be "
-                     "done. Do NOT reply with AI_PROPOSAL or HUMAN_PROPOSAL; "
-                     "that output is ignored here. Make the actual change, "
-                     "then report in plain words what you changed and where. "
-                     "If it turns out to be impossible or the premise is "
-                     "wrong - a file or repository that does not exist, for "
-                     "instance - say that plainly instead of doing something "
-                     "adjacent.\n\n"
-                     f"{item['text']}\n")
-            tmp = f"{path}.part"
-            with open(tmp, "w", encoding="utf-8") as f:
-                f.write(body)
-            os.replace(tmp, path)
-
-        proposals.add_todos(human_items)
         proposals.close_review(chosen, rejected)
 
         if not chosen:
             summary = f"Nothing approved — {len(rejected)} declined."
         else:
             parts = []
-            if ai_items:
-                parts.append(f"{len(ai_items)} queued for me")
+            if queued:
+                parts.append(f"{queued} queued for me")
             if human_items:
                 parts.append(f"{len(human_items)} added to your list")
             summary = ("✅ " + ", ".join(parts)

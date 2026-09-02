@@ -88,6 +88,10 @@ API_ROUTES = {
     ("POST", "/api/claude-transcript"): api.get_claude_transcript,
     ("POST", "/api/claude-send"): api.post_claude_send,
     ("POST", "/api/claude-result"): api.get_claude_result,
+    ("GET", "/api/proposals"): api.get_proposals,
+    ("POST", "/api/proposal-decide"): api.post_proposal_decide,
+    ("POST", "/api/proposal-open"): api.post_proposal_open,
+    ("POST", "/api/todo-done"): api.post_todo_done,
 }
 
 # Routes whose body is file bytes, not JSON. They get (query_dict, raw_bytes)

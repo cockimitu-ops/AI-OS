@@ -165,6 +165,7 @@ const SCREEN_LOADERS = {
   "screen-devices": loadDevices,
   "screen-money": loadMoneyBoard,
   "screen-costs": loadCosts,
+  "screen-proposals": loadProposals,
   "screen-dmarc": loadDmarcLeads,
   "screen-snipes": loadSnipes,
   "screen-flips": loadFlipLog,
@@ -177,6 +178,7 @@ const SCREEN_LOADERS = {
 // live behind "Mehr", which is also where a screen goes when it is a place
 // you visit rather than a place you live.
 const MORE_SCREENS = [
+  { id: "screen-proposals", label: "Vorschläge", icon: "M9 11l3 3 8-8M4 12a8 8 0 1 0 8-8" },
   { id: "screen-costs", label: "Kosten", icon: "M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" },
   { id: "screen-dmarc", label: "DMARC-Leads", icon: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" },
   { id: "screen-snipes", label: "Snipes", icon: "M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16M12 2v3M12 19v3M2 12h3M19 12h3" },
@@ -287,7 +289,7 @@ async function loadToday() {
     const rows = [
       { val: s.letters_sent ?? 0, lbl: "Briefe raus", to: "screen-dmarc" },
       { val: s.leads_mailable ?? 0, lbl: "Leads mit Postadresse", to: "screen-dmarc", hot: true },
-      { val: d.proposals_pending ?? 0, lbl: "Vorschläge warten auf dich", to: "screen-chat" },
+      { val: d.proposals_pending ?? 0, lbl: "Vorschläge warten auf dich", to: "screen-proposals" },
       { val: d.study_pending ?? 0, lbl: "Study-Notizen unverarbeitet", to: "screen-downloads" },
       { val: s.flips?.open ?? 0, lbl: "Flips offen", to: "screen-flips" },
     ];
@@ -1680,6 +1682,8 @@ async function loadSnipes() {
       });
     });
 
+    renderSnipeHealth(data);
+
     if (!data.snipes.length) {
       listEl.innerHTML = `<div class="empty-state">${data.total ? "Nichts passt zu diesen Filtern." : "Noch keine Funde."}</div>`;
       return;
@@ -1969,4 +1973,170 @@ if (!getToken()) {
   showTokenModal();
 } else {
   loadActiveScreen();
+}
+
+
+// --- proposals -------------------------------------------------------------
+//
+// The propose/approve gate has existed since the agents could suggest work,
+// and until now saying yes meant replying "approve 1 3" to a Telegram
+// message. That is a good notification and a bad way to decide: the
+// proposals scroll out of reach, the numbers have to be counted, and there
+// is no way to see what is already waiting on you. One row, two buttons.
+
+async function loadProposals() {
+  const openEl = document.getElementById("prop-open");
+  const listEl = document.getElementById("prop-list");
+  const todoEl = document.getElementById("prop-todos");
+  try {
+    const d = await api("/api/proposals");
+    setConnDot("ok");
+
+    // Pending is what agents have proposed since the last round. The nightly
+    // job turns it into a round at 20:00; this is the other twenty-three
+    // hours, when something is waiting and you want to look now.
+    openEl.innerHTML = (!d.review.length && d.pending)
+      ? `<button class="pill-btn wide" id="prop-open-btn">${d.pending} neue${d.pending === 1 ? "r" : ""} Vorschlag${d.pending === 1 ? "" : "e"} — Runde öffnen</button>`
+      : (d.pending ? `<p class="hint">${d.pending} weitere warten auf die nächste Runde.</p>` : "");
+    document.getElementById("prop-open-btn")?.addEventListener("click", async (e) => {
+      e.target.disabled = true;
+      await api("/api/proposal-open", { method: "POST", body: "{}" });
+      loadProposals();
+    });
+
+    listEl.innerHTML = d.review.length ? d.review.map((p) => `
+      <div class="card" data-n="${p.n}">
+        <div class="row">
+          <h3>${p.kind === "ai" ? "Ich baue das" : "Braucht dich"}</h3>
+          <span class="sub">${escapeHtml(p.agent.replace(/_/g, " "))}</span>
+        </div>
+        <div class="sub" style="color:var(--text);margin:8px 0 12px">${escapeHtml(p.text)}</div>
+        <div class="chip-row" style="margin:0">
+          <button class="chip" data-yes="${p.n}">Annehmen</button>
+          <button class="chip danger" data-no="${p.n}">Ablehnen</button>
+        </div>
+      </div>`).join("")
+      : `<div class="empty-state">Nichts zu entscheiden.</div>`;
+
+    const decide = async (n, approve, btn) => {
+      if (window.fxTap) window.fxTap();
+      btn.disabled = true;
+      btn.textContent = "…";
+      try {
+        const r = await api("/api/proposal-decide", {
+          method: "POST", body: JSON.stringify({ index: Number(n), approve }),
+        });
+        // Said out loud, because approving an AI item and approving a human
+        // one do very different things and the difference is the whole point
+        // of the split.
+        deviceSayProposal(approve
+          ? (r.queued ? "Angenommen — läuft jetzt." : "Angenommen — steht auf deiner Liste.")
+          : "Abgelehnt.");
+      } catch (err) {
+        deviceSayProposal(`Fehler: ${err.message}`, true);
+      }
+      loadProposals();
+    };
+    listEl.querySelectorAll("[data-yes]").forEach((b) =>
+      b.addEventListener("click", () => decide(b.dataset.yes, true, b)));
+    listEl.querySelectorAll("[data-no]").forEach((b) =>
+      b.addEventListener("click", () => decide(b.dataset.no, false, b)));
+
+    todoEl.innerHTML = d.todos.length ? d.todos.map((t) => `
+      <div class="card">
+        <div class="row">
+          <h3>${escapeHtml(t.agent.replace(/_/g, " "))}</h3>
+          <button class="chip" data-done="${t.n}">erledigt</button>
+        </div>
+        <div class="sub" style="color:var(--text);margin-top:6px">${escapeHtml(t.text)}</div>
+        <div class="sub" style="margin-top:6px;opacity:.6">seit ${escapeHtml(t.added)}</div>
+      </div>`).join("")
+      : `<div class="empty-state">Nichts offen.</div>`;
+    todoEl.querySelectorAll("[data-done]").forEach((b) =>
+      b.addEventListener("click", async () => {
+        b.disabled = true;
+        await api("/api/todo-done", { method: "POST", body: JSON.stringify({ index: Number(b.dataset.done) }) });
+        loadProposals();
+      }));
+    litPanels(document.getElementById("screen-proposals"));
+    if (window.fxReveal) window.fxReveal(listEl, ".card", 45);
+  } catch (err) {
+    setConnDot("err");
+    listEl.innerHTML = `<div class="empty-state">Fehler: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function deviceSayProposal(msg, bad) {
+  const el = document.getElementById("prop-open");
+  if (!el) return;
+  const note = document.createElement("p");
+  note.className = "hint";
+  note.style.color = bad ? "var(--bad)" : "var(--good)";
+  note.textContent = msg;
+  el.appendChild(note);
+  setTimeout(() => note.remove(), 4000);
+}
+
+
+// --- sniper health and per-category rankings -------------------------------
+//
+// Two questions that the flat find list could not answer. "Is it working" -
+// on 2026-09-01 all five searches had been parsing nothing for an unknown
+// number of days and the screen said "0 Funde", which is what a quiet market
+// looks like. And "which category is worth my time" - forty D-tier phone
+// parts and two A-tier house clearances are not the same information.
+
+const SNIPE_STATUS = {
+  ok: { label: "läuft", cls: "good" },
+  quiet: { label: "gerade leer", cls: "" },
+  blind: { label: "blind", cls: "bad" },
+  stale: { label: "läuft nicht", cls: "bad" },
+  unknown: { label: "unbekannt", cls: "" },
+};
+const TIER_COLOURS = { S: "var(--gold)", A: "var(--accent)", B: "var(--accent)",
+                       C: "var(--text-dim)", D: "var(--text-faint)" };
+
+function renderSnipeHealth(data) {
+  const healthEl = document.getElementById("snipe-health");
+  const catsEl = document.getElementById("snipe-cats");
+  if (!healthEl || !catsEl) return;
+
+  const bad = data.health_problems || [];
+  healthEl.innerHTML = bad.length ? `
+    <div class="card" style="border-color:rgba(255,154,154,.3)">
+      <div class="row"><h3 style="color:var(--bad)">${bad.length} Suche${bad.length === 1 ? "" : "n"} liefert nichts</h3></div>
+      <div class="sub">${bad.map(escapeHtml).join(", ")} — das ist fast immer
+        der Parser, nicht der Markt. Die Seite hat am 1.9. schon einmal das
+        Layout geändert und alle fünf Suchen still gelegt.</div>
+    </div>` : "";
+
+  catsEl.innerHTML = (data.by_watch || []).map((w) => {
+    const st = SNIPE_STATUS[w.status] || SNIPE_STATUS.unknown;
+    const tiers = ["S", "A", "B", "C", "D"].filter((t) => w.tiers[t]);
+    return `
+      <div class="card" data-watch="${escapeHtml(w.watch)}">
+        <div class="row">
+          <h3>${escapeHtml(w.watch.replace(/_/g, " "))}</h3>
+          <span class="sub ${st.cls === "bad" ? "" : ""}"
+                style="color:${st.cls === "bad" ? "var(--bad)" : st.cls === "good" ? "var(--good)" : "var(--text-faint)"}">
+            ${st.label}${w.last_listings != null ? ` · ${w.last_listings} Anzeigen` : ""}</span>
+        </div>
+        <div class="sub" style="margin:8px 0 0;display:flex;gap:12px;flex-wrap:wrap">
+          <span>${w.finds} Funde</span>
+          ${tiers.map((t) => `<span style="color:${TIER_COLOURS[t]}">${t} ${w.tiers[t]}</span>`).join("")}
+          ${w.cheapest != null ? `<span>ab ${w.cheapest} €</span>` : ""}
+        </div>
+        ${w.best ? `<div class="sub" style="margin-top:8px;opacity:.8">Bestes: ${escapeHtml(w.best.title || "")}</div>` : ""}
+      </div>`;
+  }).join("") || `<div class="empty-state">Keine Suchen konfiguriert.</div>`;
+
+  // Tapping a category filters the list below to it - the same toggle rule
+  // as the chips, so tapping the active one clears it.
+  catsEl.querySelectorAll("[data-watch]").forEach((el) =>
+    el.addEventListener("click", () => {
+      if (window.fxTap) window.fxTap();
+      snipeFilters.watch = snipeFilters.watch === el.dataset.watch ? null : el.dataset.watch;
+      loadSnipes();
+    }));
+  litPanels(catsEl);
 }

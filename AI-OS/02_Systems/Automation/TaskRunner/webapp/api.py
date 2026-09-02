@@ -34,10 +34,12 @@ import flip_log
 import phone
 import phone_root
 import phone_stream
+import pico
 import proposals
 import snipe_rank
 import study_agent
 import vault_write
+import watch_health
 
 TASK_RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INBOX = os.path.join(TASK_RUNNER_DIR, "tasks", "inbox")
@@ -307,6 +309,11 @@ SCREENSHOT_DIR = os.path.join(TASK_RUNNER_DIR, "phone", "screenshots")
 DEVICES = {
     "poco": {"label": "Poco X3 Pro", "module": phone_root, "rooted": True},
     "nothing": {"label": "Nothing Phone 2a", "module": phone, "rooted": False},
+    # Listed before it is reachable, on purpose. An absent row would read as
+    # "not supported"; a row that says why it is offline reads as "one cable
+    # away", which is what it is - see scripts/pico_setup.sh.
+    "pico": {"label": "Pico 4", "module": pico, "rooted": False,
+             "extra": {"install"}},
 }
 
 # A panel is an at-a-glance view; waiting longer than this for a phone that
@@ -340,7 +347,10 @@ ROOT_ACTIONS = {"info", "sms", "calls", "clipboard", "ls", "read", "pull",
 # press. That gate lives in phone_root.py itself; this set is what tells the
 # panel to render the second press at all.
 DANGEROUS_ACTIONS = {"uninstall", "rm", "reboot", "wipe"}
-DEVICE_ACTIONS = BASE_ACTIONS | ROOT_ACTIONS | DANGEROUS_ACTIONS
+# Verbs a single device has that the others do not - sideloading an APK is
+# the whole point of a headset and meaningless on a phone Felix carries.
+EXTRA_ACTIONS = {"install"}
+DEVICE_ACTIONS = BASE_ACTIONS | ROOT_ACTIONS | DANGEROUS_ACTIONS | EXTRA_ACTIONS
 
 # A shell command from the panel is interactive - Felix is watching it. A long
 # one belongs in the task queue, not in a request a phone browser is holding
@@ -414,7 +424,7 @@ def get_devices(_body):
                 "current_app": state.get("current_app"),
                 "width": size[0] if size else None,
                 "height": size[1] if size else None,
-                "actions": sorted(BASE_ACTIONS | (
+                "actions": sorted(BASE_ACTIONS | entry.get("extra", set()) | (
                     ROOT_ACTIONS | DANGEROUS_ACTIONS if entry["rooted"] else set())),
             })
         except Exception as e:  # noqa: BLE001 - a device being away is normal
@@ -487,7 +497,10 @@ def post_device_action(body):
     except ValueError as e:
         return 400, {"error": str(e)}
     mod = entry["module"]
-    if action in (ROOT_ACTIONS | DANGEROUS_ACTIONS) and not entry["rooted"]:
+    extra = entry.get("extra", set())
+    if action in extra:
+        pass       # a verb this device has and the others do not
+    elif action in (ROOT_ACTIONS | DANGEROUS_ACTIONS) and not entry["rooted"]:
         return 200, {"ok": False,
                      "error": f"{entry['label']} hat kein root - '{action}' geht dort nicht"}
 
@@ -550,6 +563,8 @@ def post_device_action(body):
             return 200, {"ok": True, "messages": mod.sms(limit=_num("limit", 20))}
         if action == "calls":
             return 200, {"ok": True, "calls": mod.call_log(limit=_num("limit", 20))}
+        if action == "install":
+            return 200, {"ok": True, "output": mod.install(_str("path"))}
         if action == "unlock":
             mod.unlock()
             return 200, {"ok": True}
@@ -654,8 +669,42 @@ def get_snipes(body):
         limit=min(_int("limit") or SNIPE_LIMIT, SNIPE_LIMIT),
     )
     counts = {}
-    for row in snipe_rank.rank():
+    everything = snipe_rank.rank()
+    for row in everything:
         counts[row["tier"]] = counts.get(row["tier"], 0) + 1
+
+    # Per category, because "how are the snipes doing" is really five
+    # questions. A watch with forty finds and no S tier is a different
+    # problem from one with no finds at all, and the second is usually not a
+    # market - see watch_health.py.
+    health = {h["watch"]: h for h in watch_health.report()}
+    by_watch = {}
+    for row in everything:
+        name = row.get("watch") or "?"
+        agg = by_watch.setdefault(name, {"watch": name, "finds": 0, "tiers": {},
+                                         "best": None, "cheapest": None})
+        agg["finds"] += 1
+        agg["tiers"][row["tier"]] = agg["tiers"].get(row["tier"], 0) + 1
+        if agg["best"] is None or row.get("score", 0) > agg["best"].get("score", 0):
+            agg["best"] = {"title": row.get("title"), "tier": row["tier"],
+                           "price": row.get("price"), "url": row.get("url"),
+                           "score": row.get("score", 0)}
+        price = row.get("price")
+        if price is not None and (agg["cheapest"] is None or price < agg["cheapest"]):
+            agg["cheapest"] = price
+    # Every configured watch appears, including the ones with nothing to show:
+    # an empty category is exactly the case worth seeing.
+    for name in snipe_rank.watches():
+        by_watch.setdefault(name, {"watch": name, "finds": 0, "tiers": {},
+                                   "best": None, "cheapest": None})
+    for name, agg in by_watch.items():
+        row = health.get(name) or {}
+        agg["status"] = row.get("status", "unknown")
+        agg["last_listings"] = row.get("last_listings")
+        agg["consecutive_zero"] = row.get("consecutive_zero", 0)
+        agg["hours_since_ok"] = row.get("hours_since_ok")
+
+    order = {"blind": 0, "stale": 1, "quiet": 2, "ok": 3, "unknown": 4}
     return 200, {
         "snipes": rows,
         "watches": snipe_rank.watches(),
@@ -663,6 +712,9 @@ def get_snipes(body):
         # rather than what survived the current filter.
         "tier_counts": counts,
         "total": sum(counts.values()),
+        "by_watch": sorted(by_watch.values(),
+                           key=lambda a: (order.get(a["status"], 9), -a["finds"])),
+        "health_problems": [h["watch"] for h in watch_health.problems()],
     }
 
 
@@ -1167,3 +1219,59 @@ def get_claude_result(body):
         return 200, claude_chat.result(((body or {}).get("job_id") or "").strip())
     except ValueError as e:
         return 400, {"error": str(e)}
+
+
+# --- proposals: the accept/decline gate, on a screen ----------------------
+#
+# The propose/approve gate has existed since the agents got the ability to
+# suggest work, and until now the only way to say yes was a Telegram message
+# reading "approve 1 3". That is a fine interface for a phone notification
+# and a poor one for deciding: the proposals scroll away, the numbers have to
+# be counted, and there is no way to see what was already decided. Same
+# lifecycle underneath - proposals.py owns it, and dispatch() is shared with
+# the bridge so an approval means exactly one thing either way.
+
+def get_proposals(_body):
+    review = proposals.load_review()
+    return 200, {
+        "review": [{"n": i, "agent": p.get("agent", "worker"),
+                    "kind": p.get("kind", "human"), "text": p.get("text", ""),
+                    "created": p.get("created", "")}
+                   for i, p in enumerate(review, 1)],
+        # Waiting for the next review round rather than decidable now. Shown
+        # as a count, because the point of the nightly round is that Felix is
+        # not asked about things one at a time as they occur to an agent.
+        "pending": len(proposals.load(proposals.PENDING_PATH)),
+        "todos": [{"n": i, "agent": t.get("agent", "worker"),
+                   "text": t.get("text", ""), "added": t.get("added", "")}
+                  for i, t in enumerate(proposals.load_todos(), 1)],
+    }
+
+
+def post_proposal_decide(body):
+    """Accept or decline one proposal."""
+    body = body or {}
+    approve = bool(body.get("approve"))
+    item, error = proposals.decide_one(body.get("index"), approve)
+    if error:
+        return 400, {"error": error}
+    queued = proposals.dispatch([item]) if approve else 0
+    return 200, {"ok": True, "approved": approve, "queued": queued,
+                 "kind": item.get("kind", "human"), "text": item.get("text", "")}
+
+
+def post_proposal_open(_body):
+    """Move everything pending into a decidable round.
+
+    The evening job does this at 20:00; this is for the other twenty-three
+    hours, when something has been proposed and Felix wants to look at it
+    now rather than wait to be asked."""
+    opened = proposals.open_review()
+    return 200, {"ok": True, "opened": len(opened)}
+
+
+def post_todo_done(body):
+    done, error = proposals.complete_todo(str((body or {}).get("index", "")))
+    if error:
+        return 400, {"error": error}
+    return 200, {"ok": True, "done": [d.get("text", "") for d in done]}
