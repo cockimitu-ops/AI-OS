@@ -295,10 +295,19 @@ def provider_limits():
     return rows
 
 
-def board(project=None):
-    return {"openrouter": openrouter(), "claude": claude_summary(project),
-            "providers": provider_limits(),
-            "generated": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+def board(project=None, providers=False):
+    """The costs screen. -> the fast half by default.
+
+    provider_limits() shells out to Antigravity and the Codex app server, and
+    that measured 3.6-5 seconds for the whole response - the same mistake the
+    device panel already made once, where nothing appeared until the slowest
+    thing finished. The balance and the estimate are local and instant, so
+    they paint first and the allowances arrive separately."""
+    out = {"openrouter": openrouter(), "claude": claude_summary(project),
+           "generated": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    if providers:
+        out["providers"] = provider_limits()
+    return out
 
 
 if __name__ == "__main__":

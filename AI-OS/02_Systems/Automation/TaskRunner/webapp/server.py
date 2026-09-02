@@ -84,6 +84,7 @@ API_ROUTES = {
     ("POST", "/api/chat-result"): api.get_chat_result,
     ("POST", "/api/voice-import"): api.post_voice_import,
     ("GET", "/api/costs"): api.get_costs,
+    ("GET", "/api/provider-limits"): api.get_provider_limits,
     ("GET", "/api/claude-sessions"): api.get_claude_sessions,
     ("POST", "/api/claude-transcript"): api.get_claude_transcript,
     ("POST", "/api/claude-send"): api.post_claude_send,

@@ -1169,8 +1169,16 @@ def get_chat_result(body):
 
 def get_costs(_body):
     """What the whole thing costs. See cost_board.py for why the two halves
-    are reported separately and only one of them is a bill."""
+    are reported separately and only one of them is a bill.
+
+    The subscription allowances are NOT in here - they cost seconds, and the
+    screen should not wait on them to show a balance it already knows."""
     return 200, cost_board.board()
+
+
+def get_provider_limits(_body):
+    """What is left per provider. Slow on purpose: it asks each account."""
+    return 200, {"providers": cost_board.provider_limits()}
 
 
 # --- Claude Code sessions ------------------------------------------------

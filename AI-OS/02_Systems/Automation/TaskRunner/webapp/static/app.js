@@ -1727,7 +1727,17 @@ async function loadCosts() {
           $${usd(o.budget_left_usd)} übrig</div>
       </div>`;
 
-    renderProviders(d.providers || []);
+    // Fetched separately: asking each account how much is left costs
+    // seconds, and the balance above is already known. It fills in when it
+    // lands rather than holding the screen.
+    document.getElementById("cost-providers").innerHTML =
+      `<div class="hint">frage die Anbieter…</div>`;
+    api("/api/provider-limits")
+      .then((p) => renderProviders(p.providers || []))
+      .catch((err) => {
+        document.getElementById("cost-providers").innerHTML =
+          `<div class="empty-state">Anbieter nicht abrufbar: ${escapeHtml(err.message)}</div>`;
+      });
 
     const u = o.usage || {};
     cardsEl.innerHTML = `
@@ -2435,6 +2445,16 @@ applyStoredLight();
 // balance; Claude and Google only ever state a limit inside a refusal, and a
 // guessed gauge is worse than none because it gets believed.
 
+// Codex's short window is 300 minutes, and rounding that to days printed
+// "0-Tage-Fenster". A window is whatever unit makes it readable.
+function windowLabel(minutes) {
+  const m = Number(minutes) || 0;
+  if (!m) return "Fenster";
+  if (m < 90) return `${m}-Minuten-Fenster`;
+  if (m < 1440) return `${Math.round(m / 60)}-Stunden-Fenster`;
+  return `${Math.round(m / 1440)}-Tage-Fenster`;
+}
+
 function renderProviders(rows) {
   const el = document.getElementById("cost-providers");
   if (!el) return;
@@ -2454,7 +2474,7 @@ function renderProviders(rows) {
       } else if (p.id === "codex") {
         const used = Number(u.used_percent || 0), remaining = Math.max(0, 100 - used);
         head = `${remaining}% übrig`;
-        body = `<div class="sub">${escapeHtml(u.plan || "Codex")}-Abo · ${used}% im ${Math.round((u.window_minutes || 0) / 1440)}-Tage-Fenster verbraucht</div>
+        body = `<div class="sub">${escapeHtml(u.plan || "Codex")}-Abo · ${used}% im ${windowLabel(u.window_minutes)} verbraucht</div>
           <div class="meter ${used > 80 ? "warn" : ""}" style="margin-top:8px"><i style="width:${used.toFixed(1)}%"></i></div>
           <div class="sub" style="margin-top:6px">Zurückgesetzt: ${reset(u.resets_at)}</div>`;
       } else {
