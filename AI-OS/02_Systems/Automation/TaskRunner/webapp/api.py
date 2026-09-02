@@ -1482,3 +1482,20 @@ def post_suggestions_generate(body):
 
     threading.Thread(target=run, name="aios-idea-scout", daemon=True).start()
     return 202, {"started": True, "message": "Google Pro sucht neue Vorschläge."}
+
+# --- system safety ----------------------------------------------------------
+
+def get_safety_controls(body):
+    return 200, safety_controls.state()
+
+
+def post_safety_controls(body):
+    body = body or {}
+    allowed = {"global_freeze", "router_mode", "paid_opt_in", "daily_spend_cap"}
+    updates = {k: v for k, v in body.items() if k in allowed}
+    if not updates:
+        return 400, {"error": "Keine gültige Einstellung angegeben"}
+    try:
+        return 200, safety_controls.update_settings(updates)
+    except ValueError as exc:
+        return 400, {"error": str(exc)}

@@ -2326,6 +2326,15 @@ async function loadProposals() {
   const listEl = document.getElementById("prop-list");
   const todoEl = document.getElementById("prop-todos");
   try {
+    const safetyEl = document.getElementById("prop-safety");
+    const safety = await api("/api/safety-controls");
+    const freezeLabel = safety.global_freeze ? "Weiterarbeiten" : "Alles anhalten";
+    safetyEl.innerHTML = `<div class="card"><div class="row"><h3>Systemschutz</h3><button class="chip ${safety.global_freeze ? "danger" : ""}" id="safety-freeze">${freezeLabel}</button></div><div class="sub" style="margin-top:6px">${safety.global_freeze ? "Neue KI-Aufgaben sind pausiert." : "KI-Aufgaben dürfen laufen."} · Heute $${Number(safety.daily_spent_usd || 0).toFixed(2)} von $${Number(safety.daily_spend_cap || 0).toFixed(2)}</div></div>`;
+    document.getElementById("safety-freeze")?.addEventListener("click", async (e) => {
+      e.target.disabled = true;
+      try { await api("/api/safety-controls", { method: "POST", body: JSON.stringify({ global_freeze: !safety.global_freeze }) }); loadProposals(); }
+      catch (err) { deviceSayProposal(`Fehler: ${err.message}`, true); e.target.disabled = false; }
+    });
     const d = await api("/api/proposals");
     setConnDot("ok");
 

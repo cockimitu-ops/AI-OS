@@ -53,6 +53,7 @@ import gemini_chat
 import antigravity_chat
 import conversation_store
 import shared_briefing
+import safety_controls
 
 JOB_RE = re.compile(r"[a-z]{2,8}_[\w.-]{1,60}")
 # A turn that has produced nothing for this long is not slow, it is gone.
@@ -360,6 +361,7 @@ def send(engine, message, model=None, thread=None, session=None, fallback=True,
     if not spec:
         raise ValueError(f"unbekannte Engine: {engine!r}")
     ok, reason = spec["available"]()
+    safety_controls.dispatch_guard(engine)
     if not ok:
         raise ValueError(reason)
     if conversation_id and not conversation_store.exists(conversation_id):
