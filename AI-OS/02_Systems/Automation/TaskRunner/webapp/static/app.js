@@ -406,6 +406,7 @@ function litPanels(root) {
 
 const ENGINE_KEY = "aios_engine";
 const MODEL_KEY = "aios_models";
+const CONVERSATIONS_KEY = "aios_engine_conversations";
 
 const chatLog = document.getElementById("chat-log");
 const chatForm = document.getElementById("chat-form");
@@ -415,9 +416,11 @@ let chatSession = null;        // the Claude session, when Claude is chosen
 let engineList = [];
 let chatEngine = "claude";
 let chatModels = {};
+let chatConversations = {};
 
 try { chatEngine = localStorage.getItem(ENGINE_KEY) || "claude"; } catch (_) {}
 try { chatModels = JSON.parse(localStorage.getItem(MODEL_KEY) || "{}"); } catch (_) {}
+try { chatConversations = JSON.parse(localStorage.getItem(CONVERSATIONS_KEY) || "{}"); } catch (_) {}
 
 function engineSpec(id) {
   return engineList.find((e) => e.id === (id || chatEngine)) || null;
@@ -428,6 +431,68 @@ function currentModel() {
   if (!spec) return null;
   const chosen = chatModels[chatEngine];
   return spec.models.includes(chosen) ? chosen : spec.default_model;
+}
+
+function activeConversationId() {
+  return chatConversations[chatEngine] || null;
+}
+
+function rememberConversation(conversationId) {
+  if (!conversationId) return;
+  chatConversations[chatEngine] = conversationId;
+  try { localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(chatConversations)); } catch (_) {}
+}
+
+function renderStoredConversation(record) {
+  chatLog.innerHTML = "";
+  const messages = record?.messages || [];
+  if (!messages.length) {
+    chatLog.innerHTML = `<div class="empty-state">Neue Unterhaltung — schreib einfach los.</div>`;
+    return;
+  }
+  for (const message of messages) addBubble(message.text || "", message.role === "user" ? "me" : "bot");
+}
+
+async function createConversation() {
+  const data = await api("/api/conversations", {
+    method: "POST", body: JSON.stringify({ action: "create", engine: chatEngine }),
+  });
+  const record = data.conversation;
+  rememberConversation(record.id);
+  return record;
+}
+
+async function openConversation(conversationId) {
+  const data = await api("/api/conversations", {
+    method: "POST", body: JSON.stringify({ action: "read", conversation_id: conversationId }),
+  });
+  const record = data.conversation;
+  if (record.engine !== chatEngine) throw new Error("Unterhaltung gehört zu einer anderen Engine");
+  rememberConversation(record.id);
+  setChatBar(`${engineSpec()?.label || chatEngine} · ${record.title || "Neue Unterhaltung"}`,
+             `${record.messages?.length || 0} Nachrichten`);
+  renderStoredConversation(record);
+  return record;
+}
+
+async function loadEngineConversation() {
+  let conversationId = activeConversationId();
+  if (!conversationId) {
+    const data = await api("/api/conversations", {
+      method: "POST", body: JSON.stringify({ action: "list", engine: chatEngine }),
+    });
+    conversationId = data.conversations?.[0]?.id;
+  }
+  if (conversationId) return openConversation(conversationId);
+  const record = await createConversation();
+  setChatBar(`${engineSpec()?.label || chatEngine} · Neue Unterhaltung`, "0 Nachrichten");
+  renderStoredConversation(record);
+  return record;
+}
+
+async function ensureConversation() {
+  if (activeConversationId()) return activeConversationId();
+  return (await createConversation()).id;
 }
 
 function addBubble(text, cls) {
@@ -524,18 +589,12 @@ async function loadChat() {
   }
   if (chatEngine === "claude") {
     await openSession(localStorage.getItem(SESSION_KEY) || "");
-  } else if (chatEngine === "gemini") {
-    setChatBar(`${spec ? spec.label : "Google"} · ${currentModel() || ""}`, "");
+  } else {
     try {
-      renderTranscript(await api("/api/gemini-thread", {
-        method: "POST", body: JSON.stringify({ thread: getThreadId() }),
-      }));
+      await loadEngineConversation();
     } catch (err) {
       chatLog.innerHTML = `<div class="empty-state">Fehler: ${escapeHtml(err.message)}</div>`;
     }
-  } else {
-    setChatBar(`${spec ? spec.label : chatEngine} · ${currentModel() || ""}`, "");
-    chatLog.innerHTML = `<div class="empty-state">Schreib etwas — ${escapeHtml(spec ? spec.label : chatEngine)} antwortet.</div>`;
   }
   resumePending();
 }
@@ -553,7 +612,7 @@ async function resumePending() {
   const bubble = addBubble("hole die Antwort von vorhin …", "bot pending");
   chatInFlight = true;
   try {
-    const res = await pollEngine(job.engine || "claude", job.id, bubble);
+    const res = await pollEngine(job.engine || "claude", job.id, bubble, job.conversation_id || null);
     bubble.remove();
     localStorage.removeItem(PENDING_KEY);
     chatInFlight = false;
@@ -603,7 +662,10 @@ async function openEnginePicker() {
     </div>
     ${chatEngine === "claude" ? `
       <h2 class="section-title">Sitzung</h2>
-      <div id="sheet-sessions"><div class="hint">Wird geladen…</div></div>` : ""}`,
+      <div id="sheet-sessions"><div class="hint">Wird geladen…</div></div>` : `
+      <h2 class="section-title">Unterhaltung</h2>
+      <button id="conversation-new" class="pill-btn ghost">Neue Unterhaltung</button>
+      <div id="sheet-conversations"><div class="hint">Wird geladen…</div></div>`}`,
     (root) => {
       root.querySelectorAll("[data-engine]").forEach((el) =>
         el.addEventListener("click", () => {
@@ -620,7 +682,7 @@ async function openEnginePicker() {
             o.classList.toggle("on", o === el));
           if (chatEngine !== "claude") {
             const sp = engineSpec();
-            setChatBar(`${sp ? sp.label : chatEngine} · ${currentModel()}`, "");
+    if (chatEngine === "claude") loadSessionListInto(root); else loadConversationListInto(root);
           }
         }));
       if (chatEngine === "claude") loadSessionListInto(root);
@@ -646,6 +708,39 @@ async function loadSessionListInto(root) {
         openSession(el.dataset.sid);
       }));
   } catch (err) {
+async function loadConversationListInto(root) {
+  const host = root.querySelector("#sheet-conversations");
+  if (!host) return;
+  const fresh = root.querySelector("#conversation-new");
+  if (fresh) fresh.addEventListener("click", async () => {
+    try {
+      const record = await createConversation();
+      closeSheet();
+      await openConversation(record.id);
+    } catch (err) { host.innerHTML = `<div class="empty-state">${escapeHtml(err.message)}</div>`; }
+  });
+  try {
+    const data = await api("/api/conversations", {
+      method: "POST", body: JSON.stringify({ action: "list", engine: chatEngine }),
+    });
+    const active = activeConversationId();
+    host.innerHTML = data.conversations.map((c) => `
+      <button class="sheet-item ${c.id === active ? "on" : ""}" data-conversation="${escapeHtml(c.id)}">
+        <span style="flex:1;min-width:0">
+          <span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(c.title)}</span>
+          <span class="si-sub" style="margin:0">${c.message_count} Nachrichten</span>
+        </span>
+      </button>`).join("") || `<div class="empty-state">Noch keine Unterhaltung.</div>`;
+    host.querySelectorAll("[data-conversation]").forEach((el) => el.addEventListener("click", async () => {
+      closeSheet();
+      try { await openConversation(el.dataset.conversation); }
+      catch (err) { chatLog.innerHTML = `<div class="empty-state">Fehler: ${escapeHtml(err.message)}</div>`; }
+    }));
+  } catch (err) {
+    host.innerHTML = `<div class="empty-state">${escapeHtml(err.message)}</div>`;
+  }
+}
+
     host.innerHTML = `<div class="empty-state">${escapeHtml(err.message)}</div>`;
   }
 }
@@ -654,7 +749,7 @@ async function loadSessionListInto(root) {
 
 // Backs off from 1.5s to 6s. A Claude turn on a large session is minutes, not
 // seconds, so a tight poll would be thousands of pointless requests.
-async function pollEngine(engine, job, bubble, onHandoff) {
+async function pollEngine(engine, job, bubble, conversationId, onHandoff) {
   const started = Date.now();
   let wait = 1500;
   for (;;) {
@@ -663,7 +758,7 @@ async function pollEngine(engine, job, bubble, onHandoff) {
     let res;
     try {
       res = await api("/api/engine-result", {
-        method: "POST", body: JSON.stringify({ engine, job }),
+        method: "POST", body: JSON.stringify({ engine, job, conversation_id: conversationId || undefined }),
       });
     } catch (err) {
       // A failed poll is not a failed answer - the phone may have lost the
@@ -729,12 +824,14 @@ async function sendMessage(text) {
   document.getElementById("chat-send").disabled = true;
   let askedEngine = chatEngine;
   try {
+    const conversationId = chatEngine === "claude" ? null : await ensureConversation();
     const queued = await api("/api/engine-send", {
       method: "POST",
       body: JSON.stringify({
         engine: chatEngine, model: currentModel(), message: text,
         thread: getThreadId(),
-        session: chatEngine === "claude" ? chatSession?.id : undefined,
+          session: chatEngine === "claude" ? chatSession?.id : undefined,
+          conversation_id: conversationId || undefined,
       }),
     });
     setConnDot("ok");
@@ -747,9 +844,11 @@ async function sendMessage(text) {
     }
     try {
       localStorage.setItem(PENDING_KEY, JSON.stringify(
-        { id: queued.job, engine: queued.engine, session: chatSession?.id, at: Date.now() }));
+        { id: queued.job, engine: queued.engine, session: chatSession?.id,
+          conversation_id: conversationId, at: Date.now() }));
     } catch (_) {}
-    const res = await pollEngine(queued.engine, queued.job, pending, (to) => { askedEngine = to; });
+    const res = await pollEngine(queued.engine, queued.job, pending, conversationId,
+      (to) => { askedEngine = to; });
     pending.textContent = res.reply || (res.ok ? "(keine Antwort)" : res.error || "fehlgeschlagen");
     pending.className = `bubble bot${res.ok ? "" : " err"}`;
     const bits = [];
