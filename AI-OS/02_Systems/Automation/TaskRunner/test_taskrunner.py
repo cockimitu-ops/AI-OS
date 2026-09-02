@@ -4771,7 +4771,7 @@ class TestProposalDecisions(unittest.TestCase):
 
 
 class TestEngines(unittest.TestCase):
-    """Four things that can answer, behind one interface.
+    """Five things that can answer, behind one interface.
 
     The chat used to be wired to one of them. On 2026-09-02 Felix wrote twice
     from his phone and got "You've hit your session limit · resets 11:30am"
@@ -4797,7 +4797,7 @@ class TestEngines(unittest.TestCase):
             rows = {e["id"]: e for e in self.en.catalogue()}
         finally:
             self.en.ENGINES["codex"]["available"] = original
-        self.assertEqual(set(rows), {"claude", "aios", "gemini", "codex"})
+        self.assertEqual(set(rows), {"claude", "aios", "gemini", "google-pro", "codex"})
         for row in rows.values():
             self.assertTrue(row["models"], row["id"])
             self.assertIn(row["default_model"], row["models"], row["id"])
@@ -4936,7 +4936,8 @@ class TestLimitHandoff(unittest.TestCase):
         try:
             self.assertEqual(self.en.next_engine("claude"), "codex")
             self.en.mark_limited("codex", "quota")
-            self.assertEqual(self.en.next_engine("claude"), "gemini")
+            self.assertEqual(self.en.next_engine("claude"), "google-pro")
+            self.en.mark_limited("google-pro", "quota")
             self.en.mark_limited("gemini", "quota")
             self.assertEqual(self.en.next_engine("claude"), "aios")
             self.en.mark_limited("aios", "quota")

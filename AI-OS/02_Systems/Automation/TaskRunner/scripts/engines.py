@@ -50,6 +50,7 @@ LOGS = os.path.join(TASK_RUNNER_DIR, "tasks", "logs")
 import claude_chat
 import codex_chat
 import gemini_chat
+import antigravity_chat
 
 JOB_RE = re.compile(r"[a-z]{2,8}_[\w.-]{1,60}")
 # A turn that has produced nothing for this long is not slow, it is gone.
@@ -76,7 +77,7 @@ RESET_RE = re.compile(
 
 # Who takes over from whom. Roughly capability-descending, and every engine
 # appears so that a chain never runs out of somewhere to go.
-FALLBACK_ORDER = ["claude", "codex", "gemini", "aios"]
+FALLBACK_ORDER = ["claude", "codex", "google-pro", "gemini", "aios"]
 LIMIT_STATE = os.path.join(TASK_RUNNER_DIR, "spend", "engine_limits.json")
 # How long a remembered limit is trusted when the engine did not say when it
 # resets. Long enough not to retry into the same wall every thirty seconds,
@@ -256,6 +257,10 @@ def _gemini_available():
     return True, ""
 
 
+def _google_pro_available():
+    return antigravity_chat.available()
+
+
 def _claude_available():
     if not shutil.which(os.environ.get("AIOS_CLAUDE_BIN", "claude")):
         return False, "claude CLI ist nicht installiert"
@@ -287,6 +292,15 @@ ENGINES = {
         "available": _gemini_available,
         "threads": "thread",
     },
+    "google-pro": {
+        "label": "Google AI Pro",
+        "note": "Google AI Pro über Antigravity CLI, mit dem angemeldeten Konto.",
+        "models": antigravity_chat.MODELS,
+        "default_model": antigravity_chat.DEFAULT_MODEL,
+        "available": _google_pro_available,
+        "threads": "thread",
+    },
+
     "codex": {
         "label": "Codex",
         "note": "OpenAIs Codex-CLI, sobald installiert und angemeldet.",
@@ -355,6 +369,15 @@ def send(engine, message, model=None, thread=None, session=None, fallback=True):
                 "--json", "--model", model, "--thread", thread or "web",
                 "--prompt-file", prompt_path],
             message, meta={"model": model, "thread": thread})}
+
+    if engine == "google-pro":
+        return {"engine": "google-pro", "job": _spawn(
+            "gpro",
+            lambda prompt_path, _text: [
+                "python3", os.path.join(SCRIPT_DIR, "antigravity_chat.py"),
+                "--json", "--model", model, "--prompt-file", prompt_path],
+            message, meta={"model": model, "thread": thread}, cwd=claude_chat.PROJECT_DIR)}
+
 
     if engine == "codex":
         return {"engine": "codex", "job": _spawn(

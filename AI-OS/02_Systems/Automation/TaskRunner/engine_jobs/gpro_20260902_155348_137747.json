@@ -1,0 +1,1 @@
+{"is_error": false, "result": "SWITCHER_READY", "model": "gemini-3.8-flash-high", "usage": {"input_tokens": 15503, "output_tokens": 97, "thinking_tokens": 93, "cache_read_tokens": 0, "total_tokens": 15600}}
