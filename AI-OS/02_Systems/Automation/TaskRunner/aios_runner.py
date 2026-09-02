@@ -20,6 +20,7 @@ import spend_guard
 import voice_style
 
 # Disable telemetry and interactive terminal hooks before importing interpreter
+import safety_controls
 os.environ["INTERPRETER_ANONYMOUS_TELEMETRY"] = "false"
 os.environ["ANONYMOUS_TELEMETRY"] = "false"
 
@@ -1136,7 +1137,20 @@ def _run_task(task_path, filename):
 
 def run_worker():
     print("[AI-OS Worker] Active. Polling tasks/inbox/ ...")
+    pause_announced = False
     while True:
+        try:
+            frozen = safety_controls.state().get("global_freeze", False)
+        except Exception as err:
+            print(f"[!] Safety state unavailable; worker continues: {err}")
+            frozen = False
+        if frozen:
+            if not pause_announced:
+                print("[AI-OS Worker] Global freeze active; leaving inbox untouched.")
+                pause_announced = True
+            time.sleep(2)
+            continue
+        pause_announced = False
         task_files = sorted(glob.glob(os.path.join(INBOX, "*.md")))
         for task_path in task_files:
             filename = os.path.basename(task_path)
