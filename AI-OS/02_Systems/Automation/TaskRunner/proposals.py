@@ -481,3 +481,146 @@ def format_todos(todos=None):
         lines.append(f"{i}. {item.get('text','')}  _(added {item.get('added','')})_")
     lines += ["", "Reply `done 2` when one is finished."]
     return "\n".join(lines)
+
+
+# --- Safe batch approvals & narrow allowlist --------------------------------
+#
+# Felix approved batch approvals, but with strict trust boundaries:
+# 1. BATCH_DECIDE delegates to the existing verified proposal gate:
+#    It archives to archive.jsonl, removes from review.json, and dispatches.
+#    It never bypasses verification (proposals still had check_claims() on entry)
+#    or explicit approval (the user/caller must decide).
+# 2. SAFE ALLOWLIST is strictly opt-in and defaults to empty.
+#    It matches only narrow known harmless actions. Arbitrary model text
+#    is NEVER auto-approved.
+# 3. RECOMMENDED_SAFE_IDS exposes safe candidate indices to caller/UI.
+
+SAFE_ALLOWLIST = []
+
+
+def configure_safe_allowlist(patterns):
+    """Configures the narrow harmless actions allowlist (opt-in only).
+    Patterns may be strings (substring match) or re.Pattern regexes.
+    Defaults to empty list."""
+    global SAFE_ALLOWLIST
+    if patterns is None:
+        SAFE_ALLOWLIST = []
+    elif isinstance(patterns, (list, tuple, set)):
+        SAFE_ALLOWLIST = list(patterns)
+    else:
+        raise ValueError("patterns must be a list, tuple, or set of strings/regexes")
+    return list(SAFE_ALLOWLIST)
+
+
+def get_safe_allowlist():
+    """Returns a copy of the current safe allowlist."""
+    return list(SAFE_ALLOWLIST)
+
+
+def is_safe_proposal(item):
+    """Determines whether a proposal item matches the configured safe allowlist.
+    Returns False when the allowlist is empty (the default).
+    Never auto-approves arbitrary text."""
+    if not SAFE_ALLOWLIST:
+        return False
+    text = (item.get("text") if isinstance(item, dict) else str(item)) or ""
+    text = text.strip()
+    for pattern in SAFE_ALLOWLIST:
+        if isinstance(pattern, re.Pattern):
+            if pattern.search(text):
+                return True
+        elif isinstance(pattern, str):
+            if pattern.lower() in text.lower():
+                return True
+    return False
+
+
+def recommended_safe_ids(review=None):
+    """Returns a list of 1-based indices in the review that match the safe allowlist.
+    Returns [] when allowlist is empty (default). Does not auto-approve."""
+    review = load_review() if review is None else review
+    if not review or not SAFE_ALLOWLIST:
+        return []
+    safe_indices = []
+    for i, item in enumerate(review, 1):
+        if is_safe_proposal(item):
+            safe_indices.append(i)
+    return safe_indices
+
+
+def batch_decide(ids, decision, now=None, inbox=None, agents_module=None, verify_fn=None):
+    """Accept or decline a batch of proposals by their 1-based numbers.
+
+    Delegates to the existing verified proposal gate:
+    - Never bypasses verification or approval signal
+    - Validates all requested indices; errors out atomically if any index is invalid
+    - Verifies references/claims at approval time via check_claims(); aborts if verification fails
+    - Avoids partial approval if one item fails verification or validation
+    - Writes every decision to archive.jsonl
+    - Updates review.json atomically
+    - Dispatches approved items to tasks/inbox or Felix's todo list in stable original index order
+
+    -> (decided_items, error_or_None)
+    """
+    review = load_review()
+    if not review:
+        return [], "Es liegt gerade nichts zur Entscheidung."
+
+    if isinstance(decision, str):
+        dec_norm = decision.strip().lower()
+        if dec_norm in ("approve", "approved", "yes", "true", "1"):
+            approve = True
+        elif dec_norm in ("decline", "declined", "reject", "rejected", "no", "false", "0"):
+            approve = False
+        else:
+            return [], f"Ungültige Entscheidung: {decision!r}. Erwarte 'approve' oder 'decline'."
+    else:
+        approve = bool(decision)
+
+    if not ids:
+        return [], "Keine Vorschlags-IDs angegeben."
+
+    if isinstance(ids, (str, int)):
+        ids = [ids]
+
+    parsed_indices = []
+    for raw in ids:
+        try:
+            val = int(raw)
+        except (TypeError, ValueError):
+            return [], f"Ungültige Vorschlagsnummer: {raw!r}"
+        if not 1 <= val <= len(review):
+            return [], f"Vorschlag {val} gibt es nicht - es sind {len(review)}."
+        if val not in parsed_indices:
+            parsed_indices.append(val)
+
+    if not parsed_indices:
+        return [], "Keine gültigen Vorschlagsnummern angegeben."
+
+    # Verify claims at actual approval time using existing proposal checks
+    if approve:
+        v_fn = verify_fn if verify_fn is not None else github_repo_exists
+        for idx in parsed_indices:
+            item = review[idx - 1]
+            text = item.get("text", "")
+            problems = check_claims(text, verify=v_fn)
+            if problems:
+                return [], f"Verifikation für Vorschlag {idx} fehlgeschlagen: {'; '.join(problems)}"
+
+    chosen = [review[i - 1] for i in parsed_indices]
+    remaining = [p for i, p in enumerate(review, 1) if i not in parsed_indices]
+
+    stamp = now or time.strftime("%Y-%m-%d %H:%M")
+    os.makedirs(PROPOSALS_DIR, exist_ok=True)
+    with open(ARCHIVE_PATH, "a", encoding="utf-8") as f:
+        for item in chosen:
+            f.write(json.dumps({**item, "decision": "approved" if approve else "declined",
+                                "decided": stamp}, ensure_ascii=False) + "\n")
+
+    _atomic_write(REVIEW_PATH, json.dumps(remaining, indent=2, ensure_ascii=False))
+
+    if approve:
+        dispatch(chosen, inbox=inbox, agents_module=agents_module)
+
+    return chosen, None
+

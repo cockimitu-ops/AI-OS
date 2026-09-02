@@ -21,6 +21,7 @@ this stays importable and unit-testable without the venv, the same as every
 other module in scripts/.
 """
 import json
+import math
 import os
 from datetime import datetime, timezone
 
@@ -31,10 +32,15 @@ LEDGER_PATH = os.path.join(os.path.dirname(SCRIPT_DIR), "spend", "openrouter_led
 # OPENROUTER_MONTHLY_BUDGET_USD in .env - this is only the default when that
 # is unset, not a ceiling on what Felix can configure.
 DEFAULT_MONTHLY_BUDGET_USD = 6.0
+DEFAULT_DAILY_SPEND_CAP_USD = 2.0
 
 
 def month_key(now=None):
     return (now or datetime.now(timezone.utc)).strftime("%Y-%m")
+
+
+def day_key(now=None):
+    return (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d")
 
 
 def load_ledger(path=None):
@@ -71,12 +77,46 @@ def month_spent(ledger, month=None):
     return ledger.get(month or month_key(), 0.0)
 
 
+def day_spent(ledger=None, day=None, path=None):
+    """Pure: how much of the given day (YYYY-MM-DD) has already been spent.
+    Reads from ledger's _daily dict if present, and falls back to inspecting
+    openrouter_calls.jsonl."""
+    target_day = day or day_key()
+    if isinstance(ledger, dict) and "_daily" in ledger and isinstance(ledger["_daily"], dict):
+        if target_day in ledger["_daily"]:
+            return float(ledger["_daily"][target_day])
+    cpath = calls_path(path)
+    total = 0.0
+    try:
+        with open(cpath, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                    ts = entry.get("ts", "")
+                    if ts.startswith(target_day):
+                        total += float(entry.get("usd", 0.0))
+                except (json.JSONDecodeError, ValueError):
+                    continue
+    except OSError:
+        pass
+    return round(total, 6)
+
+
 def can_spend(ledger, budget_usd, month=None):
     """Whether the paid tier may be tried AT ALL this month.
 
     Checked before the call, never after - this cap exists to prevent a call
     from happening, not to true up the bill once it already has."""
+    if isinstance(budget_usd, bool) or not isinstance(budget_usd, (int, float)) or not math.isfinite(budget_usd):
+        raise ValueError(f"budget_usd must be a finite number, got {budget_usd!r}")
     return month_spent(ledger, month) < budget_usd
+
+
+def can_spend_daily(ledger, daily_cap_usd, day=None, path=None):
+    """Whether the daily spend is below the daily budget cap."""
+    if isinstance(daily_cap_usd, bool) or not isinstance(daily_cap_usd, (int, float)) or not math.isfinite(daily_cap_usd):
+        raise ValueError(f"daily_cap_usd must be a finite number, got {daily_cap_usd!r}")
+    return day_spent(ledger, day, path) < daily_cap_usd
 
 
 def calls_path(path=None):
@@ -104,10 +144,16 @@ def record_spend(usd, path=None, month=None, model=None, task=None):
     cannot answer that is a number to worry about rather than one to act on.
     Appending is best-effort: a failure to write the log must never lose the
     ledger entry, which is what the budget cap actually depends on."""
+    if isinstance(usd, bool) or not isinstance(usd, (int, float)) or not math.isfinite(usd):
+        raise ValueError(f"usd must be a finite number, got {usd!r}")
     path = path or LEDGER_PATH
     ledger = load_ledger(path)
     key = month or month_key()
     ledger[key] = round(ledger.get(key, 0.0) + max(usd, 0.0), 6)
+    d_key = day_key()
+    if "_daily" not in ledger or not isinstance(ledger["_daily"], dict):
+        ledger["_daily"] = {}
+    ledger["_daily"][d_key] = round(ledger["_daily"].get(d_key, 0.0) + max(usd, 0.0), 6)
     _save(ledger, path)
     try:
         line = json.dumps({"ts": (datetime.now(timezone.utc)
@@ -138,9 +184,17 @@ def recent_calls(limit=50, path=None):
     return out
 
 
-def status_line(budget_usd, path=None, month=None):
+def status_line(budget_usd, path=None, month=None, daily_cap_usd=None):
     """One line for the periodic status update. Absent-ledger and
     zero-spend both read the same way - "$0.00 of $6.00" - since a paid
     tier that has simply never fired yet is not an error worth flagging."""
+    if isinstance(budget_usd, bool) or not isinstance(budget_usd, (int, float)) or not math.isfinite(budget_usd):
+        raise ValueError(f"budget_usd must be a finite number, got {budget_usd!r}")
+    if daily_cap_usd is not None and (isinstance(daily_cap_usd, bool) or not isinstance(daily_cap_usd, (int, float)) or not math.isfinite(daily_cap_usd)):
+        raise ValueError(f"daily_cap_usd must be a finite number, got {daily_cap_usd!r}")
     spent = month_spent(load_ledger(path), month)
-    return f"OpenRouter bezahlt: ${spent:.2f} von ${budget_usd:.2f} diesen Monat"
+    msg = f"OpenRouter bezahlt: ${spent:.2f} von ${budget_usd:.2f} diesen Monat"
+    if daily_cap_usd is not None:
+        d_spent = day_spent(load_ledger(path), path=path)
+        msg += f" (${d_spent:.2f} von ${daily_cap_usd:.2f} heute)"
+    return msg
