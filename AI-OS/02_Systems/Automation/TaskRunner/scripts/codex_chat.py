@@ -95,7 +95,7 @@ def _login_status():
                    "im Terminal `codex login` und mit dem ChatGPT-Konto anmelden")
 
 
-def ask(message, model=None, cwd=None, resume=None):
+def ask(message, model=None, cwd=None, resume=None, read_only=False):
     """One turn. -> {"reply", "model"}. Raises CodexError with what it said."""
     message = shared_briefing.prepend(message)
     model = model or DEFAULT_MODEL
@@ -106,7 +106,7 @@ def ask(message, model=None, cwd=None, resume=None):
         argv += ["resume", resume]
     if model and model != "auto":
         argv += ["-m", model]
-    argv += ["-s", SANDBOX, "--skip-git-repo-check",
+    argv += ["-s", "read-only" if read_only else SANDBOX, "--skip-git-repo-check",
              "-C", cwd or PROJECT_DIR,
              "-o", last_path, "-"]          # "-" : prompt comes from stdin
     try:
@@ -144,12 +144,14 @@ def main(argv=None):
     ap.add_argument("--cwd")
     ap.add_argument("--prompt-file")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--read-only", action="store_true")
     ap.add_argument("message", nargs="*")
     args = ap.parse_args(argv)
     text = (open(args.prompt_file, encoding="utf-8").read()
             if args.prompt_file else " ".join(args.message))
     try:
-        out = ask(text, model=args.model, cwd=args.cwd, resume=args.resume)
+        out = ask(text, model=args.model, cwd=args.cwd, resume=args.resume,
+                  read_only=args.read_only)
     except CodexError as e:
         if args.json:
             print(json.dumps({"is_error": True, "result": str(e)}, ensure_ascii=False))

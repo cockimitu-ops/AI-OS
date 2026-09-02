@@ -18,7 +18,7 @@ MODELS = [
     "gemini-3.6-flash-high", "gemini-3.6-flash-medium", "gemini-3.6-flash-low",
     "gemini-3.1-pro-high", "gemini-3.1-pro-low",
 ]
-DEFAULT_MODEL = "gemini-3.8-flash-high"
+DEFAULT_MODEL = "gemini-3.1-pro-high"
 
 
 class GoogleProError(RuntimeError):
@@ -50,12 +50,17 @@ def usage():
         return {"live": False, "error": str(exc)[:180]}
 
 
-def ask(message, model=None, cwd=None):
+def ask(message, model=None, cwd=None, read_only=False):
     """One non-interactive account-backed Google AI Pro turn."""
     model = model or DEFAULT_MODEL
     prompt = shared_briefing.prepend(message)
     argv = [BIN, "-p", prompt, "--output-format", "json", "--model", model,
             "--print-timeout", f"{TIMEOUT_S}s"]
+    if read_only:
+        # Antigravity's plan mode plus sandbox is its capability-restricted
+        # review path; slash commands are disabled so prompt text cannot invoke
+        # a local command surface.
+        argv += ["--mode", "plan", "--sandbox", "--disable-slash-commands"]
     try:
         proc = subprocess.run(argv, cwd=cwd or PROJECT_DIR, capture_output=True,
                               timeout=TIMEOUT_S + 30)
@@ -81,12 +86,13 @@ def main(argv=None):
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--prompt-file")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--read-only", action="store_true")
     parser.add_argument("message", nargs="*")
     args = parser.parse_args(argv)
     message = (open(args.prompt_file, encoding="utf-8").read()
                if args.prompt_file else " ".join(args.message))
     try:
-        result = ask(message, model=args.model)
+        result = ask(message, model=args.model, read_only=args.read_only)
         print(json.dumps({"is_error": False, "result": result["reply"], "model": result["model"], "usage": result["usage"]}, ensure_ascii=False) if args.json else result["reply"])
     except GoogleProError as exc:
         data = {"is_error": True, "result": str(exc)}

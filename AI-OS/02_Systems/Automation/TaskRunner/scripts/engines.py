@@ -338,7 +338,7 @@ def catalogue():
 
 
 def send(engine, message, model=None, thread=None, session=None, fallback=True,
-        conversation_id=None, _record_input=True):
+        conversation_id=None, _record_input=True, read_only=False):
     """Ask one engine. -> a ticket that result() can collect.
 
     If that engine is already known to be out - it refused within the last
@@ -355,6 +355,8 @@ def send(engine, message, model=None, thread=None, session=None, fallback=True,
     itself (a limit handoff) - the turn was already recorded by the call
     that discovered the limit, and recording it again would duplicate it."""
     spec = ENGINES.get(engine)
+    if read_only and engine not in ("google-pro", "codex"):
+        raise ValueError(f"{engine} has no capability-restricted review mode")
     if not spec:
         raise ValueError(f"unbekannte Engine: {engine!r}")
     ok, reason = spec["available"]()
@@ -372,7 +374,8 @@ def send(engine, message, model=None, thread=None, session=None, fallback=True,
                     + f" — {ENGINES[nxt]['label']} übernimmt.")
             _tell_felix(note + f"\n\nFrage: {message.strip()[:300]}")
             ticket = send(nxt, message, thread=thread, fallback=False,
-                         conversation_id=conversation_id, _record_input=False)
+                         conversation_id=conversation_id, _record_input=False,
+                         read_only=read_only)
             ticket["handed_off"] = {"from": engine, "to": nxt,
                                     "note": note, "limit": row}
             return ticket
@@ -406,14 +409,14 @@ def send(engine, message, model=None, thread=None, session=None, fallback=True,
             "gpro",
             lambda prompt_path, _text: [
                 "python3", os.path.join(SCRIPT_DIR, "antigravity_chat.py"),
-                "--json", "--model", model, "--prompt-file", prompt_path],
+                "--json", "--model", model, "--prompt-file", prompt_path] + (["--read-only"] if read_only else []),
             outgoing, meta={"model": model, "thread": thread}, cwd=claude_chat.PROJECT_DIR)}
     elif engine == "codex":
         ticket = {"engine": "codex", "job": _spawn(
             "cdx",
             lambda prompt_path, _text: [
                 "python3", os.path.join(SCRIPT_DIR, "codex_chat.py"),
-                "--json", "--model", model, "--prompt-file", prompt_path],
+                "--json", "--model", model, "--prompt-file", prompt_path] + (["--read-only"] if read_only else []),
             outgoing, meta={"model": model}, cwd=claude_chat.PROJECT_DIR)}
     else:
         # aios: the same task file dispatch_task.py and telegram_bridge.py
