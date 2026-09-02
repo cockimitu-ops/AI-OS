@@ -40,6 +40,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import shared_briefing
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 TASK_RUNNER_DIR = os.path.dirname(SCRIPT_DIR)
@@ -96,6 +97,7 @@ def _login_status():
 
 def ask(message, model=None, cwd=None, resume=None):
     """One turn. -> {"reply", "model"}. Raises CodexError with what it said."""
+    message = shared_briefing.prepend(message)
     model = model or DEFAULT_MODEL
     with tempfile.NamedTemporaryFile("w+", suffix=".txt", delete=False) as last:
         last_path = last.name

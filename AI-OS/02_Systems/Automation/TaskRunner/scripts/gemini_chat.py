@@ -32,6 +32,7 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+import shared_briefing
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 TASK_RUNNER_DIR = os.path.dirname(SCRIPT_DIR)
@@ -138,6 +139,7 @@ def state():
 def ask(message, thread_id="web", model=None, system=None):
     """One turn. -> {"reply", "model", "usage"}."""
     model = model or DEFAULT_MODEL
+    system = f"{shared_briefing.system_instruction()}\n\n{system}" if system else shared_briefing.system_instruction()
     turns = load_thread(thread_id)
     contents = []
     for turn in turns[-HISTORY_TURNS * 2:]:
