@@ -671,6 +671,19 @@ async function pollEngine(engine, job, bubble) {
       bubble.textContent = `… (offline? ${Math.round((Date.now() - started) / 1000)}s)`;
       continue;
     }
+    if (res.handed_off) {
+      // The engine ran out and the work moved. Said out loud, because the
+      // engines are not interchangeable - which one answered is part of the
+      // answer.
+      const note = document.createElement("div");
+      note.className = "bubble tool";
+      note.textContent = `↪ ${res.handed_off.note}`;
+      chatLog.insertBefore(note, bubble);
+      engine = res.engine;
+      job = res.job;
+      chatLog.scrollTop = chatLog.scrollHeight;
+      continue;
+    }
     if (res.ready) return res;
     if (res.lost) throw new Error(res.error || "Job verloren");
     bubble.textContent = `denkt nach … ${res.elapsed ?? 0}s`;
@@ -716,6 +729,12 @@ chatForm.addEventListener("submit", async (e) => {
       }),
     });
     setConnDot("ok");
+    if (queued.handed_off) {
+      const note = document.createElement("div");
+      note.className = "bubble tool";
+      note.textContent = `↪ ${queued.handed_off.note}`;
+      chatLog.insertBefore(note, pending);
+    }
     try {
       localStorage.setItem(PENDING_KEY, JSON.stringify(
         { id: queued.job, engine: queued.engine, session: chatSession?.id, at: Date.now() }));

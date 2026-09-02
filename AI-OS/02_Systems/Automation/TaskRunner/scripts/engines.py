@@ -55,6 +55,97 @@ JOB_RE = re.compile(r"[a-z]{2,8}_[\w.-]{1,60}")
 # A turn that has produced nothing for this long is not slow, it is gone.
 JOB_TIMEOUT_S = 900
 
+# --- running out, and what to do about it ---------------------------------
+#
+# Felix: "i want each of you to give the remaining work to another model and
+# tell me instead of just hitting the limit walls". That is the exact failure
+# of 2026-09-02: he wrote twice from his phone, both turns died on "You've
+# hit your session limit · resets 11:30am (UTC)", one of them after spending
+# $6.79, and three other engines sat idle on the same machine for three
+# hours.
+#
+# So a limit is no longer an outcome. It is a routing decision, and it is
+# announced - a silent handoff would be its own kind of lie, because the
+# engines are not interchangeable and he needs to know which one answered.
+
+LIMIT_RE = re.compile(
+    r"(session limit|rate.?limit|quota|exceeded your current|usage limit|"
+    r"too many requests|429|insufficient_quota|erschöpft|kontingent)", re.I)
+RESET_RE = re.compile(
+    r"reset[s]?\s+(?:at\s+)?([0-9]{1,2}[:.][0-9]{2}\s*(?:am|pm)?[^\n.,;]{0,20})", re.I)
+
+# Who takes over from whom. Roughly capability-descending, and every engine
+# appears so that a chain never runs out of somewhere to go.
+FALLBACK_ORDER = ["claude", "codex", "gemini", "aios"]
+LIMIT_STATE = os.path.join(TASK_RUNNER_DIR, "spend", "engine_limits.json")
+# How long a remembered limit is trusted when the engine did not say when it
+# resets. Long enough not to retry into the same wall every thirty seconds,
+# short enough that a wrong guess costs one hour, not a day.
+LIMIT_ASSUME_S = 3600
+
+
+def is_limit(text):
+    return bool(text) and bool(LIMIT_RE.search(str(text)))
+
+
+def _limits():
+    try:
+        with open(LIMIT_STATE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def mark_limited(engine, message):
+    """Remember that this engine said no, and roughly for how long."""
+    state = _limits()
+    reset = RESET_RE.search(str(message) or "")
+    state[engine] = {"at": time.time(), "message": str(message)[:300],
+                     "resets": reset.group(1).strip() if reset else None,
+                     "until": time.time() + LIMIT_ASSUME_S}
+    try:
+        os.makedirs(os.path.dirname(LIMIT_STATE), exist_ok=True)
+        tmp = LIMIT_STATE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=1, sort_keys=True)
+        os.replace(tmp, LIMIT_STATE)
+    except OSError:
+        pass
+    return state[engine]
+
+
+def clear_limit(engine):
+    state = _limits()
+    if state.pop(engine, None) is not None:
+        try:
+            with open(LIMIT_STATE, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=1, sort_keys=True)
+        except OSError:
+            pass
+
+
+def limited(engine):
+    """-> the remembered limit if it is still believed, else None."""
+    row = _limits().get(engine)
+    if not row:
+        return None
+    if time.time() > row.get("until", 0):
+        clear_limit(engine)
+        return None
+    return row
+
+
+def next_engine(after, exclude=()):
+    """The next engine that can actually take the work. -> id or None."""
+    skip = {after} | set(exclude)
+    for name in FALLBACK_ORDER:
+        if name in skip or name not in ENGINES:
+            continue
+        ok, _ = ENGINES[name]["available"]()
+        if ok and not limited(name):
+            return name
+    return None
+
 
 # --- a generic detached job ------------------------------------------------
 #
@@ -219,14 +310,32 @@ def catalogue():
     return out
 
 
-def send(engine, message, model=None, thread=None, session=None):
-    """Ask one engine. -> a ticket that result() can collect."""
+def send(engine, message, model=None, thread=None, session=None, fallback=True):
+    """Ask one engine. -> a ticket that result() can collect.
+
+    If that engine is already known to be out - it refused within the last
+    hour and has not reset - the work goes to the next one instead and the
+    ticket says so. Sending into a wall that answered "session limit" five
+    minutes ago is not respecting a choice, it is wasting a turn."""
     spec = ENGINES.get(engine)
     if not spec:
         raise ValueError(f"unbekannte Engine: {engine!r}")
     ok, reason = spec["available"]()
     if not ok:
         raise ValueError(reason)
+
+    row = limited(engine) if fallback else None
+    if row:
+        nxt = next_engine(engine)
+        if nxt:
+            note = (f"{spec['label']} ist am Limit"
+                    + (f" (zurück {row['resets']})" if row.get("resets") else "")
+                    + f" — {ENGINES[nxt]['label']} übernimmt.")
+            _tell_felix(note + f"\n\nFrage: {message.strip()[:300]}")
+            ticket = send(nxt, message, thread=thread, fallback=False)
+            ticket["handed_off"] = {"from": engine, "to": nxt,
+                                    "note": note, "limit": row}
+            return ticket
     message = (message or "").strip()
     if not message:
         raise ValueError("leere Nachricht")
@@ -289,8 +398,7 @@ def _aios_send(message, thread, model):
     return name
 
 
-def result(engine, job):
-    """Collect whatever that ticket was for."""
+def _raw_result(engine, job):
     if engine == "claude":
         return claude_chat.result(job)
     if engine == "aios":
@@ -298,6 +406,79 @@ def result(engine, job):
     if not JOB_RE.fullmatch(job or ""):
         raise ValueError("ungültige job id")
     return _collect(job)
+
+
+def job_message(engine, job):
+    """What was originally asked. -> the text, or ""."""
+    meta = (os.path.join(TASK_RUNNER_DIR, "claude_jobs", f"{job}.meta")
+            if engine == "claude" else _paths(job)["meta"])
+    try:
+        with open(meta, encoding="utf-8") as f:
+            return json.load(f).get("message", "")
+    except (OSError, json.JSONDecodeError):
+        return ""
+
+
+def result(engine, job, fallback=True, notify=True):
+    """Collect that ticket - and if it died on a limit, hand the work on.
+
+    The handoff returns a NEW ticket rather than an answer: the next engine
+    has only just been asked. The caller follows the engine/job it gets back,
+    which is the same thing it was already doing."""
+    res = _raw_result(engine, job)
+    if not (res.get("ready") and not res.get("ok") and is_limit(res.get("error"))):
+        return res
+
+    row = mark_limited(engine, res.get("error"))
+    if not fallback:
+        return res
+    message = job_message(engine, job)
+    nxt = next_engine(engine)
+    if not nxt or not message:
+        # Nowhere to go, or nothing left to re-ask. Say which, rather than
+        # reporting the original refusal as if nothing had been tried.
+        res["limit"] = row
+        res["error"] = (f"{ENGINES[engine]['label']} ist am Limit"
+                        + (f" (zurück {row['resets']})" if row.get("resets") else "")
+                        + (". Keine andere Engine ist gerade frei."
+                           if not nxt else ". Die Frage ist nicht mehr auffindbar."))
+        return res
+
+    try:
+        ticket = send(nxt, message, thread=_job_thread(engine, job))
+    except ValueError as e:
+        res["limit"] = row
+        res["error"] = f"{ENGINES[engine]['label']} am Limit, {nxt} auch nicht möglich: {e}"
+        return res
+
+    note = (f"{ENGINES[engine]['label']} ist am Limit"
+            + (f" (zurück {row['resets']})" if row.get("resets") else "")
+            + f" — {ENGINES[nxt]['label']} übernimmt.")
+    if notify:
+        _tell_felix(note + f"\n\nFrage: {message[:300]}")
+    return {"ready": False, "handed_off": {"from": engine, "to": nxt,
+                                           "note": note, "limit": row},
+            "engine": nxt, "job": ticket["job"], "elapsed": 0}
+
+
+def _job_thread(engine, job):
+    meta = (os.path.join(TASK_RUNNER_DIR, "claude_jobs", f"{job}.meta")
+            if engine == "claude" else _paths(job)["meta"])
+    try:
+        with open(meta, encoding="utf-8") as f:
+            return json.load(f).get("thread")
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _tell_felix(text):
+    """A handoff that happens silently is its own kind of lie - the engines
+    are not interchangeable and he needs to know which one answered."""
+    try:
+        from send_telegram_notification import send as tg
+        tg(text)
+    except Exception:  # noqa: BLE001 - a failed notice must not fail the handoff
+        pass
 
 
 def _aios_result(task_id):

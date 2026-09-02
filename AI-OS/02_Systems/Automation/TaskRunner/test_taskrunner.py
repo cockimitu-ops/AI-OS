@@ -4877,6 +4877,103 @@ class TestEngines(unittest.TestCase):
         self.assertTrue(out["died"])
 
 
+class TestLimitHandoff(unittest.TestCase):
+    """Running out is a routing decision, not an outcome.
+
+    On 2026-09-02 Felix wrote twice from his phone, both turns died on
+    "You've hit your session limit · resets 11:30am (UTC)", one after
+    spending $6.79, and three other engines sat idle on the same machine for
+    three hours. His instruction afterwards: hand the work on, and say so."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "engines_limits", os.path.join(HERE, "scripts", "engines.py"))
+        cls.en = importlib.util.module_from_spec(spec)
+        sys.path.insert(0, os.path.join(HERE, "scripts"))
+        spec.loader.exec_module(cls.en)
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = self.en.LIMIT_STATE
+        self.en.LIMIT_STATE = os.path.join(self.tmp.name, "limits.json")
+
+    def tearDown(self):
+        self.en.LIMIT_STATE = self.saved
+        self.tmp.cleanup()
+
+    def test_the_wall_is_recognised_in_every_dialect(self):
+        """Four providers, four ways of saying the same no."""
+        for text in ("You've hit your session limit · resets 11:30am (UTC)",
+                     "You exceeded your current quota, please check your plan",
+                     "429 Too Many Requests",
+                     "Kontingent erschöpft",
+                     "rate limit reached for this model"):
+            self.assertTrue(self.en.is_limit(text), text)
+        for text in ("no such file", "the model refused", "", None):
+            self.assertFalse(self.en.is_limit(text), text)
+
+    def test_a_reset_time_is_kept_because_it_is_the_useful_part(self):
+        row = self.en.mark_limited(
+            "claude", "You've hit your session limit · resets 11:30am (UTC)")
+        self.assertEqual(row["resets"], "11:30am (UTC)")
+        self.assertEqual(self.en.limited("claude")["resets"], "11:30am (UTC)")
+
+    def test_a_remembered_limit_expires(self):
+        """A wrong guess about when something resets should cost an hour, not
+        a day - the engine is asked again rather than written off."""
+        self.en.mark_limited("claude", "session limit")
+        state = self.en._limits()
+        state["claude"]["until"] = time.time() - 1
+        with open(self.en.LIMIT_STATE, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+        self.assertIsNone(self.en.limited("claude"))
+
+    def test_the_work_goes_to_the_next_one_that_is_actually_free(self):
+        avail = {n: self.en.ENGINES[n]["available"] for n in self.en.ENGINES}
+        for name in self.en.ENGINES:
+            self.en.ENGINES[name]["available"] = lambda: (True, "")
+        try:
+            self.assertEqual(self.en.next_engine("claude"), "codex")
+            self.en.mark_limited("codex", "quota")
+            self.assertEqual(self.en.next_engine("claude"), "gemini")
+            self.en.mark_limited("gemini", "quota")
+            self.assertEqual(self.en.next_engine("claude"), "aios")
+            self.en.mark_limited("aios", "quota")
+            # Nowhere left. Saying so beats routing into a fourth wall.
+            self.assertIsNone(self.en.next_engine("claude"))
+        finally:
+            for name, fn in avail.items():
+                self.en.ENGINES[name]["available"] = fn
+
+    def test_an_engine_that_is_out_is_not_asked_again(self):
+        """Sending into a wall that answered "session limit" five minutes ago
+        is not respecting a choice, it is wasting a turn."""
+        sent = []
+        real_send, real_tell = self.en.send, self.en._tell_felix
+        self.en._tell_felix = lambda text: None
+        avail = {n: self.en.ENGINES[n]["available"] for n in self.en.ENGINES}
+        for name in self.en.ENGINES:
+            self.en.ENGINES[name]["available"] = lambda: (True, "")
+        try:
+            self.en.mark_limited("claude", "session limit · resets 11:30am")
+            def fake_inner(engine, message, **kw):
+                if kw.get("fallback") is False:
+                    sent.append(engine)
+                    return {"engine": engine, "job": "x_1"}
+                return real_send(engine, message, **kw)
+            self.en.send = fake_inner
+            ticket = real_send("claude", "hallo", fallback=True)
+        finally:
+            self.en.send, self.en._tell_felix = real_send, real_tell
+            for name, fn in avail.items():
+                self.en.ENGINES[name]["available"] = fn
+        self.assertEqual(sent, ["codex"])
+        self.assertEqual(ticket["engine"], "codex")
+        self.assertIn("Limit", ticket["handed_off"]["note"])
+        self.assertIn("Codex", ticket["handed_off"]["note"])
+
+
 class TestAskAnotherEngine(unittest.TestCase):
     """One AI asking another. The mechanism is a command line, because every
     engine here can already run one - anything richer would be a protocol
