@@ -25,6 +25,8 @@ import hmac
 import json
 import mimetypes
 import os
+import select
+import socket
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -164,7 +166,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(400, str(e))
             return
         try:
-            size = entry["module"].screen_size()
+            size = api.device_size(entry)
             serial = api._device_serial(entry)
             stream = api.phone_stream.get(
                 serial, size=api.phone_stream.encode_size(
@@ -197,6 +199,94 @@ class Handler(BaseHTTPRequestHandler):
             pass
         except Exception as e:  # noqa: BLE001
             sys.stderr.write(f"[!] device-stream ended: {e}\n")
+
+    def _client_gone(self):
+        """Has the viewer closed the connection? -> True if it has.
+
+        Asked without writing anything, because the one place this is needed
+        is a stream where writing is exactly what must not happen."""
+        try:
+            ready, _, _ = select.select([self.connection], [], [], 0)
+            if not ready:
+                return False
+            return self.connection.recv(1, socket.MSG_PEEK) == b""
+        except OSError:
+            return True
+
+    def _serve_device_mp4(self, query):
+        """Live phone screen as fragmented MP4, for Media Source Extensions.
+
+        The fast path, and the default. It sends the phone's own H.264
+        untouched - repackaged, never re-encoded - so the decoding happens in
+        the viewer's hardware instead of on a Celeron N4000. Measured against
+        the MJPEG route on the same phone and the same motion: 437 KB/s
+        against 4061, and ~30% of a core against ~82%.
+
+        Unlike the MJPEG route this is fetched, not set as an <img> src, so it
+        takes the Authorization header like every other endpoint and the token
+        stays out of the URL.
+
+        The codec has to reach the client before the video does - MSE needs it
+        to create the SourceBuffer - so it rides in a response header, which
+        fetch() exposes as soon as the headers land and long before the body
+        ends."""
+        if not self._authorized():
+            self.send_error(401, "unauthorized")
+            return
+        try:
+            entry = api._device((query.get("device") or [""])[0])
+        except ValueError as e:
+            self.send_error(400, str(e))
+            return
+        try:
+            # Cached: asking a phone for its resolution costs an adb round
+            # trip against a device that is about to be busy carrying video,
+            # and the answer never changes.
+            size = api.device_size(entry)
+            # "sharp" trades latency for readable small text. Measured on the
+            # same phone, input to visible pixel: 507ms median at 1200 lines,
+            # 865ms at 1600.
+            target = (api.phone_stream.SHARP_HEIGHT
+                      if (query.get("q") or [""])[0] == "sharp"
+                      else api.phone_stream.DEFAULT_HEIGHT)
+            session = api.phone_stream.Mp4Session(
+                api._device_serial(entry),
+                size=api.phone_stream.encode_size(
+                    size[0] if size else None, size[1] if size else None,
+                    target_height=target))
+            codec = session.open()
+        except Exception as e:  # noqa: BLE001 - a sleeping phone is normal
+            sys.stderr.write(f"[stream] {(query.get('device') or [''])[0]}: {e}\n")
+            self.send_error(503, str(e)[:160])
+            return
+        sys.stderr.write(f"[stream] {(query.get('device') or [''])[0]}: live, {codec}\n")
+
+        self.send_response(200)
+        self.send_header("Content-Type", "video/mp4")
+        self.send_header("X-AIOS-Codec", codec)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        try:
+            for chunk in session.chunks():
+                if not chunk:
+                    # An idle tick. Nothing may be written into the stream
+                    # here - padding inserted between a fragment's moof and
+                    # its mdat is what broke the picture the first time - so
+                    # the connection is inspected instead. A client that has
+                    # gone away leaves its socket readable at EOF.
+                    if self._client_gone():
+                        break
+                    continue
+                self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            # The viewer left. Normal, and the only signal there is - this
+            # capture belongs to one connection and dies with it.
+            pass
+        except Exception as e:  # noqa: BLE001
+            sys.stderr.write(f"[!] device-stream-mp4 ended: {e}\n")
+        finally:
+            session.close()
 
     def _serve_static(self, path):
         """Static files only, no directory listing, no path escaping the
@@ -269,6 +359,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send_json(status, payload)
             return
+        if method == "GET" and parsed.path == "/device-stream-mp4":
+            self._serve_device_mp4(parse_qs(parsed.query))
+            return
         if method == "GET" and parsed.path == "/device-stream":
             self._serve_device_stream(parse_qs(parsed.query))
             return
@@ -319,6 +412,13 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    # A webapp that died mid-stream left a phone's display timeout raised.
+    # Repairing it here means the damage lasts until the next restart at
+    # worst, instead of until someone notices their battery.
+    try:
+        api.phone_stream.repair_awake()
+    except Exception as e:  # noqa: BLE001 - never let this stop the service
+        print(f"[!] awake-repair failed: {e}", file=sys.stderr)
     if not TOKEN:
         print("WARNING: AIOS_WEB_TOKEN is not set in .env - every request "
              "will be rejected until it is. Not starting with a blank/"

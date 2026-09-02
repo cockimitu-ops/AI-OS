@@ -4286,6 +4286,72 @@ class TestPhoneStream(unittest.TestCase):
         self.assertEqual(stream._seq, 2)
         self.assertEqual(stream._frame, b"c")
 
+    def test_encode_size_honours_a_target_height(self):
+        """The height is the latency dial. Measured on the same phone with the
+        same harness, input to visible pixel: 865ms median at 1600 lines and
+        507ms at 1200, and only at 1200 did every attempt register at all."""
+        _, tall = (int(v) for v in self.ps.encode_size(1080, 2400, 1600).split("x"))
+        _, short = (int(v) for v in self.ps.encode_size(1080, 2400, 1200).split("x"))
+        self.assertEqual((tall, short), (1600, 1200))
+
+    def test_the_idle_tick_carries_no_bytes(self):
+        """It must stay empty.
+
+        The idle tick exists so the server gets a turn to notice a viewer has
+        left even while no video is arriving. The first version used it to
+        write an MP4 `free` padding box, which was a bad idea for a reason
+        that survived the investigation even though the suspicion did not:
+        ffmpeg's output arrives in arbitrary chunks, so nothing stops padding
+        from landing between a fragment's moof and its mdat. (What actually
+        froze the picture was a proactive SourceBuffer.remove() on the client
+        side.) Housekeeping does not belong inside a media stream either way -
+        the server checks its own socket instead."""
+        self.assertEqual(self.ps.HEARTBEAT, b"")
+
+    def test_a_known_codec_is_not_asked_for_twice(self):
+        """The codec is the only thing that has to be known before a byte can
+        be sent, and finding it out meant waiting for real video - four
+        seconds of "verbinde…" on every single open. A phone does not change
+        its H.264 profile."""
+        with tempfile.TemporaryDirectory() as tmp:
+            original = self.ps._codec_path
+            self.ps._codec_path = os.path.join(tmp, "codecs.json")
+            try:
+                self.assertIsNone(self.ps._remembered_codec("1.2.3.4:5555"))
+                self.ps._remember_codec("1.2.3.4:5555", "avc1.64002A")
+                self.assertEqual(self.ps._remembered_codec("1.2.3.4:5555"), "avc1.64002A")
+                self.assertIsNone(self.ps._remembered_codec("other:5555"))
+            finally:
+                self.ps._codec_path = original
+
+    def test_keep_awake_restores_what_it_found(self):
+        """The display timeout is raised while someone is watching, because
+        MIUI's is 60 seconds and KEYCODE_WAKEUP does not reset it - waking a
+        device is not the same as using one, and the remote control died
+        mid-session for that reason. What is raised has to come back down,
+        including after a crash, which is why the old value goes to disk
+        before it is changed rather than being held in memory."""
+        with tempfile.TemporaryDirectory() as tmp:
+            original = self.ps._awake_path
+            self.ps._awake_path = os.path.join(tmp, "awake.json")
+            calls = []
+            real_get, real_put = self.ps._settings_get, self.ps._settings_put
+            self.ps._settings_get = lambda serial, key: "60000"
+            self.ps._settings_put = lambda serial, key, value, root=True: (
+                calls.append(value) or True)
+            try:
+                self.ps.keep_awake("dev:1", True)
+                self.ps.keep_awake("dev:1", True)    # a second viewer
+                self.ps.keep_awake("dev:1", False)   # one leaves
+                self.assertEqual(calls, [self.ps.AWAKE_TIMEOUT_MS],
+                                 "the last viewer leaving is what restores it")
+                self.ps.keep_awake("dev:1", False)   # the last one leaves
+                self.assertEqual(calls, [self.ps.AWAKE_TIMEOUT_MS, "60000"])
+            finally:
+                self.ps._settings_get, self.ps._settings_put = real_get, real_put
+                self.ps._awake_path = original
+                self.ps._awake_refs.clear()
+
     def test_a_stream_with_no_viewers_goes_idle(self):
         stream = self.ps.Stream("test:1")
         stream._last_view = time.time() - (self.ps.IDLE_TIMEOUT_S + 5)

@@ -311,10 +311,12 @@ DEVICES = {
 
 # A panel is an at-a-glance view; waiting longer than this for a phone that
 # is probably asleep makes the whole screen feel broken.
-# Raised from 9s once the probes themselves dropped from ~6s to under
-# a second: the headroom is now for a phone waking from doze, not for
-# protocol overhead.
-DEVICE_PROBE_S = 12
+# Raised from 9s once the probes themselves dropped from ~6s to under a
+# second, then lowered again once the panel stopped waiting for it: the client
+# opens on what it already knew and corrects itself when this lands, so the
+# deadline is now only about how long a phone gets to answer, not about how
+# long anyone stares at a blank screen.
+DEVICE_PROBE_S = 8
 
 # Actions the panel may perform, in four groups.
 #
@@ -327,8 +329,11 @@ DEVICE_PROBE_S = 12
 # with a reason rather than attempted and failed with a stack trace.
 BASE_ACTIONS = {"screenshot", "tap", "swipe", "key", "text", "open", "status",
                 "notifications", "apps", "stream_start", "stream_stop"}
+# Root-only because dismissing the keyguard needs it. Listed separately from
+# the read verbs because it is the one thing that makes live control usable at
+# all - see phone_root.unlock().
 ROOT_ACTIONS = {"info", "sms", "calls", "clipboard", "ls", "read", "pull",
-                "shell", "setting", "record", "app_info"}
+                "shell", "setting", "record", "app_info", "unlock"}
 # Verbs that can cost Felix the device or its data. Present, because it is his
 # phone and he asked for a toolkit without restrictions - but each one has to
 # arrive with confirm=true, which the UI only sends after a second, explicit
@@ -353,6 +358,23 @@ def _device(name):
     if not entry:
         raise ValueError(f"unknown device: {name!r}")
     return entry
+
+
+# A phone's resolution does not change, and asking for it costs an adb round
+# trip against a device that is usually busy carrying video by then. Measured
+# consequence of not caching it: the stream request sat behind a `wm size`
+# call and the panel said "verbinde…" for tens of seconds.
+_SIZE_CACHE = {}
+
+
+def device_size(entry):
+    key = entry["label"]
+    if key not in _SIZE_CACHE:
+        size = entry["module"].screen_size()
+        if not size:
+            return None
+        _SIZE_CACHE[key] = size
+    return _SIZE_CACHE[key]
 
 
 def _device_serial(entry):
@@ -497,7 +519,7 @@ def post_device_action(body):
 
         # --- live video ---------------------------------------------------
         if action == "stream_start":
-            size = mod.screen_size()
+            size = device_size(entry)
             serial = _device_serial(entry)
             enc = phone_stream.encode_size(size[0] if size else None,
                                            size[1] if size else None)
@@ -528,6 +550,9 @@ def post_device_action(body):
             return 200, {"ok": True, "messages": mod.sms(limit=_num("limit", 20))}
         if action == "calls":
             return 200, {"ok": True, "calls": mod.call_log(limit=_num("limit", 20))}
+        if action == "unlock":
+            mod.unlock()
+            return 200, {"ok": True}
         if action == "clipboard":
             return 200, {"ok": True, "clipboard": mod.clipboard()}
         if action == "ls":

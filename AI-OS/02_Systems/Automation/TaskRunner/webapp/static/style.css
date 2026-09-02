@@ -479,10 +479,36 @@ td strong { color: var(--text); font-weight: 600; }
   opacity: 0; transition: opacity 260ms ease;
 }
 .device-stage .layer.on { opacity: 1; }
+.device-stage video.layer { background: #000; }
 .stage-wake {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
   z-index: 4;
 }
+
+/* Fullscreen. The Fullscreen API does the work where it exists; this class
+   does the same job on its own for iOS Safari, which refuses the API for
+   anything that is not a <video>. Both are driven by the same toggle, so the
+   picture behaves identically either way. */
+body.stage-fs { overflow: hidden; }
+body.stage-fs .device-stage {
+  position: fixed; inset: 0; z-index: 90;
+  max-height: none; border-radius: 0; border: none; margin: 0;
+  width: 100vw; height: 100vh; height: 100dvh;
+}
+body.stage-fs .topbar, body.stage-fs .tabbar { display: none; }
+.device-stage:fullscreen { max-height: none; border-radius: 0; }
+.fs-bar {
+  position: absolute; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
+  transform: translateX(-50%); z-index: 95;
+  display: flex; gap: 7px; flex-wrap: wrap; justify-content: center;
+  max-width: 96vw; padding: 7px;
+  border-radius: 999px; background: rgba(0,0,0,0.55);
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+  /* Fades out of the way; any touch on the stage brings it back. */
+  opacity: 0.32; transition: opacity 220ms ease;
+}
+.fs-bar:hover, body.stage-fs .device-stage:active .fs-bar, .fs-bar:focus-within { opacity: 1; }
+body.stage-fs .stage-badge { opacity: 0.35; }
 .stage-empty { color: var(--text-faint); font-size: 0.85rem; padding: 40px; }
 .stage-badge {
   position: absolute; top: 10px; left: 10px; z-index: 2;

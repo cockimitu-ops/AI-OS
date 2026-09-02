@@ -37,6 +37,7 @@ Stdlib only, plus adb.
 import json
 import os
 import re
+import select
 import subprocess
 import sys
 import time
@@ -510,21 +511,80 @@ KEYS = {"back": 4, "home": 3, "recents": 187, "power": 26, "enter": 66,
         "menu": 82, "delete": 67, "tab": 61, "search": 84}
 
 
-def tap(x, y):
-    sh(f"input tap {int(x)} {int(y)}", root=True)
+# A root shell held open, purely for input.
+#
+# Every input verb used to be its own `adb -s ... shell su -c '...'`, and that
+# is three startups per tap: the adb client, a connection over the tailnet,
+# and su. Measured end to end from the web panel, a keypress took 226-423ms
+# to reach the phone, of which the tap itself is about 70 - `input` is a shell
+# script that starts an app_process, and that part cannot be avoided without
+# writing to /dev/input directly. The rest was startup, and startup is
+# avoidable: one shell, held open, fed one line per gesture.
+#
+# Fire and forget by design. Nothing reads the output, because waiting for a
+# tap to acknowledge itself is precisely the latency being removed here - and
+# a tap that failed is visible in the live picture a moment later anyway.
+_INPUT_SHELL = {"proc": None}
+_SHELL_READY = "AIOS_INPUT_READY"
+
+
+def _input_shell():
+    """A live root shell, started if there is not one. -> the process, or None."""
+    proc = _INPUT_SHELL["proc"]
+    if proc is not None and proc.poll() is None:
+        return proc
+    try:
+        proc = subprocess.Popen(["adb", "-s", DEVICE, "shell", "su"],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL)
+        # Proved alive before it is trusted: `su` can be denied, and a denied
+        # su exits successfully with no output. Silently dropping every tap
+        # afterwards would be the worst possible failure here.
+        proc.stdin.write(f"echo {_SHELL_READY}\n".encode())
+        proc.stdin.flush()
+        ready, _, _ = select.select([proc.stdout], [], [], 6)
+        if not ready or _SHELL_READY not in proc.stdout.readline().decode("utf-8", "replace"):
+            proc.kill()
+            return None
+    except (OSError, ValueError):
+        return None
+    _INPUT_SHELL["proc"] = proc
+    return proc
+
+
+def _fire(command):
+    """Send one input command down the held-open shell. -> True if it went."""
+    proc = _input_shell()
+    if proc is None:
+        return False
+    try:
+        proc.stdin.write((command + "\n").encode())
+        proc.stdin.flush()
+        return True
+    except (OSError, ValueError):
+        _INPUT_SHELL["proc"] = None
+        return False
+
+
+def _input(command):
+    """The held-open shell if it is there, a fresh su -c if it is not."""
+    if not _fire(command):
+        sh(command, root=True)
     return True
+
+
+def tap(x, y):
+    return _input(f"input tap {int(x)} {int(y)}")
 
 
 def swipe(x1, y1, x2, y2, ms=300):
-    sh(f"input swipe {int(x1)} {int(y1)} {int(x2)} {int(y2)} {int(ms)}", root=True)
-    return True
+    return _input(f"input swipe {int(x1)} {int(y1)} {int(x2)} {int(y2)} {int(ms)}")
 
 
 def key(name):
     if name not in KEYS:
         raise PhoneError(f"unknown key {name!r}; known: {', '.join(sorted(KEYS))}")
-    sh(f"input keyevent {KEYS[name]}", root=True)
-    return True
+    return _input(f"input keyevent {KEYS[name]}")
 
 
 def type_text(text):
@@ -534,7 +594,25 @@ def type_text(text):
     character and not a command on the device."""
     if not text:
         return False
-    sh("input text " + _q(text.replace(" ", "%s")), root=True)
+    return _input("input text " + _q(text.replace(" ", "%s")))
+
+
+def unlock():
+    """Wake the screen AND get past the lock screen. -> True.
+
+    Both halves are needed and the second is the one that is not obvious.
+    KEYCODE_WAKEUP turns the display on, but it turns it on at the keyguard -
+    and the keyguard sets its own user-activity timeout that overrides the
+    system one. Measured on this phone: mUserActivityTimeoutOverrideFrom-
+    WindowManager=10000, so the screen went dark ten seconds later no matter
+    what screen_off_timeout said, and a remote-control session died with it.
+    After `wm dismiss-keyguard` that override reads -1 and the normal timeout
+    applies.
+
+    This does not defeat a PIN or pattern: on a secured device it brings up
+    the entry screen rather than bypassing it."""
+    key("wake")
+    sh("wm dismiss-keyguard", root=True)
     return True
 
 

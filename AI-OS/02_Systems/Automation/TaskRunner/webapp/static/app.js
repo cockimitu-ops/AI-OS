@@ -585,8 +585,38 @@ chatForm.addEventListener("submit", async (e) => {
 
 // --- device control --------------------------------------------------------
 
+const DEVICE_KEY = "aios_device";
+
 let deviceState = { id: null, list: [], width: 1080, height: 2400, live: false,
                     actions: [], rooted: false };
+
+// What the last visit already knew. Probing two phones takes up to eight
+// seconds - one of them is usually asleep, and a sleeping phone answers by
+// not answering - and waiting for that before showing anything meant the
+// panel sat blank for most of a commercial break before the picture even
+// started. None of what it waits for changes: the resolution, whether it has
+// root, which verbs it takes. So it opens on what it knew and corrects
+// itself when the probe lands.
+function rememberDevice() {
+  try {
+    localStorage.setItem(DEVICE_KEY, JSON.stringify({
+      id: deviceState.id, width: deviceState.width, height: deviceState.height,
+      actions: deviceState.actions, rooted: deviceState.rooted,
+    }));
+  } catch (_) {}
+}
+
+function recallDevice() {
+  try {
+    const d = JSON.parse(localStorage.getItem(DEVICE_KEY) || "null");
+    if (!d || !d.id) return false;
+    Object.assign(deviceState, {
+      id: d.id, width: d.width || 1080, height: d.height || 2400,
+      actions: d.actions || [], rooted: !!d.rooted,
+    });
+    return true;
+  } catch (_) { return false; }
+}
 
 function deviceSay(msg, bad) {
   const el = document.getElementById("device-status");
@@ -601,9 +631,19 @@ async function deviceAction(payload) {
   });
 }
 
-async function loadDevices() {
+async function loadDevices(background) {
   const tabsEl = document.getElementById("device-tabs");
   const infoEl = document.getElementById("device-info");
+  // Straight to a picture, off what the last visit learned. The probe below
+  // still runs; it just no longer stands between the tab and the phone.
+  if (!background && recallDevice()) {
+    infoEl.innerHTML = `<span>${escapeHtml(deviceState.id)}</span><span>prüfe…</span>`;
+    renderDeviceControls();
+    renderDeviceTools();
+    startStream();
+    loadDevices(true);
+    return;
+  }
   try {
     const data = await api("/api/devices");
     setConnDot("ok");
@@ -622,7 +662,8 @@ async function loadDevices() {
       if (window.fxTap) window.fxTap();
       stopStream();
       deviceState.id = el.dataset.dev;
-      loadDevices();
+      rememberDevice();
+      loadDevices(true);
     }));
 
     const dev = deviceState.list.find((d) => d.id === deviceState.id) || {};
@@ -644,11 +685,14 @@ async function loadDevices() {
       <span>${escapeHtml(dev.current_app || "—")}</span>
       <span>${dev.rooted ? "root" : "ohne root"}</span>
       <span>${deviceState.width}×${deviceState.height}</span>`;
-    renderStageBar();
     renderDeviceControls();
     renderDeviceTools();
     loadNodeRunner();
-    startStream();
+    rememberDevice();
+    // Only start a stream if the fast path above did not already: coming back
+    // from the probe and restarting would throw away a picture that is
+    // already running.
+    if (!deviceState.live) startStream(); else renderStageBar();
   } catch (err) {
     setConnDot("err");
     infoEl.innerHTML = `<span>Fehler: ${escapeHtml(err.message)}</span>`;
@@ -674,48 +718,224 @@ function stageBadge(text, live) {
   if (el) { el.textContent = text; el.classList.toggle("live", !!live); }
 }
 
-// The stage is sized from the phone's own aspect ratio, and both pictures -
-// the still and the live one - are laid over each other inside it. Without a
-// fixed shape the box collapses to nothing until the first frame arrives,
-// which is exactly when it needs to look like a phone.
+// The stage is sized from the phone's own aspect ratio, and every picture -
+// the still, the video, the MJPEG fallback - is laid over it. Without a fixed
+// shape the box collapses to nothing until the first frame arrives, which is
+// exactly when it needs to look like a phone.
 function prepareStage() {
   const stage = stageEl();
   stage.style.aspectRatio = `${deviceState.width} / ${deviceState.height}`;
   stage.innerHTML = `<div class="stage-badge" id="stage-badge">…</div>
     <img id="dev-still" class="layer" alt="">
-    <img id="dev-img" class="layer live" alt="Bildschirm">`;
+    <video id="dev-video" class="layer" muted playsinline autoplay></video>
+    <img id="dev-img" class="layer" alt="Bildschirm">`;
+  bindStageTaps(stage);
   return stage;
 }
 
+// Where a click on the stage lands on the phone.
+//
+// Letterbox-aware, which matters as soon as the stage stops matching the
+// phone's aspect ratio - in fullscreen it never does. object-fit: contain
+// centres the picture and leaves bars, so mapping through the element's own
+// rectangle would put every tap in the wrong place by the height of one bar.
+function stagePoint(clientX, clientY) {
+  const r = stageEl().getBoundingClientRect();
+  const scale = Math.min(r.width / deviceState.width, r.height / deviceState.height);
+  const cw = deviceState.width * scale, ch = deviceState.height * scale;
+  const x = (clientX - (r.left + (r.width - cw) / 2)) / scale;
+  const y = (clientY - (r.top + (r.height - ch) / 2)) / scale;
+  if (x < 0 || y < 0 || x > deviceState.width || y > deviceState.height) return null;
+  return { x: Math.round(x), y: Math.round(y), localX: clientX - r.left, localY: clientY - r.top };
+}
+
+function mseSupported() {
+  return typeof MediaSource !== "undefined"
+    && typeof MediaSource.isTypeSupported === "function"
+    && MediaSource.isTypeSupported('video/mp4; codecs="avc1.64002A"');
+}
+
+// Every start gets a number. Two probes finishing a second apart used to
+// start two captures of the same phone, and Android hands out exactly one -
+// the second got silence, which is indistinguishable from a dark screen. The
+// generation lets a start that has been superseded notice and stand down.
 function startStream() {
+  if (deviceState.starting) return;
+  deviceState.starting = true;
+  const gen = (deviceState.gen = (deviceState.gen || 0) + 1);
+  deviceState.myGen = gen;
   prepareStage();
   deviceState.live = true;
   stageBadge("verbinde…", false);
-  const img = document.getElementById("dev-img");
-  img.src = `/device-stream?device=${encodeURIComponent(deviceState.id)}`
-          + `&token=${encodeURIComponent(getToken())}&t=${Date.now()}`;
-  img.addEventListener("error", () => {
-    // The stream could not start - ffmpeg missing, adb gone, phone away.
-    // Fall back to the single screenshot rather than showing nothing: slow
-    // is still a picture, and the badge says which one you are looking at.
-    deviceState.live = false;
-    renderStageBar();
-    refreshStill();
-  });
-  bindStageTaps(img);
   renderStageBar();
   deviceSay("");
-
   // A still underneath, fetched once. It is what you see while the video
-  // starts up - and it is the ONLY thing you see when the phone's display is
-  // off, because a dark screen composites no frames at all and screenrecord
-  // has nothing to encode. That case looked like a broken panel: a black box
-  // with a green LIVE badge on it.
+  // starts, and the ONLY thing you see when the display is off - a dark
+  // screen composites nothing, so screenrecord has nothing to encode.
   refreshStill(true);
+  const done = () => { if (deviceState.gen === gen) deviceState.starting = false; };
+  deviceState.path = mseSupported() ? "mse" : "mjpeg";
+  (deviceState.path === "mse" ? startMse(gen) : Promise.resolve(startMjpeg(gen))).then(done, done);
+}
 
-  // Chrome fires `load` on a multipart image only when the whole stream
-  // ends, so the arrival of the first frame has to be observed rather than
-  // listened for.
+// --- the fast path: the phone's own H.264, decoded by the viewer -----------
+//
+// The server used to decode the phone's video and re-encode it to MJPEG.
+// crypton is a Celeron N4000 - two cores at 1.1 GHz - and that measured 82%
+// of a core at 4.0 MB/s, which is not a machine keeping up. Remuxed to
+// fragmented MP4 and handed to Media Source Extensions, the same picture
+// costs the server ~30% and the network 437 KB/s, and the decoding happens in
+// hardware on whatever is watching.
+
+async function startMse(gen) {
+  const stale = () => deviceState.gen !== gen;
+  const video = document.getElementById("dev-video");
+  const ctrl = new AbortController();
+  deviceState.abort = ctrl;
+  let res;
+  try {
+    res = await fetch(`/device-stream-mp4?device=${encodeURIComponent(deviceState.id)}`
+      + (deviceState.sharp ? "&q=sharp" : ""),
+      { headers: { Authorization: `Bearer ${getToken()}` }, signal: ctrl.signal });
+  } catch (err) {
+    if (ctrl.signal.aborted || stale()) return;
+    return streamFailed(err.message);
+  }
+  if (stale()) { ctrl.abort(); return; }
+  if (!res.ok) {
+    return streamFailed(res.status === 503 ? "Bildschirm aus" : `HTTP ${res.status}`);
+  }
+  const codec = res.headers.get("X-AIOS-Codec") || "avc1.64002A";
+  const mime = `video/mp4; codecs="${codec}"`;
+  if (!MediaSource.isTypeSupported(mime)) {
+    // The phone changed profile on us. MJPEG always plays.
+    ctrl.abort();
+    deviceState.path = "mjpeg (codec)";
+    return startMjpeg();
+  }
+  const ms = new MediaSource();
+  video.src = URL.createObjectURL(ms);
+  await new Promise((r) => ms.addEventListener("sourceopen", r, { once: true }));
+  if (stale()) { ctrl.abort(); return; }
+  let sb;
+  try {
+    sb = ms.addSourceBuffer(mime);
+  } catch (err) {
+    ctrl.abort();
+    deviceState.path = "mjpeg (sourcebuffer: " + err.message.slice(0,40) + ")";
+    return startMjpeg();
+  }
+  // sequence mode re-bases timestamps, which is what makes a restart
+  // invisible: screenrecord stops at its 180-second limit and ffmpeg begins
+  // again from zero, and without this the video would jump back in time.
+  sb.mode = "sequence";
+  const queue = [];
+  const pump = () => {
+    if (sb.updating || !queue.length || ms.readyState !== "open") return;
+    try {
+      sb.appendBuffer(queue.shift());
+      deviceState.appends = (deviceState.appends || 0) + 1;
+    } catch (err) {
+      deviceState.appendErr = err.name + ": " + err.message.slice(0, 60);
+      // The buffer filled. Drop what is already behind us and try again -
+      // this is a live view, the past is not worth keeping.
+      if (err.name === "QuotaExceededError" && video.buffered.length) {
+        try { sb.remove(video.buffered.start(0), Math.max(0, video.currentTime - 1)); } catch (_) {}
+      }
+    }
+  };
+  sb.addEventListener("updateend", pump);
+  sb.addEventListener("error", () => { deviceState.sbError = "SourceBuffer error"; });
+  ms.addEventListener("sourceended", () => { deviceState.msState = "ended"; });
+  video.addEventListener("error", () => {
+    deviceState.videoErr = video.error ? `${video.error.code}: ${video.error.message}` : "?";
+  });
+  video.classList.add("on");
+  stageBadge("live", true);
+
+  // Chase the live edge. MSE will happily play a growing backlog at 1x, which
+  // is how a remote control silently drifts thirty seconds into the past.
+  clearInterval(deviceState.watch);
+  const openedAt = Date.now();
+  deviceState.watch = setInterval(() => {
+    if (!deviceState.live) { clearInterval(deviceState.watch); return; }
+    // The codec arrives even from a sleeping phone - screenrecord emits the
+    // parameter sets regardless - so a stream can start and still never show
+    // anything. Nothing decoded after seven seconds means a dark display.
+    if (!video.videoWidth && Date.now() - openedAt > 12000) {
+      clearInterval(deviceState.watch);
+      if (deviceState.abort) { try { deviceState.abort.abort(); } catch (_) {} }
+      streamFailed("Bildschirm aus");
+      return;
+    }
+    if (!video.buffered.length) return;
+    const end = video.buffered.end(video.buffered.length - 1);
+    // Chase the live edge, but stop a little short of it. Sitting exactly on
+    // the edge means every hiccup in the phone's frame rate is a stall: the
+    // stream is stamped at a nominal 30 fps and the phone actually composites
+    // around 28, so the player drains the buffer slightly faster than it
+    // fills. A quarter second of slack costs a quarter second of latency and
+    // buys a picture that does not keep freezing.
+    if (end - video.currentTime > 0.35) video.currentTime = end - 0.12;
+    if (video.paused) video.play().catch(() => {});
+    // Nothing is trimmed here, on purpose. Doing it proactively - remove(0,
+    // currentTime - 4) once past eight seconds - emptied the SourceBuffer
+    // completely and it never refilled. Measured three times over: at media
+    // time 8.03 buffered.length went to 0 and stayed there while megabytes
+    // kept arriving and the picture stayed frozen for good. MSE evicts under
+    // pressure by itself, and pump()'s quota handler covers the rest.
+  }, 120);
+
+  // Last line of defence. Whatever the reason - an eviction that took the
+  // whole buffer, a fragment the parser refused, an ffmpeg restart landing
+  // badly - a stream that is receiving data and buffering none of it is dead
+  // and cannot recover on its own. Rebuilding it costs about a second, and
+  // not rebuilding it costs the whole feature.
+  let emptySince = 0;
+  clearInterval(deviceState.guard);
+  deviceState.guard = setInterval(() => {
+    if (!deviceState.live || deviceState.gen !== gen) {
+      clearInterval(deviceState.guard);
+      return;
+    }
+    if (video.buffered.length || !video.videoWidth) { emptySince = 0; return; }
+    if (!emptySince) { emptySince = Date.now(); return; }
+    if (Date.now() - emptySince > 2500) {
+      clearInterval(deviceState.guard);
+      deviceSay("Bild neu aufgebaut");
+      stopStream();
+      startStream();
+    }
+  }, 700);
+
+  const reader = res.body.getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      deviceState.bytes = (deviceState.bytes || 0) + value.length;
+      queue.push(value);
+      pump();
+    }
+  } catch (err) {
+    if (!ctrl.signal.aborted) streamFailed(err.message);
+  }
+}
+
+// --- the fallback: MJPEG in an <img> ---------------------------------------
+
+function startMjpeg(gen) {
+  const img = document.getElementById("dev-img");
+  if (!img || (gen && deviceState.gen !== gen)) return;
+  // The token travels in the URL here and nowhere else in this app: an <img>
+  // request carries no Authorization header and there is no way to give it
+  // one. The MP4 path above is fetched, so it uses the header like everything
+  // else.
+  img.src = `/device-stream?device=${encodeURIComponent(deviceState.id)}`
+          + `&token=${encodeURIComponent(getToken())}&t=${Date.now()}`;
+  img.addEventListener("error", () => streamFailed("kein Bild"));
+  // Chrome fires `load` on a multipart image only when the whole stream ends,
+  // so the first frame has to be observed rather than listened for.
   clearInterval(deviceState.watch);
   const startedAt = Date.now();
   deviceState.watch = setInterval(() => {
@@ -726,32 +946,50 @@ function startStream() {
       el.classList.add("on");
       stageBadge("live", true);
       clearInterval(deviceState.watch);
-      return;
-    }
-    if (Date.now() - startedAt > 6000) {
-      // Still nothing. Say why, and offer the one button that fixes it.
-      stageBadge("Bildschirm aus", false);
-      if (!document.getElementById("stage-wake")) {
-        const b = document.createElement("button");
-        b.id = "stage-wake";
-        b.className = "chip stage-wake";
-        b.textContent = "Handy wecken";
-        b.addEventListener("click", async (e) => {
-          e.stopPropagation();
-          b.textContent = "…";
-          await deviceAction({ action: "key", key: "wake" });
-          b.remove();
-          startStream();
-        });
-        stageEl().appendChild(b);
-      }
+    } else if (Date.now() - startedAt > 6000) {
+      streamFailed("Bildschirm aus");
     }
   }, 400);
 }
 
+// A phone with its display off composites nothing, so there is genuinely no
+// video to send. Saying so and offering the one button that fixes it beats a
+// green LIVE badge over a black rectangle.
+function streamFailed(reason) {
+  clearInterval(deviceState.watch);
+  stageBadge(reason || "kein Bild", false);
+  if (document.getElementById("stage-wake")) return;
+  const b = document.createElement("button");
+  b.id = "stage-wake";
+  b.className = "chip stage-wake";
+  b.textContent = "Handy wecken";
+  b.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    b.textContent = "…";
+    // unlock, not just wake. Waking turns the display on at the keyguard,
+    // which sets its own ten-second timeout and puts the phone straight back
+    // to sleep - see phone_root.unlock().
+    const r = await deviceAction({
+      action: deviceState.actions.includes("unlock") ? "unlock" : "key",
+      key: "wake",
+    });
+    if (!r.ok) { deviceSay(r.error, true); b.textContent = "Handy wecken"; return; }
+    b.remove();
+    startStream();
+  });
+  stageEl().appendChild(b);
+}
+
 function stopStream() {
   deviceState.live = false;
+  deviceState.starting = false;
+  clearInterval(deviceState.guard);
+  deviceState.gen = (deviceState.gen || 0) + 1;   // orphans any start in flight
   clearInterval(deviceState.watch);
+  if (deviceState.abort) { try { deviceState.abort.abort(); } catch (_) {} }
+  deviceState.abort = null;
+  const video = document.getElementById("dev-video");
+  if (video) { video.pause(); video.removeAttribute("src"); video.load(); }
   const img = document.getElementById("dev-img");
   // Clearing src is what actually closes the HTTP connection, which is what
   // lets the server-side stream notice it has no viewers and shut ffmpeg and
@@ -765,41 +1003,40 @@ function stopStream() {
   }
 }
 
-function bindStageTaps(img) {
-  const send = async (e, kind) => {
-    const rect = img.getBoundingClientRect();
-    const x = Math.round(((e.clientX - rect.left) / rect.width) * deviceState.width);
-    const y = Math.round(((e.clientY - rect.top) / rect.height) * deviceState.height);
-    if (window.fxTap) window.fxTap();
-    showTapRipple(e.clientX - rect.left, e.clientY - rect.top);
-    const t = await deviceAction({ action: kind, x, y });
-    if (!t.ok) deviceSay(t.error, true);
-    // No refresh call: the stream shows the result on its own. That single
-    // change is most of what "zu langsam" was - every tap used to be
-    // followed by a second-and-a-half of waiting for a new still.
-    if (!deviceState.live) refreshStill();
-  };
+// Bound to the stage, not to a picture: which layer is on top changes between
+// video, MJPEG and still, and the gesture should not care.
+function bindStageTaps(stage) {
+  // Bound once. prepareStage() replaces the stage's contents but not the
+  // stage itself, so binding per call would stack a new listener pair on
+  // every refresh and send one tap per stream restart.
+  if (stage.dataset.tapsBound) return;
+  stage.dataset.tapsBound = "1";
   let down = null;
-  img.addEventListener("pointerdown", (e) => { down = { x: e.clientX, y: e.clientY, t: Date.now() }; });
-  img.addEventListener("pointerup", async (e) => {
+  stage.addEventListener("pointerdown", (e) => {
+    if (e.target.id === "stage-wake") return;
+    down = { x: e.clientX, y: e.clientY, t: Date.now() };
+  });
+  stage.addEventListener("pointerup", async (e) => {
     if (!down) return;
-    const dx = e.clientX - down.x, dy = e.clientY - down.y;
-    const rect = img.getBoundingClientRect();
+    const from = stagePoint(down.x, down.y);
+    const to = stagePoint(e.clientX, e.clientY);
+    const dragged = Math.hypot(e.clientX - down.x, e.clientY - down.y) > 18;
+    const held = Date.now() - down.t;
+    down = null;
+    if (!from || !to) return;
+    if (window.fxTap) window.fxTap();
+    showTapRipple(to.localX, to.localY);
     // A drag on the picture is a swipe on the phone. Without it the panel
     // could tap but not scroll, which makes most apps unusable remotely.
-    if (Math.hypot(dx, dy) > 18) {
-      const sx = Math.round(((down.x - rect.left) / rect.width) * deviceState.width);
-      const sy = Math.round(((down.y - rect.top) / rect.height) * deviceState.height);
-      const ex = Math.round(((e.clientX - rect.left) / rect.width) * deviceState.width);
-      const ey = Math.round(((e.clientY - rect.top) / rect.height) * deviceState.height);
-      const r = await deviceAction({ action: "swipe", x1: sx, y1: sy, x2: ex, y2: ey,
-                                     ms: Math.max(80, Math.min(Date.now() - down.t, 800)) });
-      if (!r.ok) deviceSay(r.error, true);
-      if (!deviceState.live) refreshStill();
-    } else {
-      await send(e, "tap");
-    }
-    down = null;
+    const r = dragged
+      ? await deviceAction({ action: "swipe", x1: from.x, y1: from.y, x2: to.x, y2: to.y,
+                             ms: Math.max(80, Math.min(held, 800)) })
+      : await deviceAction({ action: "tap", x: to.x, y: to.y });
+    if (!r.ok) deviceSay(r.error, true);
+    // No refresh call: the stream shows the result on its own. That is most
+    // of what "zu langsam" was - every tap used to be followed by a second
+    // and a half of waiting for a new still.
+    if (!deviceState.live) refreshStill();
   });
 }
 
@@ -811,14 +1048,13 @@ function showTapRipple(x, y) {
   dot.style.left = `${x}px`;
   dot.style.top = `${y}px`;
   wrap.appendChild(dot);
-  // Removed by timer, not by animationend: if the image is replaced
+  // Removed by timer, not by animationend: if the picture is replaced
   // mid-animation that event never fires and the marker would stay forever.
   setTimeout(() => dot.remove(), 650);
 }
 
 async function refreshStill(asBackdrop) {
-  if (!asBackdrop) { prepareStage(); stageBadge("Standbild", false); }
-  if (!asBackdrop) deviceSay("Bildschirm holen…");
+  if (!asBackdrop) { prepareStage(); stageBadge("Standbild", false); deviceSay("Bildschirm holen…"); }
   try {
     const r = await deviceAction({ action: "screenshot" });
     if (!r.ok) { if (!asBackdrop) deviceSay(r.error, true); return; }
@@ -838,33 +1074,104 @@ async function refreshStill(asBackdrop) {
     if (!target) return;
     target.src = deviceState.blobUrl;
     target.classList.add("on");
-    if (!asBackdrop) { bindStageTaps(target); deviceSay(""); }
+    if (!asBackdrop) deviceSay("");
   } catch (err) {
     if (!asBackdrop) deviceSay(err.message, true);
   }
 }
 
+// --- fullscreen ------------------------------------------------------------
+//
+// Real-time control on a phone means the picture wants the whole screen. The
+// Fullscreen API needs a user gesture but not a secure context, so it works
+// over plain HTTP; iOS Safari refuses it for anything but a <video>, so the
+// CSS class is the fallback and does the same job without the API.
+
+function fullscreenActive() {
+  return !!document.fullscreenElement || document.body.classList.contains("stage-fs");
+}
+
+async function toggleFullscreen() {
+  const stage = stageEl();
+  if (fullscreenActive()) {
+    document.body.classList.remove("stage-fs");
+    if (document.fullscreenElement) { try { await document.exitFullscreen(); } catch (_) {} }
+    stage.style.aspectRatio = `${deviceState.width} / ${deviceState.height}`;
+    renderStageBar();
+    return;
+  }
+  document.body.classList.add("stage-fs");
+  // The stage now fills a screen whose shape is not the phone's, so the fixed
+  // aspect ratio has to go and object-fit does the letterboxing. stagePoint()
+  // already maps through that, so taps stay where they are aimed.
+  stage.style.aspectRatio = "";
+  if (stage.requestFullscreen) { try { await stage.requestFullscreen({ navigationUI: "hide" }); } catch (_) {} }
+  renderStageBar();
+}
+
+document.addEventListener("fullscreenchange", () => {
+  if (!document.fullscreenElement && document.body.classList.contains("stage-fs")) {
+    document.body.classList.remove("stage-fs");
+    stageEl().style.aspectRatio = `${deviceState.width} / ${deviceState.height}`;
+    renderStageBar();
+  }
+});
+
 function renderStageBar() {
   const el = document.getElementById("device-stagebar");
-  el.innerHTML = `
+  const fs = fullscreenActive();
+  const bar = `
     <button class="chip ${deviceState.live ? "on" : ""}" id="st-live">Live</button>
     <button class="chip ${deviceState.live ? "" : "on"}" id="st-still">Standbild</button>
+    <button class="chip" id="st-full">${fs ? "Verlassen" : "Vollbild"}</button>
+    <button class="chip ${deviceState.sharp ? "on" : ""}" id="st-sharp">Schärfer</button>
     ${deviceState.actions.includes("record")
       ? `<button class="chip" id="st-rec">8s aufnehmen</button>` : ""}`;
-  el.querySelector("#st-live").addEventListener("click", () => {
-    if (deviceState.live) return;
-    startStream();
+  // In fullscreen the controls float over the picture, because the page they
+  // normally live on is not on screen any more.
+  const host = fs ? ensureFsBar() : el;
+  if (fs) el.innerHTML = "";
+  host.innerHTML = bar + (fs ? `
+    <button class="chip" data-fskey="back">Zurück</button>
+    <button class="chip" data-fskey="home">Home</button>
+    <button class="chip" data-fskey="recents">Apps</button>` : "");
+  host.querySelector("#st-live").addEventListener("click", () => {
+    if (!deviceState.live) startStream();
   });
-  el.querySelector("#st-still").addEventListener("click", () => {
+  host.querySelector("#st-still").addEventListener("click", () => {
     stopStream();
     renderStageBar();
     refreshStill();
   });
-  el.querySelector("#st-rec")?.addEventListener("click", async () => {
+  host.querySelector("#st-full").addEventListener("click", toggleFullscreen);
+  host.querySelector("#st-sharp")?.addEventListener("click", () => {
+    // More pixels, more latency. Measured: 507ms median at 1200 lines,
+    // 865ms at 1600. Worth it to read something, not worth it to drive.
+    deviceState.sharp = !deviceState.sharp;
+    stopStream();
+    startStream();
+  });
+  host.querySelector("#st-rec")?.addEventListener("click", async () => {
     deviceSay("nimmt auf …");
     const r = await deviceAction({ action: "record", seconds: 8 });
     deviceSay(r.ok ? `gespeichert: ${r.file.name} (Dateien)` : r.error, !r.ok);
   });
+  host.querySelectorAll("[data-fskey]").forEach((b) => b.addEventListener("click", async () => {
+    if (window.fxTap) window.fxTap();
+    const r = await deviceAction({ action: "key", key: b.dataset.fskey });
+    if (!r.ok) deviceSay(r.error, true);
+  }));
+}
+
+function ensureFsBar() {
+  let bar = document.getElementById("fs-bar");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "fs-bar";
+    bar.className = "fs-bar";
+    stageEl().appendChild(bar);
+  }
+  return bar;
 }
 
 function renderDeviceControls() {
