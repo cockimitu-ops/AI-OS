@@ -5039,8 +5039,21 @@ class TestAskAnotherEngine(unittest.TestCase):
         self.assertIn("tief", text)
         self.assertIn(str(self.ask.MAX_DEPTH), text)
 
+    def test_every_alias_points_at_an_engine_that_exists(self):
+        """The break this guards against actually happened: the free-tier
+        `gemini` engine was replaced by `google-pro`, and ask.py kept pointing
+        at the old name. Cross-engine asking to Google failed with "unbekannte
+        Engine" and nothing noticed, because nothing was watching."""
+        spec = importlib.util.spec_from_file_location(
+            "engines_alias", os.path.join(HERE, "scripts", "engines.py"))
+        en = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(en)
+        for alias, target in self.ask.ALIASES.items():
+            self.assertIn(target, en.ENGINES,
+                          f"{alias!r} zeigt auf {target!r}, das es nicht gibt")
+
     def test_names_people_actually_use_resolve(self):
-        self.assertEqual(self.ask.ALIASES["google"], "gemini")
+        self.assertEqual(self.ask.ALIASES["google"], "google-pro")
         self.assertEqual(self.ask.ALIASES["worker"], "aios")
 
     def test_an_unknown_engine_lists_the_known_ones(self):

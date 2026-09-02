@@ -47,8 +47,13 @@ DEFAULT_TIMEOUT_S = 600
 # One engine may ask another, and that one may ask a third. Three is already
 # more indirection than any real question needs.
 MAX_DEPTH = 3
-ALIASES = {"google": "gemini", "gemini": "gemini", "worker": "aios",
-           "aios": "aios", "claude": "claude", "codex": "codex"}
+# Names people actually type, mapped to engine ids. `gemini` is kept as an
+# alias because the free-tier engine used to be called that - a chain of
+# "ask the other one" written before the rename should not break on it.
+ALIASES = {"google": "google-pro", "gemini": "google-pro",
+           "google-pro": "google-pro", "pro": "google-pro",
+           "worker": "aios", "aios": "aios",
+           "claude": "claude", "codex": "codex"}
 
 
 def ask(engine, message, model=None, session=None, thread="ask",
