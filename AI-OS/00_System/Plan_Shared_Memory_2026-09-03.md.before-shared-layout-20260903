@@ -1,0 +1,136 @@
+# Geteiltes Gedächtnis zwischen den Engines — Entwurfs- und Bauauftrag
+
+Direkter Auftrag von Felix, keine Vorschlagsrunde. Anders als sonst: das hier
+ist NOCH NICHT ENTWORFEN. Drei offene Fragen unten sind zuerst zu
+entscheiden (mit Begründung, die Felix nachvollziehen kann), dann zu bauen —
+nicht raten und schweigend eine Wahl treffen.
+
+Arbeitsverzeichnis: `AI-OS/02_Systems/Automation/TaskRunner/`. Alle Pfade
+unten relativ dazu, wenn nicht anders angegeben.
+
+## Das Problem
+
+Felix chattet mit vier Engines (Claude, Codex, Google-Pro, der lokale
+`aios`-Worker) über eine Weboberfläche (`webapp/`). Jede Engine bekommt heute
+schon denselben *stehenden* Kurzkontext (`Knowledge_Core.md`, über
+`scripts/shared_briefing.py:prepend()` — wer Felix ist, was die AI-OS ist,
+welche Regeln gelten). Was fehlt, ist geteilte *Gesprächs*-Historie: wenn eine
+Engine wegen eines Limits an eine andere übergibt (`engines.py:next_engine()`,
+automatischer Handoff — siehe `engines.py:result()`), oder wenn Felix über den
+manuellen "andere Engine fragen"-Knopf wechselt, sieht die neue Engine nur das
+stehende Briefing plus den aktuellen Datei-/Repo-Zustand — nicht was in der
+laufenden Unterhaltung tatsächlich gesagt wurde.
+
+Felix will: ein Wechsel ist wirklich nahtlos, nicht nur "informiert, aber
+ahnungslos vom bisherigen Gespräch".
+
+## Was schon existiert (nicht neu erfinden)
+
+- **`scripts/conversation_store.py`**: pro Konversation eine Datei
+  (`create()`, `append(conversation_id, role, text, ...)`,
+  `read()`, `history_context()`, `format_context()`). `engines.py:send()`
+  nimmt einen `conversation_id`-Parameter und ruft
+  `conversation_store.format_context(conversation_id)` auf, um bei
+  Nicht-Claude-Engines den bisherigen Gesprächsverlauf VORNE an den Prompt zu
+  hängen ("every other engine is a one-shot call, and this bounded block IS
+  its memory of the conversation so far" — Kommentar in `engines.py`). Das
+  ist bereits die Grundform von "geteiltem Gedächtnis" — Frage ist, ob sie
+  reicht oder erweitert werden muss.
+- **`memory.py`**: bounded Thread-Speicher (`MAX_TURNS=6`, `MAX_CHARS=6000`)
+  für den `aios`-Worker, pro Telegram-Thread automatisch, per CLI nur mit
+  `--thread` opt-in. Unklar, ob das in den Webapp-Chat verdrahtet ist —
+  PRÜFEN, bevor irgendetwas Neues gebaut wird (siehe Roadmap-Backlog-Eintrag
+  "Worker session memory", exakt dieser Punkt).
+- **Native Sitzungen, gerade erst gebaut (2026-09-02/03)**: Codex bekam
+  `codex_chat.py:ask(..., resume=<session_id>)` echt verdrahtet (ruft `codex
+  exec resume <id>`), Google-Pro bekam `antigravity_chat.py:ask(...,
+  conversation=<id>)` (ruft `agy --conversation <id> --continue`). Beide
+  geben jetzt eine echte `session_id`/`conversation_id` in ihrer Antwort
+  zurück. Das heißt: Codex und Google-Pro haben JETZT ZWEI Formen von
+  Gedächtnis nebeneinander — ihre eigene native Konto-Historie (über
+  `resume`/`--conversation`) UND den `conversation_store`-Kontextblock. Diese
+  Doppelung ist wahrscheinlich der Kern der Entwurfsfrage unten, nicht
+  Nebensache.
+- **`engines.py:send()`**: `conversation_id`, wenn angegeben, muss laut Code
+  bereits existieren (`conversation_store.exists()`). Der Handoff-Pfad
+  (`fallback=True`, `next_engine()`) reicht bei einem Limit bereits an die
+  nächste Engine weiter — PRÜFEN, ob dabei die `conversation_id`
+  durchgereicht wird oder verloren geht (das wäre der Bug, den dieser Auftrag
+  eigentlich beheben soll).
+- **Claude** hat sein eigenes natives Session-Modell (`claude_chat.py`,
+  `session_id`/`--resume`) und ist laut Kommentar in `engines.py` bereits die
+  Ausnahme ("every OTHER engine is a one-shot call" — Claude nicht).
+
+## Die drei offenen Fragen (aus `Plan_2026-09-02.md` §6, hierher übernommen)
+
+Diese drei zuerst beantworten, mit einem kurzen Abschnitt "Entscheidung + warum"
+am Anfang der Umsetzung, bevor Code entsteht:
+
+1. **Was genau wird geteilt** — der volle Wortlaut jedes Turns, oder eine
+   laufend aktualisierte Zusammenfassung (ähnlich `memory.py`s bounded
+   Thread-Speicher, nur engine-übergreifend statt engine-eigen)? Voller
+   Wortlaut ist einfacher und verlustfrei, kostet aber bei jedem Turn auf
+   jeder der vier Engines erneut Tokens (siehe Punkt 3). Eine
+   Zusammenfassung ist billiger, aber jemand muss sie schreiben und
+   aktuell halten — mit welchem Modell, wie oft, und was passiert bei
+   einem Zusammenfassungsfehler (siehe `memory.py:summary()` als
+   möglicher Ausgangspunkt, falls es das schon in einer brauchbaren Form
+   tut).
+2. **Wo das landet** — ein gemeinsamer Speicher, den `shared_briefing.py`
+   bei jedem Turn mitgibt (wie `Knowledge_Core.md`, nur pro Chat-Thread
+   statt vault-weit), oder ein eigener Mechanismus (z.B. Erweiterung von
+   `conversation_store.py` um ein "geteilt zwischen Engines"-Feld pro
+   Konversation, statt einer separaten Datei)? Die Doppelung mit den
+   nativen Sitzungen (siehe oben) gehört in diese Entscheidung: wenn Codex
+   und Google-Pro schon ihre eigene Konto-Historie per `resume` haben,
+   braucht der geteilte Speicher für DIESE beiden vielleicht nur noch die
+   Übersetzung "was hat die jeweils andere Engine gesagt", nicht den
+   ganzen eigenen Verlauf noch einmal.
+3. **Kostenfrage** — jeder zusätzliche Kontext-Absatz kostet bei jeder der
+   vier Engines erneut Tokens. Das ist explizit an die "Server-
+   Vereinfachung" gekoppelt (`Roadmap.md`, Abschnitt "Planned — Server
+   Simplification Patch", ebenfalls noch nicht begonnen: dort geht es
+   unter anderem darum, warum Engine-Turns aktuell viel Zeit/Tokens
+   kosten). Beide Baustellen sind absichtlich zusammen gedacht, nicht
+   getrennt — wenn eine Lösung für geteiltes Gedächtnis den
+   Kontext-Fußabdruck pro Turn weiter aufbläht, widerspricht sie dem
+   zweiten Auftrag. Vor der Umsetzung: kurz messen, wie viele Tokens ein
+   aktueller Turn mit `shared_briefing.prepend()` + ggf.
+   `conversation_store.format_context()` schon kostet (die Kommentare in
+   `codex_chat.py`/`safety_controls.py` nennen teils schon Zahlen für den
+   reinen Briefing-Teil), damit die neue Lösung nicht dazu addiert, ohne
+   dass irgendjemand die Summe kennt.
+
+## Was ein guter Entwurf mindestens beantworten muss
+
+- Was passiert beim automatischen Handoff (`engines.py:next_engine()` bei
+  einem Limit) — bekommt die übernehmende Engine automatisch den geteilten
+  Kontext, oder nur beim manuellen "andere Engine fragen"?
+- Was passiert, wenn Felix mitten in einem Gespräch die Engine wechselt und
+  danach wieder zur ersten zurückkehrt — sieht die erste Engine dann auch,
+  was in der Zwischenzeit bei der zweiten passiert ist?
+- Wie verhält sich das zu Claudes eigenem nativen Session-Modell — wird
+  Claude in den geteilten Kontext eingebunden (liest ihn zusätzlich zu seiner
+  eigenen Historie) oder bleibt Claude bewusst die Ausnahme, weil es schon
+  die vollständigste eigene Erinnerung aller vier hat?
+- Eine bewusste, benannte Grenze wie bei `memory.py` (`MAX_TURNS`,
+  `MAX_CHARS`) — unbegrenzt wachsender geteilter Kontext ist kein Entwurf,
+  sondern ein Leck.
+
+## Test und Übergabe
+
+- `python3 -m unittest test_taskrunner test_safety_controls` muss vor und
+  nach jeder Änderung grün bleiben (Stand 2026-09-03: 627 Tests).
+- Neue Tests für den neuen Mechanismus selbst schreiben — mindestens: geteilter
+  Kontext überlebt einen simulierten Handoff; er bleibt innerhalb der
+  gewählten Grenze (Zeichen/Turns); ein Test, der eine reale Engine anspricht,
+  MUSS die Engine stubben (siehe `_stub_engines()` in `test_taskrunner.py` als
+  Vorlage — ein Testlauf, der echte Google-Pro-/Codex-Aufrufe auslöst, ist in
+  dieser Session zweimal real passiert und wurde beide Male als Fehler
+  behoben, nicht als Feature).
+- Am Ende einen kurzen Abschnitt "Entscheidung + warum" für die drei Fragen
+  oben in diese Datei nachtragen (oder in eine neue
+  `AI-OS/00_System/ADR`-artige Notiz, falls es das Muster im Vault schon für
+  vergleichbare Entscheidungen gibt — `grep -rn ADR AI-OS/00_System/`
+  prüfen), damit Felix nachlesen kann, was entschieden wurde und warum,
+  ohne den Code selbst lesen zu müssen.

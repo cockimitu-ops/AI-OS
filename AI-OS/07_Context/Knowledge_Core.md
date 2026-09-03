@@ -1,7 +1,7 @@
 # Knowledge Core
 
 Purpose: A hard-capped (~10,000 characters), self-curating record of what's actually worth remembering about Felix and his situation — a Hermes-style bounded core, not a growing log. Distinct from the vault's project files: this is standing context, always cheap to load.
-Last Updated: 2026-08-31
+Last Updated: 2026-09-02
 Status: Active
 Stability: Dynamic
 Related Documents: [[07_Context/README|07_Context]], [[Knowledge_Promotion]], [[Context_Budget]]
@@ -12,7 +12,7 @@ Related Documents: [[07_Context/README|07_Context]], [[Knowledge_Promotion]], [[
 Capped at ~10,000 characters, hard limit. When something new earns a slot and the cap would be exceeded, the weakest existing entry is cut — weighted by [[Knowledge_Promotion]]'s existing bar: **stable/reproducible beats recent/one-off**. A fact that stays true next month outranks something relevant only to today. Checked and updated whenever a conversation surfaces something genuinely durable about Felix or his situation — not after every message, only when something real changes.
 
 ## Current Size
-~3,800 characters of ~10,000 — the cap applies to the content below (Felix onward), not the standard file header. Room to grow before eviction logic actually gets tested.
+~5,600 characters of ~10,000 — the cap applies to the content below (Felix onward), not the standard file header. Room to grow before eviction logic actually gets tested.
 
 ---
 
@@ -40,3 +40,5 @@ Felix has a car (real competitive advantage for local arbitrage), multiple AI su
 
 ## Key Open Threads
 **The bottleneck is now consistently the same:** every revenue stream is built and automated up to the point where only Felix can act — publishing the last 2 Gumroad listings, posting DMARC letters + answering calls, acting on sniper alerts, doing the Gewerbeanmeldung. The AI side is not the blocker anymore; Felix's time is. The Claude-Code-via-Pro-subscription ToS question is **decided** — a paid OpenRouter tier (GLM 5.2, budget-capped) is now the escalation path, so headless-off-Pro no longer gates anything. AI Video pillar undecided; security-content pivot planned not started.
+
+**New as of 2026-09-02, not started — see [[00_System/Roadmap|Roadmap]]'s Backlog/Planned sections for detail:** (1) give the TaskRunner worker (`aios` engine) real session memory — `memory.py` already persists bounded per-thread memory, check whether it's actually wired into the webapp chat before building anything new; (2) a planned "Server Simplification Patch" — leaner host footprint for the laptop it runs on (surviving a later move to better infra), and less time/tokens per turn across the agents working this repo (Codex, Gemini, Claude). Rolls in two unresolved worker problems: it sometimes loop-locks and stops answering through the webapp, and free-tier answer quality is inconsistent — GLM-5.3 flagged as worth testing as an alternative.

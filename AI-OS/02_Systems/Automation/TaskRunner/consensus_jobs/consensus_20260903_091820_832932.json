@@ -1,0 +1,65 @@
+{
+  "id": "consensus_20260903_091820_832932",
+  "prompt": "Ist das ein sinnvoller, technisch machbarer Vorschlag fürs AI-OS? Kurz ja/nein plus 1-2 Sätze Begründung.\n\nVorschlag: **Ephemeral Containerized Execution Sandboxes (The \"Clean Room\" Pattern)**",
+  "created_at": "2026-09-03T09:18:20.832948+00:00",
+  "status": "completed",
+  "engines": [
+    "google-pro",
+    "codex"
+  ],
+  "tickets": {
+    "google-pro": {
+      "engine": "google-pro",
+      "job": "gpro_20260903_091820_833870",
+      "conversation_id": null
+    },
+    "codex": {
+      "engine": "codex",
+      "job": "cdx_20260903_091820_836113",
+      "conversation_id": null
+    }
+  },
+  "replies": {
+    "codex": {
+      "ready": true,
+      "ok": true,
+      "reply": "Ja – technisch machbar und für riskante, fremde oder experimentelle Tasks sinnvoll. Für jeden Task wäre es jedoch unnötiger Overhead; besser gezielt einsetzen und zunächst gegen leichtere Isolation wie systemd-Hardening abwägen.",
+      "error": null,
+      "model": "auto",
+      "usd": null
+    },
+    "google-pro": {
+      "ready": true,
+      "ok": true,
+      "reply": "**Nein (vorübergehend).** \n\nTechnisch ist das über Docker oder Podman zwar durchaus machbar, es widerspricht aber direkt dem geplanten \"Server Simplification Patch\", der den Ressourcenverbrauch und die Komplexität auf dem aktuell genutzten Laptop minimieren soll. Ephemere Sandboxen würden einen erheblichen Overhead hinzufügen, was erst nach einer Migration auf stärkere Infrastruktur wirklich sinnvoll wird.",
+      "error": null,
+      "model": "gemini-3.1-pro-high",
+      "usd": null
+    }
+  },
+  "comparison": {
+    "engines_queried": [
+      "google-pro",
+      "codex"
+    ],
+    "responses_received": 2,
+    "identical": false,
+    "disagreement_explanation": "Engines returned differing perspectives across 2 valid responses. Differing arguments should be reviewed manually without fabricated consensus confidence.",
+    "attribution": [
+      {
+        "engine": "google-pro",
+        "actual_engine": "google-pro",
+        "ok": true,
+        "reply": "**Nein (vorübergehend).** \n\nTechnisch ist das über Docker oder Podman zwar durchaus machbar, es widerspricht aber direkt dem geplanten \"Server Simplification Patch\", der den Ressourcenverbrauch und die Komplexität auf dem aktuell genutzten Laptop minimieren soll. Ephemere Sandboxen würden einen erheblichen Overhead hinzufügen, was erst nach einer Migration auf stärkere Infrastruktur wirklich sinnvoll wird.",
+        "error": null
+      },
+      {
+        "engine": "codex",
+        "actual_engine": "codex",
+        "ok": true,
+        "reply": "Ja – technisch machbar und für riskante, fremde oder experimentelle Tasks sinnvoll. Für jeden Task wäre es jedoch unnötiger Overhead; besser gezielt einsetzen und zunächst gegen leichtere Isolation wie systemd-Hardening abwägen.",
+        "error": null
+      }
+    ]
+  }
+}

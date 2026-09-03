@@ -19,7 +19,6 @@ open-interpreter import is stubbed out, so the whole file runs in well under a
 second under /usr/bin/python3.
 """
 import argparse
-import concurrent.futures
 import importlib
 import importlib.util
 import json
@@ -4062,42 +4061,6 @@ class TestWebappApi(unittest.TestCase):
         25 MB cap would make Pico sideloading look built but fail in use."""
         self.assertGreater(self.api.MAX_APK_UPLOAD_BYTES,
                            self.api.MAX_UPLOAD_BYTES)
-
-    def test_vr_layout_concurrent_panel_saves_do_not_drop_each_other(self):
-        """Two hands and reset buttons can save panels simultaneously.  The
-        old read/modify/write race silently kept only the last request."""
-        original = self.api.VR_LAYOUT_PATH
-        with tempfile.TemporaryDirectory() as tmp:
-            self.api.VR_LAYOUT_PATH = os.path.join(tmp, "layout.json")
-            try:
-                def save(n):
-                    return self.api.post_vr_layout({
-                        "device": f"workspace_{n}", "position": [n, 1, -2],
-                        "rotation": [0, n, 0], "scale": 1})[0]
-                with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:
-                    self.assertEqual(list(pool.map(save, range(30))), [200] * 30)
-                with open(self.api.VR_LAYOUT_PATH, encoding="utf-8") as f:
-                    saved = json.load(f)
-                self.assertEqual(len(saved), 30)
-            finally:
-                self.api.VR_LAYOUT_PATH = original
-
-    def test_vr_layout_rejects_nonfinite_values_and_clamps_scale(self):
-        """NaN becomes invalid JSON for strict clients and an extreme scale
-        can make a panel effectively disappear, so neither reaches disk."""
-        original = self.api.VR_LAYOUT_PATH
-        with tempfile.TemporaryDirectory() as tmp:
-            self.api.VR_LAYOUT_PATH = os.path.join(tmp, "layout.json")
-            try:
-                bad, _ = self.api.post_vr_layout({"device": "x",
-                    "position": [float("nan"), 0, 0], "rotation": [0, 0, 0]})
-                ok, result = self.api.post_vr_layout({"device": "x",
-                    "position": [0, 0, 0], "rotation": [0, 0, 0], "scale": 99})
-            finally:
-                self.api.VR_LAYOUT_PATH = original
-        self.assertEqual(bad, 400)
-        self.assertEqual(ok, 200)
-        self.assertEqual(result["panels"]["x"]["scale"], 2.5)
 
     def test_dmarc_leads_shape(self):
         status, payload = self.api.get_dmarc_leads({})

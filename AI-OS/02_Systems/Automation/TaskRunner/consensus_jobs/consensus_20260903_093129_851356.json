@@ -1,0 +1,65 @@
+{
+  "id": "consensus_20260903_093129_851356",
+  "prompt": "Vorschlag: Jeder Agentenlauf bekommt einen eigenen Wegwerf-Container. Ist das ein sinnvoller, technisch machbarer Vorschlag fuers AI-OS?",
+  "created_at": "2026-09-03T09:31:29.851369+00:00",
+  "status": "completed",
+  "engines": [
+    "google-pro",
+    "codex"
+  ],
+  "tickets": {
+    "google-pro": {
+      "engine": "google-pro",
+      "job": "gpro_20260903_093129_852217",
+      "conversation_id": null
+    },
+    "codex": {
+      "engine": "codex",
+      "job": "cdx_20260903_093129_854716",
+      "conversation_id": null
+    }
+  },
+  "replies": {
+    "google-pro": {
+      "ready": true,
+      "ok": true,
+      "reply": "Technisch ist die Umsetzung machbar, aber für das aktuelle AI-OS auf deinem Laptop keine sinnvolle Idee. Die ständige Erstellung von Wegwerf-Containern verursacht einen erheblichen Overhead, der deinem Ziel eines schlankeren Server-Fußabdrucks im Rahmen des geplanten Simplification Patches direkt widerspricht. Die zusätzliche Latenz und der hohe Ressourcenverbrauch würden die bereits vorhandenen Stabilitätsprobleme des Workers vermutlich nur noch verschlimmern. Für die jetzige Phase reicht eine Basis-Isolation über dein bestehendes systemd-Setup völlig aus, ohne das System mit unnötiger Komplexität auszubremsen.",
+      "error": null,
+      "model": "gemini-3.1-pro-high",
+      "usd": null
+    },
+    "codex": {
+      "ready": true,
+      "ok": true,
+      "reply": "Ja, technisch ist das machbar und als Sicherheitsgrenze sinnvoll, aber für jeden Agentenlauf pauschal vermutlich zu schwergewichtig. Wegwerf-Container begrenzen Schäden durch fehlerhafte Befehle und erleichtern reproduzierbare Umgebungen, benötigen aber kontrollierte Mounts, Netzwerkregeln sowie einen separaten Mechanismus zum Übernehmen gewünschter Änderungen; außerdem erhöhen sie Startzeit, Speicherverbrauch und Betriebsaufwand. Für AI-OS wäre daher ein hybrides Modell besser: Container für riskante oder unbeaufsichtigte Läufe, während einfache vertrauenswürdige Aufgaben in einer leichteren Sandbox bleiben.",
+      "error": null,
+      "model": "auto",
+      "usd": null
+    }
+  },
+  "comparison": {
+    "engines_queried": [
+      "google-pro",
+      "codex"
+    ],
+    "responses_received": 2,
+    "identical": false,
+    "disagreement_explanation": "Engines returned differing perspectives across 2 valid responses. Differing arguments should be reviewed manually without fabricated consensus confidence.",
+    "attribution": [
+      {
+        "engine": "google-pro",
+        "actual_engine": "google-pro",
+        "ok": true,
+        "reply": "Technisch ist die Umsetzung machbar, aber für das aktuelle AI-OS auf deinem Laptop keine sinnvolle Idee. Die ständige Erstellung von Wegwerf-Containern verursacht einen erheblichen Overhead, der deinem Ziel eines schlankeren Server-Fußabdrucks im Rahmen des geplanten Simplification Patches direkt widerspricht. Die zusätzliche Latenz und der hohe Ressourcenverbrauch würden die bereits vorhandenen Stabilitätsprobleme des Workers vermutlich nur noch verschlimmern. Für die jetzige Phase reicht eine Basis-Isolation über dein bestehendes systemd-Setup völlig aus, ohne das System mit unnötiger Komplexität auszubremsen.",
+        "error": null
+      },
+      {
+        "engine": "codex",
+        "actual_engine": "codex",
+        "ok": true,
+        "reply": "Ja, technisch ist das machbar und als Sicherheitsgrenze sinnvoll, aber für jeden Agentenlauf pauschal vermutlich zu schwergewichtig. Wegwerf-Container begrenzen Schäden durch fehlerhafte Befehle und erleichtern reproduzierbare Umgebungen, benötigen aber kontrollierte Mounts, Netzwerkregeln sowie einen separaten Mechanismus zum Übernehmen gewünschter Änderungen; außerdem erhöhen sie Startzeit, Speicherverbrauch und Betriebsaufwand. Für AI-OS wäre daher ein hybrides Modell besser: Container für riskante oder unbeaufsichtigte Läufe, während einfache vertrauenswürdige Aufgaben in einer leichteren Sandbox bleiben.",
+        "error": null
+      }
+    ]
+  }
+}

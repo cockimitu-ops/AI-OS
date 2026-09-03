@@ -56,6 +56,14 @@ class SafetyControlsTestCase(unittest.TestCase):
         sc.CHECKPOINTS_DIR = self.test_checkpoints_dir
         spend_guard.LEDGER_PATH = self.test_ledger_path
 
+        # The monthly budget is read from the environment at call time, so it
+        # has to be isolated exactly like the paths above. Without this the
+        # budget-boundary tests silently assume the $6.00 built-in default and
+        # fail on Felix's own machine, where .env raises it to $20 - a test
+        # that passes or fails depending on whose shell it runs in.
+        self.orig_budget_env = os.environ.get("OPENROUTER_MONTHLY_BUDGET_USD")
+        os.environ["OPENROUTER_MONTHLY_BUDGET_USD"] = str(spend_guard.DEFAULT_MONTHLY_BUDGET_USD)
+
         # Proposals paths isolation
         self.orig_proposals_dir = proposals.PROPOSALS_DIR
         self.orig_pending_path = proposals.PENDING_PATH
@@ -76,6 +84,11 @@ class SafetyControlsTestCase(unittest.TestCase):
         sc.CONSENSUS_DIR = self.orig_consensus_dir
         sc.CHECKPOINTS_DIR = self.orig_checkpoints_dir
         spend_guard.LEDGER_PATH = self.orig_ledger_path
+
+        if self.orig_budget_env is None:
+            os.environ.pop("OPENROUTER_MONTHLY_BUDGET_USD", None)
+        else:
+            os.environ["OPENROUTER_MONTHLY_BUDGET_USD"] = self.orig_budget_env
 
         proposals.PROPOSALS_DIR = self.orig_proposals_dir
         proposals.PENDING_PATH = self.orig_pending_path
@@ -443,7 +456,22 @@ class TestSafeBatchApprovals(SafetyControlsTestCase):
             def resolve(self, a): return None
             def directive(self, a): return ""
 
-        chosen, err = sc.batch_decide([1, 3], decision="approve", inbox=self.inbox_dir, agents_module=MockAgents())
+        # Without this, an "ai"-kind item in the fixture reaches the REAL
+        # engines module inside dispatch() - which happened on 2026-09-02:
+        # this exact fixture ("Run automated health check diagnostics") fired
+        # a real, full-permission Google AI Pro call from a test run.
+        class MockEngines:
+            def send(self, engine, body, fallback=False):
+                return {"engine": engine, "job": "mock_job"}
+            def limited(self, engine):
+                return None
+            def result(self, engine, job, fallback=False, notify=False):
+                return {"ready": True, "ok": True}
+            def next_engine(self, after, exclude=()):
+                return None
+
+        chosen, err = sc.batch_decide([1, 3], decision="approve", inbox=self.inbox_dir,
+                                      agents_module=MockAgents(), engines_module=MockEngines())
         self.assertIsNone(err)
         self.assertEqual(len(chosen), 2)
 

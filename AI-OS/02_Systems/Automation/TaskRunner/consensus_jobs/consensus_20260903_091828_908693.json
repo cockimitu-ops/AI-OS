@@ -1,0 +1,65 @@
+{
+  "id": "consensus_20260903_091828_908693",
+  "prompt": "Ist das ein sinnvoller, technisch machbarer Vorschlag fürs AI-OS? Kurz ja/nein plus 1-2 Sätze Begründung.\n\nVorschlag: **Event-Driven Human Dependency Router (State-Machine Execution)**",
+  "created_at": "2026-09-03T09:18:28.908711+00:00",
+  "status": "completed",
+  "engines": [
+    "google-pro",
+    "codex"
+  ],
+  "tickets": {
+    "google-pro": {
+      "engine": "google-pro",
+      "job": "gpro_20260903_091828_910051",
+      "conversation_id": null
+    },
+    "codex": {
+      "engine": "codex",
+      "job": "cdx_20260903_091828_913660",
+      "conversation_id": null
+    }
+  },
+  "replies": {
+    "codex": {
+      "ready": true,
+      "ok": true,
+      "reply": "**Ja, grundsätzlich sinnvoll und technisch machbar.** Eine explizite Zustandsmaschine könnte Aufgaben zuverlässig bis zu menschlichen Entscheidungspunkten führen und Felix gezielt statt wiederholt benachrichtigen. Der Vorschlag ist aber noch zu abstrakt: Der Nutzen entsteht erst mit klar definierten Zuständen, Events, Verantwortlichkeiten sowie Regeln für Erinnerungen, Timeouts und Freigaben; für AI-OS sollte er zunächst klein auf die bestehenden Blocker erweitert werden, nicht als neues großes Framework.",
+      "error": null,
+      "model": "auto",
+      "usd": null
+    },
+    "google-pro": {
+      "ready": true,
+      "ok": true,
+      "reply": "**Ja.**\n\n**Begründung:** \nDer Vorschlag adressiert exakt den zentralen Systemengpass: Alle Kernprojekte (DMARC, LocalArbitrage, Templates) sind laut Knowledge Core aktuell blockiert, weil sie auf eine physische oder manuelle Aktion von dir warten (Gewerbeanmeldung, Briefdruck, Gumroad-Upload). Technisch ist eine State-Machine ideal, um den Zustand \"Wartet auf Mensch\" explizit zu tracken und über die bereits bestehende Telegram-Bridge gezielte Action-Trigger zu senden, anstatt dass Prozesse undefiniert hängenbleiben.",
+      "error": null,
+      "model": "gemini-3.1-pro-high",
+      "usd": null
+    }
+  },
+  "comparison": {
+    "engines_queried": [
+      "google-pro",
+      "codex"
+    ],
+    "responses_received": 2,
+    "identical": false,
+    "disagreement_explanation": "Engines returned differing perspectives across 2 valid responses. Differing arguments should be reviewed manually without fabricated consensus confidence.",
+    "attribution": [
+      {
+        "engine": "google-pro",
+        "actual_engine": "google-pro",
+        "ok": true,
+        "reply": "**Ja.**\n\n**Begründung:** \nDer Vorschlag adressiert exakt den zentralen Systemengpass: Alle Kernprojekte (DMARC, LocalArbitrage, Templates) sind laut Knowledge Core aktuell blockiert, weil sie auf eine physische oder manuelle Aktion von dir warten (Gewerbeanmeldung, Briefdruck, Gumroad-Upload). Technisch ist eine State-Machine ideal, um den Zustand \"Wartet auf Mensch\" explizit zu tracken und über die bereits bestehende Telegram-Bridge gezielte Action-Trigger zu senden, anstatt dass Prozesse undefiniert hängenbleiben.",
+        "error": null
+      },
+      {
+        "engine": "codex",
+        "actual_engine": "codex",
+        "ok": true,
+        "reply": "**Ja, grundsätzlich sinnvoll und technisch machbar.** Eine explizite Zustandsmaschine könnte Aufgaben zuverlässig bis zu menschlichen Entscheidungspunkten führen und Felix gezielt statt wiederholt benachrichtigen. Der Vorschlag ist aber noch zu abstrakt: Der Nutzen entsteht erst mit klar definierten Zuständen, Events, Verantwortlichkeiten sowie Regeln für Erinnerungen, Timeouts und Freigaben; für AI-OS sollte er zunächst klein auf die bestehenden Blocker erweitert werden, nicht als neues großes Framework.",
+        "error": null
+      }
+    ]
+  }
+}

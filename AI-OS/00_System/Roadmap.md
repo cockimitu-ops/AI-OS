@@ -1,7 +1,7 @@
 # Roadmap
 
 Purpose: Sprint-level plan for building out AI OS.
-Last Updated: 2026-08-31
+Last Updated: 2026-09-02
 Status: Active
 Stability: Dynamic
 Related Documents: [[Dashboard]], [[Changelog]], [[Development_Workflow]]
@@ -73,6 +73,17 @@ Built the first two automated income pipelines and used a 3-agent audit to fix t
 - Define ContentAgency package tiers and pricing
 - Decide what to package first in TemplateSales
 - ~~Naming-convention inconsistency in `10_Projects/`~~ — **resolved 2026-08-26 via [[ADR-0006_Project_Folder_Naming]].** Rule amended, folders left alone: renaming ten project folders would put the vault's currently-perfect link integrity at risk to satisfy a rule nobody had been confused by.
+- **Shared cross-engine conversation memory.** Felix wants an engine handoff (automatic on a limit, or the manual "ask another engine" button in the four-engine chat) to actually carry the conversation, not just the standing `Knowledge_Core.md` briefing every engine already gets. Not designed yet — open questions and the reasoning are in [[00_System/Plan_2026-09-02|Plan_2026-09-02]] §6. Explicitly linked to the Server Simplification Patch below: extra shared context costs tokens on every one of the four engines, so the two should be designed together, not separately.
+- **Worker session memory.** Felix wants the `aios` engine (TaskRunner's worker, `/api/chat` in [[02_Systems/Automation/TaskRunner/webapp/README|webapp]]) to carry real session memory. Check against what already exists before building anything new: `memory.py` already gives bounded, disk-persisted per-thread memory (added 2026-08-27, `MAX_TURNS=6`/`MAX_CHARS=6000`), automatic per Telegram chat but opt-in (`--thread`) on the CLI and possibly not wired into the webapp chat at all — confirm that gap specifically before assuming the feature is missing outright.
+
+## Planned — Server Simplification Patch (not started, requested 2026-09-02)
+Felix wants a pass aimed at making the server leaner, not more capable — two angles:
+- **Host efficiency.** Lighter footprint for the laptop it currently runs on, in a form that also survives a move to better infrastructure later, if that happens.
+- **Agent efficiency.** Turns with Codex, ChatGPT/Gemini, and Claude (see [[02_Systems/Automation/TaskRunner/webapp/README|webapp]]'s four-engine chat) have been taking a long time and burning a lot of tokens — find where the actual overhead is (prompt/context size, orchestration round-trips, redundant re-derivation) rather than assuming it is an unavoidable cost of the current setup.
+
+Folds in two live worker problems Felix flagged the same day, neither root-caused yet:
+- **Loop lockups.** The worker (`aios_runner.py`) sometimes gets stuck in a loop and stops responding; while stuck, nothing reaches it through the webapp — no fallback or timeout currently surfaces this to Felix the way `status_update.py` does for the sniper.
+- **Inconsistent quality.** Answers from the free `MODEL_CHAIN` are sometimes poor. Worth testing whether swapping in a different model (Felix specifically flagged **GLM-5.3** as smart enough to be worth trying) or tightening the prompt/tool-calling scaffold fixes this, before concluding it's a hard capability ceiling.
 
 ## Decided
 - **Agents:** manual, chat-triggered — confirmed. No separate infrastructure. Revisit only if usage limits or actual scale make it a real constraint.

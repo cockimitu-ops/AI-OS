@@ -1,0 +1,65 @@
+{
+  "id": "consensus_20260903_094137_486750",
+  "prompt": "Ist das ein sinnvoller, technisch machbarer Vorschlag fürs AI-OS? Kurz ja/nein plus 1-2 Sätze Begründung.\n\nVorschlag: **Event-Driven Human Dependency Router (State-Machine Execution)**",
+  "created_at": "2026-09-03T09:41:37.486763+00:00",
+  "status": "completed",
+  "engines": [
+    "google-pro",
+    "codex"
+  ],
+  "tickets": {
+    "google-pro": {
+      "engine": "google-pro",
+      "job": "gpro_20260903_094137_493054",
+      "conversation_id": null
+    },
+    "codex": {
+      "engine": "codex",
+      "job": "cdx_20260903_094137_500605",
+      "conversation_id": null
+    }
+  },
+  "replies": {
+    "codex": {
+      "ready": true,
+      "ok": true,
+      "reply": "**Ja, grundsätzlich sinnvoll und technisch machbar.** Eine ereignisgetriebene State Machine könnte blockierte Tasks sauber fortsetzen, sobald Felix eine benötigte Handlung bestätigt. Für AI-OS wäre der volle „Router“ aktuell aber vermutlich überdimensioniert: Erst konkrete Zustände, Events, Idempotenz und wenige echte Übergänge definieren, statt ein abstraktes Framework zu bauen.",
+      "error": null,
+      "model": "auto",
+      "usd": null
+    },
+    "google-pro": {
+      "ready": true,
+      "ok": true,
+      "reply": "**Ja.**\n\n**Begründung:** Technisch ist eine State-Machine problemlos umsetzbar und architektonisch äußerst sinnvoll, da sie genau den aktuellen Hauptengpass des Systems – deine persönliche Ausführungszeit (z. B. Gewerbeanmeldung, Briefversand) – systematisch adressiert. Sie formalisiert den Status \"Blocked on Human\", bündelt anstehende Aufgaben für dich und verhindert, dass asynchrone Tasks oder Agenten in ineffizienten Warteschleifen hängen bleiben und unnötig Ressourcen verbrauchen.",
+      "error": null,
+      "model": "gemini-3.1-pro-high",
+      "usd": null
+    }
+  },
+  "comparison": {
+    "engines_queried": [
+      "google-pro",
+      "codex"
+    ],
+    "responses_received": 2,
+    "identical": false,
+    "disagreement_explanation": "Engines returned differing perspectives across 2 valid responses. Differing arguments should be reviewed manually without fabricated consensus confidence.",
+    "attribution": [
+      {
+        "engine": "google-pro",
+        "actual_engine": "google-pro",
+        "ok": true,
+        "reply": "**Ja.**\n\n**Begründung:** Technisch ist eine State-Machine problemlos umsetzbar und architektonisch äußerst sinnvoll, da sie genau den aktuellen Hauptengpass des Systems – deine persönliche Ausführungszeit (z. B. Gewerbeanmeldung, Briefversand) – systematisch adressiert. Sie formalisiert den Status \"Blocked on Human\", bündelt anstehende Aufgaben für dich und verhindert, dass asynchrone Tasks oder Agenten in ineffizienten Warteschleifen hängen bleiben und unnötig Ressourcen verbrauchen.",
+        "error": null
+      },
+      {
+        "engine": "codex",
+        "actual_engine": "codex",
+        "ok": true,
+        "reply": "**Ja, grundsätzlich sinnvoll und technisch machbar.** Eine ereignisgetriebene State Machine könnte blockierte Tasks sauber fortsetzen, sobald Felix eine benötigte Handlung bestätigt. Für AI-OS wäre der volle „Router“ aktuell aber vermutlich überdimensioniert: Erst konkrete Zustände, Events, Idempotenz und wenige echte Übergänge definieren, statt ein abstraktes Framework zu bauen.",
+        "error": null
+      }
+    ]
+  }
+}
