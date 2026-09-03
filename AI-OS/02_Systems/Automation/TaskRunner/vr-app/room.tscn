@@ -1,0 +1,52 @@
+[gd_scene load_steps=6 format=3 uid="uid://room_main"]
+
+[ext_resource type="Script" path="res://RoomNative.gd" id="1"]
+
+[ext_resource type="Script" path="res://HandInput.gd" id="2"]
+
+[sub_resource type="Environment" id="Environment_room"]
+background_mode = 1
+background_color = Color(0.05, 0.06, 0.09, 1)
+ambient_light_source = 2
+ambient_light_color = Color(1, 1, 1, 1)
+ambient_light_energy = 0.6
+
+; Ein Fussboden-Raster als einziges Möbel im Raum: genug, um oben/unten und
+; Entfernung einzuschätzen, ohne dass irgendwer eine ganze Szene bauen muss,
+; bevor das erste Panel überhaupt steht.
+[sub_resource type="PlaneMesh" id="PlaneMesh_floor"]
+size = Vector2(8, 8)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_floor"]
+albedo_color = Color(0.12, 0.13, 0.16, 1)
+metallic = 0.1
+roughness = 0.9
+
+[node name="Room" type="Node3D"]
+script = ExtResource("1")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_room")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.7, -0.5, 0.5, 0, 0.7, 0.7, -0.7, -0.5, 0.5, 0, 3, 0)
+light_energy = 0.9
+shadow_enabled = true
+
+[node name="Floor" type="MeshInstance3D" parent="."]
+mesh = SubResource("PlaneMesh_floor")
+surface_material_override/0 = SubResource("StandardMaterial3D_floor")
+
+[node name="XROrigin3D" type="XROrigin3D" parent="."]
+
+[node name="XRCamera3D" type="XRCamera3D" parent="XROrigin3D"]
+
+[node name="LeftHand" type="Node3D" parent="XROrigin3D"]
+script = ExtResource("2")
+hand = "left"
+
+[node name="RightHand" type="Node3D" parent="XROrigin3D"]
+script = ExtResource("2")
+hand = "right"
+
+[node name="Panels" type="Node3D" parent="."]

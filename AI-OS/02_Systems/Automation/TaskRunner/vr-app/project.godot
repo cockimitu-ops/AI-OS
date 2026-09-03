@@ -1,0 +1,42 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+
+config_version=5
+
+[autoload]
+
+AIOSClient="*res://AIOSClient.gd"
+
+[application]
+
+config/name="AI-OS Raum"
+run/main_scene="res://room.tscn"
+config/features=PackedStringArray("4.7", "GL Compatibility")
+config/icon="res://icon.svg"
+
+[display]
+
+window/stretch/mode="canvas_items"
+
+[network]
+
+limits/tls/certificate_bundle_override=""
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+textures/vram_compression/import_etc2_astc=true
+anti_aliasing/quality/msaa_3d=1
+
+[xr]
+
+openxr/enabled=true
+shaders/enabled=true
+openxr/foveation_level=2
+openxr/foveation_dynamic=true
+openxr/extensions/hand_tracking=true
+openxr/extensions/hand_interaction_profile=true
+openxr/extensions/eye_gaze_interaction=false
+openxr/default_action_map="res://openxr_action_map.tres"

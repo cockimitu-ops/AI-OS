@@ -1,0 +1,16 @@
+extends SceneTree
+const Stream = preload("res://NativeScreenStream.gd")
+func _init() -> void:
+	var first := PackedByteArray([255, 216, 1, 2, 255, 217])
+	var second := PackedByteArray([255, 216, 3, 4, 255, 217])
+	var boundary := "\r\n--frame\r\nContent-Type: image/jpeg\r\n\r\n".to_utf8_buffer()
+	var parsed := Stream.newest_frame(boundary + first + boundary + second)
+	assert(parsed.frame == second, "A slow viewer must receive the newest complete frame, never queue old frames")
+	var split := Stream.newest_frame(boundary + first.slice(0, 1))
+	assert(split.frame.is_empty())
+	parsed = Stream.newest_frame(split.remaining + first.slice(1, 5))
+	assert(parsed.frame.is_empty(), "Incomplete network chunks must not be decoded")
+	parsed = Stream.newest_frame(parsed.remaining + first.slice(5))
+	assert(parsed.frame == first, "JPEG markers may span chunks")
+	print("PASS: live stream chunk boundaries, partial frames, newest-frame delivery")
+	quit()

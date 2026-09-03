@@ -45,6 +45,17 @@ AI-OS/02_Systems/Automation/TaskRunner/engine_jobs/*
 !AI-OS/02_Systems/Automation/TaskRunner/engine_jobs/.gitkeep
 AI-OS/02_Systems/Automation/TaskRunner/spend/engine_limits.json
 AI-OS/02_Systems/Automation/TaskRunner/spend/gemini_state.json
+# Felix' Schalterstellungen (Notaus, Router, bezahlte Route, Tageslimit).
+# Laufzeitzustand, keine Quelle - und nichts, was ein Klon mitbringen soll.
+AI-OS/02_Systems/Automation/TaskRunner/spend/safety_controls.json
+# When each problem was last escalated to an engine - a cooldown clock, not source.
+AI-OS/02_Systems/Automation/TaskRunner/spend/escalations.json
+# Restore points: whole copies of the vault, and per-engine conversation logs.
+# Runtime state, and the conversations are Felix's.
+AI-OS/02_Systems/Automation/TaskRunner/checkpoints/
+AI-OS/02_Systems/Automation/TaskRunner/conversations/
+AI-OS/02_Systems/Automation/TaskRunner/journal/
+AI-OS/02_Systems/Automation/TaskRunner/notifications/
 AI-OS/02_Systems/Automation/TaskRunner/claude_jobs/*
 !AI-OS/02_Systems/Automation/TaskRunner/claude_jobs/.gitkeep
 # Live screen frames pulled off a phone.
@@ -92,3 +103,7 @@ AI-OS/02_Systems/Automation/TaskRunner/phone/screenshots/
 AI-OS/02_Systems/Automation/TaskRunner/nodes/
 AI-OS/02_Systems/Automation/TaskRunner/jobs/
 AI-OS/02_Systems/Automation/TaskRunner/phone/nothing_port.json
+
+# VR-Client: echter Bearer-Token, gehoert nicht ins oeffentliche Repo
+AIOSSecret.gd
+AIOSSecret.gd.uid
