@@ -28,6 +28,7 @@ import os
 import urllib.request
 import urllib.error
 import re
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -46,6 +47,39 @@ TODO_PATH = os.path.join(PROPOSALS_DIR, "todo.json")
 #
 # Bare "PROPOSAL:" still parses, so older schedule files keep working.
 PROPOSAL_RE = re.compile(r"^\s*(?:(AI|HUMAN)_)?PROPOSAL:\s*(.+?)\s*$", re.M | re.I)
+
+# An optional longer rationale following a proposal line. Kept separate from
+# PROPOSAL_RE (one line, strict) because the explanation is prose that can
+# wrap - it is captured from the block of text after a proposal up to the
+# next proposal marker or a blank line, not by a single-line regex.
+EXPLANATION_RE = re.compile(r"^\s*(?:ERKL[ÄA]RUNG|EXPLANATION)\s*:\s*(.+)$", re.M | re.I)
+MAX_EXPLANATION_CHARS = 1200
+
+# Markdown-Auszeichnung raus, Text rein.
+#
+# Ein Vorschlag landet auf einem Telefonbildschirm und in einer
+# Telegram-Nachricht, und beide zeigen `**` als das, was es ist: zwei
+# Sternchen. Beobachtet 2026-09-03 in Felix' Liste - dort stand wörtlich
+# "**Ephemeral Containerized Execution Sandboxes**". Die Modelle darum zu
+# bitten hilft nur meistens; hier wird es abgeräumt, statt darauf zu hoffen.
+_MD_BOLD = re.compile(r"\*{1,3}(?=\S)(.+?)(?<=\S)\*{1,3}", re.S)
+_MD_CODE = re.compile(r"`{1,3}([^`]+)`{1,3}", re.S)
+_MD_HEAD = re.compile(r"^\s{0,3}#{1,6}\s*", re.M)
+_MD_BULLET = re.compile(r"^\s{0,3}[-*+]\s+", re.M)
+
+
+def _plain(text):
+    """Markdown-Auszeichnung entfernen, Inhalt behalten."""
+    if not text:
+        return ""
+    text = _MD_CODE.sub(r"\1", text)
+    text = _MD_BOLD.sub(r"\1", text)
+    text = _MD_HEAD.sub("", text)
+    text = _MD_BULLET.sub("", text)
+    # Übrig gebliebene einzelne Sternchen (unpaarige Auszeichnung) fallen
+    # ebenfalls weg - sie tragen nie Bedeutung, nur Rauschen.
+    text = text.replace("**", "").replace("`", "")
+    return " ".join(text.split())
 
 # Two kinds, and the distinction is operational rather than cosmetic:
 #   ai    - the worker can do the whole thing itself. Approving it queues a
@@ -160,10 +194,12 @@ def parse(output):
     Falls back to the whole output as one proposal when no marker is present
     at all - losing an agent's day of thinking to a forgotten prefix would be
     worse than showing Felix one unusually long item."""
+    text_all = output or ""
+    matches = list(PROPOSAL_RE.finditer(text_all))
     found = []
-    matched_any = False
-    for kind, text in PROPOSAL_RE.findall(output or ""):
-        matched_any = True
+    matched_any = bool(matches)
+    for i, m in enumerate(matches):
+        kind, text = m.group(1), m.group(2)
         text = text.strip()
         if not text:
             continue
@@ -174,8 +210,36 @@ def parse(output):
         # proposal number four in Felix's list.
         if _is_refusal(text):
             continue
-        found.append({"kind": (kind or DEFAULT_KIND).lower(),
-                      "text": text[:MAX_PROPOSAL_CHARS]})
+        item = {"kind": (kind or DEFAULT_KIND).lower(),
+                "text": _plain(text)[:MAX_PROPOSAL_CHARS]}
+        # Look for an ERKLÄRUNG: block between this proposal and the next one
+        # (or the end of the output). Stops at the first blank line so a
+        # following proposal's own prose is never swallowed into this one.
+        span_end = matches[i + 1].start() if i + 1 < len(matches) else len(text_all)
+        between = text_all[m.end():span_end]
+        exp_m = EXPLANATION_RE.search(between)
+        if exp_m:
+            para = between[exp_m.start(1):].split("\n\n", 1)[0]
+            explanation = " ".join(line.strip() for line in para.splitlines() if line.strip())
+        else:
+            # Kein ERKLÄRUNG:-Marker - dann ist die Prosa direkt hinter der
+            # Vorschlagszeile die Beschreibung.
+            #
+            # Beobachtet 2026-09-03: Google antwortete mit einer fetten
+            # Überschrift als Vorschlag und dem eigentlichen Inhalt in den
+            # Zeilen darunter. Weil nur der Marker gelesen wurde, stand bei
+            # Felix eine Überschrift ohne jede Beschreibung. Auf ein Format zu
+            # bestehen, das Modelle nur meistens einhalten, heisst die Hälfte
+            # der Antwort wegzuwerfen - der Marker bleibt der bevorzugte Weg,
+            # aber er ist nicht mehr der einzige.
+            para = between.strip().split("\n\n", 1)[0]
+            explanation = " ".join(
+                line.strip() for line in para.splitlines()
+                if line.strip() and not PROPOSAL_RE.match(line))
+        explanation = _plain(explanation)
+        if explanation:
+            item["explanation"] = explanation[:MAX_EXPLANATION_CHARS]
+        found.append(item)
     if found:
         return found
     # The fallback exists for output that carries no marker at all - losing an
@@ -242,6 +306,7 @@ def add(agent, items, now=None):
         pending.append({"agent": agent or "worker",
                         "kind": item.get("kind", DEFAULT_KIND),
                         "text": text,
+                        "explanation": item.get("explanation", ""),
                         "created": stamp})
     _atomic_write(PENDING_PATH, json.dumps(pending, indent=2, ensure_ascii=False))
     return len(items)
@@ -335,7 +400,7 @@ APPROVED_PREAMBLE = (
     "something adjacent.\n\n")
 
 
-def dispatch(chosen, inbox=None, agents_module=None):
+def dispatch(chosen, inbox=None, agents_module=None, engines_module=None):
     """Turn approved proposals into work. -> how many tasks were queued.
 
     Lives here rather than in whichever front door happened to approve them.
@@ -348,15 +413,26 @@ def dispatch(chosen, inbox=None, agents_module=None):
     human-intervention item would hand the worker something it cannot
     possibly do - "publish the Gumroad listing" - and a free model given an
     impossible task tends to report success rather than refuse. Those go on
-    Felix's own list instead."""
+    Felix's own list instead.
+
+    engines_module exists for the same reason agents_module does: without it,
+    a test that approves an "ai" item has no way to avoid firing a real,
+    full-permission engine call. That actually happened (2026-09-02) - a test
+    fixture named "Run automated health check diagnostics" reached the real
+    Google AI Pro CLI with --dangerously-skip-permissions, because dispatch()
+    always imported the live engines module regardless of what the test
+    mocked. Costs real quota and, with that flag on, could do real work."""
     import agents as _agents  # local: proposals.py is imported by tools that
     if agents_module is not None:  # have no need for the agent registry
         _agents = agents_module
     import safety_controls
-    try:
-        import engines as _eng
-    except ImportError:
-        import scripts.engines as _eng
+    if engines_module is not None:
+        _eng = engines_module
+    else:
+        try:
+            import engines as _eng
+        except ImportError:
+            import scripts.engines as _eng
 
     inbox = inbox or os.path.join(HERE, "tasks", "inbox")
     ai_items = [i for i in chosen if i.get("kind") == "ai"]
@@ -374,12 +450,81 @@ def dispatch(chosen, inbox=None, agents_module=None):
             nxt = _eng.next_engine(engine_id, exclude=["aios"])
             if nxt and nxt in allowed:
                 engine_id = nxt
-                
-        _eng.send(engine_id, body, fallback=False)
+
+        ticket = _eng.send(engine_id, body, fallback=False)
+        # Mutates the same dict `chosen` holds - so whoever called dispatch()
+        # with that list (the web app, Telegram) can tell Felix which of the
+        # group actually got it, never GLM.
+        item["executed_by"] = engine_id
+        job_id = ticket.get("job")
+        if job_id:
+            _escalate_on_failure(engine_id, job_id, body, allowed, item["text"])
 
     if human_items:
         add_todos(human_items)
     return len(ai_items)
+
+
+ESCALATIONS_PATH = os.path.join(PROPOSALS_DIR, "escalations.jsonl")
+_ESCALATION_POLL_S = 5.0
+
+
+def _escalate_on_failure(engine_id, job_id, body, allowed, proposal_text, attempted=None):
+    """Background watch on one dispatched build. If it fails - not just a
+    rate limit, any failure - the next engine in `allowed` picks it up
+    automatically. Felix asked for the group (Claude/Codex/Google-Pro) to
+    jump in on problems rather than leaving a failed build silent; only when
+    every one of the three has failed does it become a todo item, so he
+    still hears about it if the whole group struck out.
+
+    Runs in a background thread because `_eng.send` is already fire-and-
+    forget - the caller (a web/Telegram request) has returned long before an
+    agentic build finishes."""
+    attempted = attempted or [engine_id]
+
+    def _watch():
+        try:
+            import engines as _eng
+        except ImportError:
+            import scripts.engines as _eng
+        deadline = time.time() + 2700  # generous: an agentic build can run long
+        res = None
+        while time.time() < deadline:
+            res = _eng.result(engine_id, job_id, fallback=False, notify=False)
+            if res.get("ready"):
+                break
+            time.sleep(_ESCALATION_POLL_S)
+        if res is None or not res.get("ready") or res.get("ok"):
+            return  # succeeded, or never finished in time - not a failure to escalate
+
+        remaining = [e for e in allowed if e not in attempted]
+        record = {"proposal": proposal_text, "failed_engine": engine_id,
+                  "error": (res.get("error") or "")[:400],
+                  "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+        if not remaining:
+            record["outcome"] = "group_exhausted"
+            _append_jsonl(ESCALATIONS_PATH, record)
+            add_todos([{"agent": "eskalation",
+                        "text": f"Alle drei Agenten sind an \"{proposal_text[:200]}\" gescheitert "
+                                f"(zuletzt {engine_id}: {record['error']}). Bitte selbst ansehen."}])
+            return
+
+        next_engine_id = remaining[0]
+        record["outcome"] = f"handed_to_{next_engine_id}"
+        _append_jsonl(ESCALATIONS_PATH, record)
+        ticket = _eng.send(next_engine_id, body, fallback=False)
+        nxt_job = ticket.get("job")
+        if nxt_job:
+            _escalate_on_failure(next_engine_id, nxt_job, body, allowed, proposal_text,
+                                 attempted=attempted + [next_engine_id])
+
+    threading.Thread(target=_watch, daemon=True).start()
+
+
+def _append_jsonl(path, record):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
 def decide_one(index, approve, now=None):
@@ -559,7 +704,8 @@ def recommended_safe_ids(review=None):
     return safe_indices
 
 
-def batch_decide(ids, decision, now=None, inbox=None, agents_module=None, verify_fn=None):
+def batch_decide(ids, decision, now=None, inbox=None, agents_module=None, verify_fn=None,
+                 engines_module=None):
     """Accept or decline a batch of proposals by their 1-based numbers.
 
     Delegates to the existing verified proposal gate:
@@ -631,7 +777,7 @@ def batch_decide(ids, decision, now=None, inbox=None, agents_module=None, verify
     _atomic_write(REVIEW_PATH, json.dumps(remaining, indent=2, ensure_ascii=False))
 
     if approve:
-        dispatch(chosen, inbox=inbox, agents_module=agents_module)
+        dispatch(chosen, inbox=inbox, agents_module=agents_module, engines_module=engines_module)
 
     return chosen, None
 

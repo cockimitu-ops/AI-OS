@@ -298,6 +298,11 @@ def main():
 
     if messages:
         notify("AI-OS health check:\n" + "\n".join(messages))
+        try:
+            import safety_controls
+            safety_controls.escalate_error("health_check.py", "\n".join(messages))
+        except Exception:
+            pass
 
     save_state(new_failing)
     sys.exit(0 if all(ok for ok, _ in current.values()) else 1)

@@ -362,7 +362,6 @@ function renderCommand(d) {
         <span>Tageslimit<span class="sub">heute ${(s.daily_spent_usd ?? 0).toFixed(2)} $ von ${(s.daily_spend_cap ?? 0).toFixed(2)} $</span></span>
         <button class="chip" id="cmd-cap">${(s.daily_spend_cap ?? 0).toFixed(2)} $</button>
       </div>
-      <div class="meter" aria-label="Anteil des verbrauchten Tageslimits"><i style="width:${s.daily_spend_cap > 0 ? Math.min(100, Math.max(0, 100 * (s.daily_spent_usd || 0) / s.daily_spend_cap)) : 0}%"></i></div>
     </div>`;
 
   document.getElementById("cmd-actions").innerHTML = `
@@ -673,16 +672,11 @@ async function loadToday() {
     refreshCostPill();
 
     const last = d.sniper?.last_run;
-    // Missing data is unknown, not stale. Boost only from a valid source clock.
-    const stamp = last ? Date.parse(last) : NaN;
-    const ageHours = Number.isFinite(stamp) ? Math.max(0, (Date.now() - stamp) / 3600000) : 0;
-    if (window.fxSetGrainBoost) window.fxSetGrainBoost(1 + Math.min(1.5, Math.max(0, ageHours - 6) / 44));
     quietEl.textContent = last
       ? `Sniper zuletzt ${new Date(last).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })} · ${d.sniper.alerted} Funde insgesamt`
       : "Sniper hat noch nicht gelaufen";
   } catch (err) {
     setConnDot("err");
-    if (window.fxSetGrainBoost) window.fxSetGrainBoost(1);
     heroEl.innerHTML = `<div class="hero"><div class="title">Fehler: ${escapeHtml(err.message)}</div></div>`;
   }
 }
@@ -751,39 +745,27 @@ function litPanels(root) {
 // sitting idle on it. So the engine is a choice now, and so is the model.
 //
 // The four are not interchangeable and the picker does not pretend they are:
-// Each engine keeps its own native session, while the server supplies only
-// the missing part of this shared conversation when the engine changes.
+// Claude resumes the real session from the desk, AI-OS is the local worker
+// with its agents and its task queue, Google is its own API with its own
+// per-model quota, Codex appears when it is installed and signed in.
 
 const ENGINE_KEY = "aios_engine";
 const MODEL_KEY = "aios_models";
 const CONVERSATIONS_KEY = "aios_engine_conversations";
-const ACTIVE_CONVERSATION_KEY = "aios_shared_conversation";
 
 const chatLog = document.getElementById("chat-log");
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
 let chatInFlight = false;
-let chatContextLoading = false;
 let chatSession = null;        // the Claude session, when Claude is chosen
 let engineList = [];
 let chatEngine = "claude";
 let chatModels = {};
 let chatConversations = {};
-let sharedConversationId = null;
 
 try { chatEngine = localStorage.getItem(ENGINE_KEY) || "claude"; } catch (_) {}
 try { chatModels = JSON.parse(localStorage.getItem(MODEL_KEY) || "{}"); } catch (_) {}
 try { chatConversations = JSON.parse(localStorage.getItem(CONVERSATIONS_KEY) || "{}"); } catch (_) {}
-try {
-  sharedConversationId = localStorage.getItem(ACTIVE_CONVERSATION_KEY)
-    || chatConversations?.[chatEngine] || null;
-  if (sharedConversationId) localStorage.setItem(ACTIVE_CONVERSATION_KEY, sharedConversationId);
-} catch (_) {}
-
-function updateChatBusy() {
-  document.getElementById("chat-send").disabled = chatInFlight || chatContextLoading;
-  document.getElementById("chat-session").setAttribute("aria-disabled", String(chatInFlight || chatContextLoading));
-}
 
 function engineSpec(id) {
   return engineList.find((e) => e.id === (id || chatEngine)) || null;
@@ -797,13 +779,13 @@ function currentModel() {
 }
 
 function activeConversationId() {
-  return sharedConversationId;
+  return chatConversations[chatEngine] || null;
 }
 
 function rememberConversation(conversationId) {
   if (!conversationId) return;
-  sharedConversationId = conversationId;
-  try { localStorage.setItem(ACTIVE_CONVERSATION_KEY, conversationId); } catch (_) {}
+  chatConversations[chatEngine] = conversationId;
+  try { localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(chatConversations)); } catch (_) {}
 }
 
 function renderStoredConversation(record) {
@@ -813,19 +795,7 @@ function renderStoredConversation(record) {
     chatLog.innerHTML = `<div class="empty-state">Neue Unterhaltung — schreib einfach los.</div>`;
     return;
   }
-  for (const message of messages) {
-    const bubble = addBubble(message.text || "", message.role === "user" ? "me" : "bot");
-    if (message.role !== "user") labelAnswer(bubble, message.engine || record.engine);
-  }
-}
-
-function labelAnswer(bubble, engine) {
-  if (!engine) return;
-  const label = document.createElement("small");
-  label.style.cssText = "display:block;opacity:.65;margin-bottom:.25em";
-  label.textContent = engineSpec(engine)?.label || engine;
-  bubble.prepend(label);
-  bubble.dataset.engine = engine;
+  for (const message of messages) addBubble(message.text || "", message.role === "user" ? "me" : "bot");
 }
 
 async function createConversation() {
@@ -833,37 +803,28 @@ async function createConversation() {
     method: "POST", body: JSON.stringify({ action: "create", engine: chatEngine }),
   });
   const record = data.conversation;
-  chatSession = null;
   rememberConversation(record.id);
   return record;
 }
 
 async function openConversation(conversationId) {
-  if (chatInFlight) return;
-  chatContextLoading = true;
-  updateChatBusy();
-  try {
-    const data = await api("/api/conversations", {
-      method: "POST", body: JSON.stringify({ action: "read", conversation_id: conversationId }),
-    });
-    const record = data.conversation;
-    chatSession = record.sessions?.claude?.id ? { id: record.sessions.claude.id } : null;
-    rememberConversation(record.id);
-    setChatBar(`${engineSpec()?.label || chatEngine} · ${record.title || "Neue Unterhaltung"}`,
-               `${record.messages?.length || 0} Nachrichten · gemeinsames Gedächtnis`);
-    renderStoredConversation(record);
-    return record;
-  } finally {
-    chatContextLoading = false;
-    updateChatBusy();
-  }
+  const data = await api("/api/conversations", {
+    method: "POST", body: JSON.stringify({ action: "read", conversation_id: conversationId }),
+  });
+  const record = data.conversation;
+  if (record.engine !== chatEngine) throw new Error("Unterhaltung gehört zu einer anderen Engine");
+  rememberConversation(record.id);
+  setChatBar(`${engineSpec()?.label || chatEngine} · ${record.title || "Neue Unterhaltung"}`,
+             `${record.messages?.length || 0} Nachrichten`);
+  renderStoredConversation(record);
+  return record;
 }
 
 async function loadEngineConversation() {
   let conversationId = activeConversationId();
   if (!conversationId) {
     const data = await api("/api/conversations", {
-      method: "POST", body: JSON.stringify({ action: "list" }),
+      method: "POST", body: JSON.stringify({ action: "list", engine: chatEngine }),
     });
     conversationId = data.conversations?.[0]?.id;
   }
@@ -916,9 +877,7 @@ function renderTranscript(data) {
     more.className = "chip";
     more.style.alignSelf = "center";
     more.textContent = `${data.total_messages - data.messages.length} ältere laden`;
-    more.addEventListener("click", () => {
-      if (!chatInFlight && !chatContextLoading) openSession(data.session_id, (data.shown_turns || 14) + 20);
-    });
+    more.addEventListener("click", () => openSession(data.session_id, (data.shown_turns || 14) + 20));
     chatLog.appendChild(more);
   }
   // Runs of tool calls are folded into one line. A coding session is mostly
@@ -956,9 +915,6 @@ function setChatBar(title, meta, live) {
 }
 
 async function openSession(sessionId, limit) {
-  if (chatInFlight) return;
-  chatContextLoading = true;
-  updateChatBusy();
   setChatBar("lädt…", "");
   try {
     const data = await api("/api/claude-transcript", {
@@ -970,72 +926,39 @@ async function openSession(sessionId, limit) {
       chatLog.innerHTML = `<div class="empty-state">${escapeHtml(data.error || "keine Sitzung")}</div>`;
       return;
     }
-    const attached = await api("/api/conversations", {
-      method: "POST", body: JSON.stringify({ action: "attach", engine: "claude", session_id: data.session_id }),
-    });
-    rememberConversation(attached.conversation.id);
     chatSession = { id: data.session_id, title: data.title, stats: data.stats };
-    try { localStorage.setItem(SESSION_KEY, data.session_id); } catch (_) {}
+    localStorage.setItem(SESSION_KEY, data.session_id);
     setChatBar(`Claude · ${data.title || data.session_id.slice(0, 8)}`,
                `${data.total_messages} · $${usd(data.stats?.usd)}`);
     renderTranscript(data);
   } catch (err) {
     setConnDot("err");
     chatLog.innerHTML = `<div class="empty-state">Fehler: ${escapeHtml(err.message)}</div>`;
-  } finally {
-    chatContextLoading = false;
-    updateChatBusy();
   }
 }
 
 async function loadChat() {
-  if (chatInFlight || chatContextLoading) return;
-  chatContextLoading = true;
-  updateChatBusy();
   try {
     engineList = (await api("/api/engines")).engines || [];
   } catch (_) { engineList = []; }
-  // A pending ticket owns its conversation even if another tab changed the picker.
-  const pending = pendingTicket();
-  if (pending?.id) {
-    if (pending.conversation_id) rememberConversation(pending.conversation_id);
-    selectChatEngine(pending.engine || "claude");
+  const spec = engineSpec();
+  if (spec && !spec.available) {
+    // The chosen engine cannot answer right now. Say so instead of failing
+    // at the moment he presses send.
+    setChatBar(`${spec.label} · nicht bereit`, "");
+    chatLog.innerHTML = `<div class="empty-state">${escapeHtml(spec.reason)}</div>`;
+    return resumePending();
   }
-  try {
-    let oldSession = null;
-    try { oldSession = localStorage.getItem(SESSION_KEY); } catch (_) {}
-    if (!activeConversationId() && chatEngine === "claude" && oldSession) {
-      await openSession(oldSession);
-    } else {
+  if (chatEngine === "claude") {
+    await openSession(localStorage.getItem(SESSION_KEY) || "");
+  } else {
+    try {
       await loadEngineConversation();
+    } catch (err) {
+      chatLog.innerHTML = `<div class="empty-state">Fehler: ${escapeHtml(err.message)}</div>`;
     }
-    const spec = engineSpec();
-    if (spec && !spec.available) addBubble(`${spec.label}: ${spec.reason}`, "tool");
-  } catch (err) {
-    chatLog.innerHTML = `<div class="empty-state">Fehler: ${escapeHtml(err.message)}</div>`;
-  } finally {
-    chatContextLoading = false;
-    updateChatBusy();
   }
-  await resumePending();
-}
-
-function selectChatEngine(engine) {
-  chatEngine = engine;
-  try { localStorage.setItem(ENGINE_KEY, engine); } catch (_) {}
-}
-
-function pendingTicket() {
-  try { return JSON.parse(localStorage.getItem(PENDING_KEY) || "null"); }
-  catch (_) { return null; }
-}
-
-function rememberPending(ticket) {
-  try { localStorage.setItem(PENDING_KEY, JSON.stringify(ticket)); } catch (_) {}
-}
-
-function clearPending() {
-  try { localStorage.removeItem(PENDING_KEY); } catch (_) {}
+  resumePending();
 }
 
 // Pick a turn back up that this page was not around for.
@@ -1045,39 +968,33 @@ function clearPending() {
 // He could not tell, because closing the chat also ended the only thing
 // watching for a reply. Now the ticket outlives the page.
 async function resumePending() {
-  const job = pendingTicket();
+  let job;
+  try { job = JSON.parse(localStorage.getItem(PENDING_KEY) || "null"); } catch (_) { return; }
   if (!job || !job.id || chatInFlight) return;
   const bubble = addBubble("hole die Antwort von vorhin …", "bot pending");
   chatInFlight = true;
-  updateChatBusy();
   try {
     const res = await pollEngine(job.engine || "claude", job.id, bubble, job.conversation_id || null);
     bubble.remove();
-    clearPending();
+    localStorage.removeItem(PENDING_KEY);
     chatInFlight = false;
-    selectChatEngine(res.engine || job.engine || "claude");
-    if (res.ok && (res.conversation_id || job.conversation_id)) {
-      return await openConversation(res.conversation_id || job.conversation_id);
-    }
-    if (res.ok && chatEngine === "claude" && job.session) {
+    if (res.ok && (job.engine || "claude") === "claude" && job.session) {
       // Re-read rather than write the reply into a bubble: the turn finished
       // on the server, so it is already in the transcript.
-      return await openSession(job.session);
+      return openSession(job.session);
     }
     if (res.ok && !res.reply) {
       res.ok = false;
       res.error = "(Leeres Ergebnis vom Modell zurückgegeben)";
     }
-    labelAnswer(addBubble(res.reply || res.error || "fehlgeschlagen", `bot${res.ok ? "" : " err"}`), chatEngine);
+    addBubble(res.reply || res.error || "fehlgeschlagen", `bot${res.ok ? "" : " err"}`);
     return;
   } catch (err) {
-    if (!bubble.isConnected) chatLog.appendChild(bubble);
-    bubble.textContent = `Antwort konnte nicht geladen werden: ${err.message}`;
+    bubble.textContent = `Die Antwort ist nicht mehr da: ${err.message}`;
     bubble.className = "bubble bot err";
   } finally {
-    clearPending();
+    localStorage.removeItem(PENDING_KEY);
     chatInFlight = false;
-    updateChatBusy();
   }
 }
 
@@ -1086,7 +1003,6 @@ async function resumePending() {
 document.getElementById("chat-session").addEventListener("click", openEnginePicker);
 
 async function openEnginePicker() {
-  if (chatInFlight || chatContextLoading) return;
   if (window.fxTap) window.fxTap();
   openSheet(`<div class="hint">Wird geladen…</div>`);
   try {
@@ -1094,7 +1010,6 @@ async function openEnginePicker() {
   } catch (err) {
     return openSheet(`<div class="empty-state">Fehler: ${escapeHtml(err.message)}</div>`);
   }
-  if (chatInFlight || chatContextLoading) return closeSheet();
   const spec = engineSpec();
   const models = spec ? spec.models : [];
   openSheet(`
@@ -1111,30 +1026,31 @@ async function openEnginePicker() {
     <div class="chip-row">
       ${models.map((m) => `<button class="chip ${m === currentModel() ? "on" : ""}" data-model="${escapeHtml(m)}">${escapeHtml(m)}</button>`).join("")}
     </div>
-    <h2 class="section-title">Gemeinsame Unterhaltungen</h2>
-    <p class="hint">Beim Engine-Wechsel bleibt der Gesprächsfaden erhalten.</p>
-    <button id="conversation-new" class="pill-btn ghost">Neue Unterhaltung</button>
-    <div id="sheet-conversations"><div class="hint">Wird geladen…</div></div>
     ${chatEngine === "claude" ? `
-      <h2 class="section-title">Claude-Sitzung übernehmen</h2>
-      <div id="sheet-sessions"><div class="hint">Wird geladen…</div></div>` : ""}`,
+      <h2 class="section-title">Sitzung</h2>
+      <div id="sheet-sessions"><div class="hint">Wird geladen…</div></div>` : `
+      <h2 class="section-title">Unterhaltung</h2>
+      <button id="conversation-new" class="pill-btn ghost">Neue Unterhaltung</button>
+      <div id="sheet-conversations"><div class="hint">Wird geladen…</div></div>`}`,
     (root) => {
       root.querySelectorAll("[data-engine]").forEach((el) =>
         el.addEventListener("click", () => {
-          if (chatInFlight || chatContextLoading) return;
-          selectChatEngine(el.dataset.engine);
+          chatEngine = el.dataset.engine;
+          try { localStorage.setItem(ENGINE_KEY, chatEngine); } catch (_) {}
           closeSheet();
           loadChat();
         }));
       root.querySelectorAll("[data-model]").forEach((el) =>
         el.addEventListener("click", () => {
-          if (chatInFlight || chatContextLoading) return;
           chatModels[chatEngine] = el.dataset.model;
           try { localStorage.setItem(MODEL_KEY, JSON.stringify(chatModels)); } catch (_) {}
           root.querySelectorAll("[data-model]").forEach((o) =>
             o.classList.toggle("on", o === el));
+          if (chatEngine !== "claude") {
+            const sp = engineSpec();
+    if (chatEngine === "claude") loadSessionListInto(root); else loadConversationListInto(root);
+          }
         }));
-      loadConversationListInto(root);
       if (chatEngine === "claude") loadSessionListInto(root);
     });
 }
@@ -1154,33 +1070,24 @@ async function loadSessionListInto(root) {
       </button>`).join("") || `<div class="empty-state">Keine Sitzungen.</div>`;
     host.querySelectorAll("[data-sid]").forEach((el) =>
       el.addEventListener("click", () => {
-        if (chatInFlight || chatContextLoading) return;
         closeSheet();
         openSession(el.dataset.sid);
       }));
   } catch (err) {
-    host.innerHTML = `<div class="empty-state">${escapeHtml(err.message)}</div>`;
-  }
-}
-
 async function loadConversationListInto(root) {
   const host = root.querySelector("#sheet-conversations");
   if (!host) return;
   const fresh = root.querySelector("#conversation-new");
   if (fresh) fresh.addEventListener("click", async () => {
-    if (chatInFlight || chatContextLoading) return;
-    chatContextLoading = true;
-    updateChatBusy();
     try {
       const record = await createConversation();
       closeSheet();
       await openConversation(record.id);
     } catch (err) { host.innerHTML = `<div class="empty-state">${escapeHtml(err.message)}</div>`; }
-    finally { chatContextLoading = false; updateChatBusy(); }
   });
   try {
     const data = await api("/api/conversations", {
-      method: "POST", body: JSON.stringify({ action: "list" }),
+      method: "POST", body: JSON.stringify({ action: "list", engine: chatEngine }),
     });
     const active = activeConversationId();
     host.innerHTML = data.conversations.map((c) => {
@@ -1194,12 +1101,15 @@ async function loadConversationListInto(root) {
       </button>`;
     }).join("") || `<div class="empty-state">Noch keine Unterhaltung.</div>`;
     host.querySelectorAll("[data-conversation]").forEach((el) => el.addEventListener("click", async () => {
-      if (chatInFlight || chatContextLoading) return;
       closeSheet();
       try { await openConversation(el.dataset.conversation); }
       catch (err) { chatLog.innerHTML = `<div class="empty-state">Fehler: ${escapeHtml(err.message)}</div>`; }
     }));
   } catch (err) {
+    host.innerHTML = `<div class="empty-state">${escapeHtml(err.message)}</div>`;
+  }
+}
+
     host.innerHTML = `<div class="empty-state">${escapeHtml(err.message)}</div>`;
   }
 }
@@ -1235,17 +1145,11 @@ async function pollEngine(engine, job, bubble, conversationId, onHandoff) {
       chatLog.insertBefore(note, bubble);
       engine = res.engine;
       job = res.job;
-      conversationId = res.conversation_id || conversationId;
-      if (conversationId) rememberConversation(conversationId);
-      selectChatEngine(engine);
-      rememberPending({ ...(pendingTicket() || {}), id: job, engine,
-        conversation_id: conversationId, session: undefined, at: Date.now() });
       if (onHandoff) onHandoff(res.engine);
       chatLog.scrollTop = chatLog.scrollHeight;
       continue;
     }
-    if (res.ready) return { ...res, engine: res.engine || engine,
-      conversation_id: res.conversation_id || conversationId };
+    if (res.ready) return res;
     if (res.lost) throw new Error(res.error || "Job verloren");
     bubble.textContent = `denkt nach … ${res.elapsed ?? 0}s`;
   }
@@ -1266,7 +1170,6 @@ chatInput.addEventListener("keydown", (e) => {
 
 chatForm.addEventListener("submit", (e) => {
   e.preventDefault();
-  if (chatInFlight || chatContextLoading) return;
   const text = chatInput.value.trim();
   if (!text) return;
   chatInput.value = "";
@@ -1277,7 +1180,7 @@ chatForm.addEventListener("submit", (e) => {
 // Split out of the submit handler so a "ask Google instead" button can send
 // the same question again without retyping it.
 async function sendMessage(text) {
-  if (chatInFlight || chatContextLoading) return;
+  if (chatInFlight) return;
   const spec = engineSpec();
   if (spec && !spec.available) {
     const bubble = addBubble(spec.reason, "bot err");
@@ -1287,21 +1190,20 @@ async function sendMessage(text) {
   addBubble(text, "me");
   const pending = addBubble("denkt nach …", "bot pending");
   chatInFlight = true;
-  updateChatBusy();
+  document.getElementById("chat-send").disabled = true;
   let askedEngine = chatEngine;
   try {
-    const conversationId = await ensureConversation();
+    const conversationId = chatEngine === "claude" ? null : await ensureConversation();
     const queued = await api("/api/engine-send", {
       method: "POST",
       body: JSON.stringify({
         engine: chatEngine, model: currentModel(), message: text,
         thread: getThreadId(),
-        // Native session ownership is resolved by the server for this conversation.
-        conversation_id: conversationId,
+          session: chatEngine === "claude" ? chatSession?.id : undefined,
+          conversation_id: conversationId || undefined,
       }),
     });
     setConnDot("ok");
-    if (!queued.job || !queued.engine) throw new Error(queued.error || "Kein Antwort-Ticket erhalten");
     if (queued.handed_off) {
       const note = document.createElement("div");
       note.className = "bubble tool";
@@ -1309,15 +1211,13 @@ async function sendMessage(text) {
       chatLog.insertBefore(note, pending);
       askedEngine = queued.engine;
     }
-    const queuedConversationId = queued.conversation_id || conversationId;
-    rememberConversation(queuedConversationId);
-    selectChatEngine(queued.engine);
-    rememberPending({ id: queued.job, engine: queued.engine,
-      conversation_id: queuedConversationId, at: Date.now() });
-    const res = await pollEngine(queued.engine, queued.job, pending, queuedConversationId,
+    try {
+      localStorage.setItem(PENDING_KEY, JSON.stringify(
+        { id: queued.job, engine: queued.engine, session: chatSession?.id,
+          conversation_id: conversationId, at: Date.now() }));
+    } catch (_) {}
+    const res = await pollEngine(queued.engine, queued.job, pending, conversationId,
       (to) => { askedEngine = to; });
-    selectChatEngine(res.engine || askedEngine);
-    if (res.conversation_id) rememberConversation(res.conversation_id);
     if (res.ok && !res.reply) {
       res.ok = false;
       res.error = "(Leeres Ergebnis vom Modell zurückgegeben)";
@@ -1329,20 +1229,6 @@ async function sendMessage(text) {
     } else {
       pending.innerHTML = linkifyHtml(res.reply);
       pending.className = "bubble bot";
-    }
-    labelAnswer(pending, res.engine || askedEngine);
-    setChatBar(`${engineSpec()?.label || chatEngine} · gemeinsames Gedächtnis`, currentModel() || "");
-    if (res.ok) {
-      try {
-        const data = await api("/api/conversations", {
-          method: "POST", body: JSON.stringify({ action: "read", conversation_id: activeConversationId() }),
-        });
-        const record = data.conversation;
-        chatSession = record.sessions?.claude?.id ? { id: record.sessions.claude.id } : null;
-        renderStoredConversation(record);
-        setChatBar(`${engineSpec()?.label || chatEngine} · ${record.title || "Unterhaltung"}`,
-                   `${record.messages?.length || 0} Nachrichten · gemeinsames Gedächtnis`);
-      } catch (_) { /* The answer remains visible if refreshing its transcript is offline. */ }
     }
     const bits = [];
     if (res.usd) bits.push(`$${usd(res.usd)}`);
@@ -1357,7 +1243,7 @@ async function sendMessage(text) {
     // Whether it was handed off or simply refused, the alternatives go on
     // screen. A limit is the one moment where the next tap should not be
     // "open the picker, find the engine, retype the question".
-    if (!res.ok) {
+    if (!res.ok || askedEngine !== chatEngine) {
       renderEngineSwitch(null, text, askedEngine);
     }
     chatLog.scrollTop = chatLog.scrollHeight;
@@ -1368,9 +1254,9 @@ async function sendMessage(text) {
     setConnDot("err");
     renderEngineSwitch(null, text, askedEngine);
   } finally {
-    clearPending();
+    try { localStorage.removeItem(PENDING_KEY); } catch (_) {}
     chatInFlight = false;
-    updateChatBusy();
+    document.getElementById("chat-send").disabled = false;
   }
 }
 
@@ -1393,9 +1279,9 @@ function renderEngineSwitch(before, message, exclude) {
   chatLog.insertBefore(row, before || null);
   chatLog.scrollTop = chatLog.scrollHeight;
   row.querySelectorAll("[data-switch]").forEach((el) => el.addEventListener("click", () => {
-    if (chatInFlight || chatContextLoading) return;
     if (window.fxTap) window.fxTap();
-    selectChatEngine(el.dataset.switch);
+    chatEngine = el.dataset.switch;
+    try { localStorage.setItem(ENGINE_KEY, chatEngine); } catch (_) {}
     row.remove();
     const spec = engineSpec();
     setChatBar(`${spec ? spec.label : chatEngine} · ${currentModel() || ""}`, "");
@@ -1408,7 +1294,7 @@ function renderEngineSwitch(before, message, exclude) {
 const DEVICE_KEY = "aios_device";
 
 let deviceState = { id: null, list: [], width: 1080, height: 2400, live: false,
-                    actions: [], rooted: false, kind: "phone", label: "Gerät" };
+                    actions: [], rooted: false };
 
 // What the last visit already knew. Probing two phones takes up to eight
 // seconds - one of them is usually asleep, and a sleeping phone answers by
@@ -1422,7 +1308,6 @@ function rememberDevice() {
     localStorage.setItem(DEVICE_KEY, JSON.stringify({
       id: deviceState.id, width: deviceState.width, height: deviceState.height,
       actions: deviceState.actions, rooted: deviceState.rooted,
-      kind: deviceState.kind, label: deviceState.label,
     }));
   } catch (_) {}
 }
@@ -1434,7 +1319,6 @@ function recallDevice() {
     Object.assign(deviceState, {
       id: d.id, width: d.width || 1080, height: d.height || 2400,
       actions: d.actions || [], rooted: !!d.rooted,
-      kind: d.kind || "phone", label: d.label || "Gerät",
     });
     return true;
   } catch (_) { return false; }
@@ -1490,12 +1374,8 @@ async function loadDevices(background) {
 
     const dev = deviceState.list.find((d) => d.id === deviceState.id) || {};
     if (!dev.reachable) {
-      deviceState.kind = dev.kind || "phone";
-      deviceState.label = dev.label || "Gerät";
       infoEl.innerHTML = `<span>${escapeHtml(dev.reason || "nicht erreichbar")}</span>`;
-      document.getElementById("device-stage").innerHTML = dev.setup_required
-        ? `<div class="stage-empty headset-setup"><b>Pico einmalig verbinden</b><span>Entwicklermodus aktivieren, USB-Kabel anschließen und im Headset USB-Debugging erlauben.</span><code>bash scripts/pico_setup.sh</code></div>`
-        : `<div class="stage-empty">offline</div>`;
+      document.getElementById("device-stage").innerHTML = `<div class="stage-empty">offline</div>`;
       document.getElementById("device-stagebar").innerHTML = "";
       document.getElementById("device-controls").innerHTML = "";
       document.getElementById("device-tools").innerHTML = "";
@@ -1505,8 +1385,6 @@ async function loadDevices(background) {
     deviceState.height = dev.height || 2400;
     deviceState.actions = dev.actions || [];
     deviceState.rooted = !!dev.rooted;
-    deviceState.kind = dev.kind || "phone";
-    deviceState.label = dev.label || "Gerät";
     const b = dev.battery || {};
     infoEl.innerHTML = `<span>${b.level ?? "?"}%${b.charging ? " lädt" : ""}</span>
       <span>${dev.screen_on ? "Bildschirm an" : "Bildschirm aus"}</span>
@@ -1602,34 +1480,8 @@ function startStream() {
   // screen composites nothing, so screenrecord has nothing to encode.
   refreshStill(true);
   const done = () => { if (deviceState.gen === gen) deviceState.starting = false; };
-  if (deviceState.kind === "desktop") {
-    deviceState.path = "desktop-jpeg";
-    startDesktopStream(gen).then(done, done);
-    return;
-  }
   deviceState.path = mseSupported() ? "mse" : "mjpeg";
   (deviceState.path === "mse" ? startMse(gen) : Promise.resolve(startMjpeg(gen))).then(done, done);
-}
-
-async function startDesktopStream(gen) {
-  try {
-    const started = await deviceAction({ action: "stream_start" });
-    if (!started.ok || deviceState.gen !== gen) throw new Error(started.error || "Laptop offline");
-    let busy = false;
-    const update = async () => {
-      if (busy || !deviceState.live || deviceState.gen !== gen) return;
-      busy = true;
-      try {
-        await refreshStill(true);
-        stageBadge("live", true);
-      } finally { busy = false; }
-    };
-    await update();
-    clearInterval(deviceState.desktopTimer);
-    deviceState.desktopTimer = setInterval(update, 250);
-  } catch (err) {
-    if (deviceState.gen === gen) streamFailed(err.message);
-  }
 }
 
 // --- the fast path: the phone's own H.264, decoded by the viewer -----------
@@ -1816,7 +1668,7 @@ function streamFailed(reason) {
   const b = document.createElement("button");
   b.id = "stage-wake";
   b.className = "chip stage-wake";
-  b.textContent = deviceState.kind === "headset" ? "Brille wecken" : "Handy wecken";
+  b.textContent = "Handy wecken";
   b.addEventListener("click", async (e) => {
     e.stopPropagation();
     b.textContent = "…";
@@ -1827,7 +1679,7 @@ function streamFailed(reason) {
       action: deviceState.actions.includes("unlock") ? "unlock" : "key",
       key: "wake",
     });
-    if (!r.ok) { deviceSay(r.error, true); b.textContent = deviceState.kind === "headset" ? "Brille wecken" : "Handy wecken"; return; }
+    if (!r.ok) { deviceSay(r.error, true); b.textContent = "Handy wecken"; return; }
     b.remove();
     startStream();
   });
@@ -1840,9 +1692,6 @@ function stopStream() {
   clearInterval(deviceState.guard);
   deviceState.gen = (deviceState.gen || 0) + 1;   // orphans any start in flight
   clearInterval(deviceState.watch);
-  clearInterval(deviceState.desktopTimer);
-  deviceState.desktopTimer = null;
-  deviceState.pointer = null;
   if (deviceState.abort) { try { deviceState.abort.abort(); } catch (_) {} }
   deviceState.abort = null;
   const video = document.getElementById("dev-video");
@@ -1868,66 +1717,33 @@ function bindStageTaps(stage) {
   // every refresh and send one tap per stream restart.
   if (stage.dataset.tapsBound) return;
   stage.dataset.tapsBound = "1";
+  let down = null;
   stage.addEventListener("pointerdown", (e) => {
     if (e.target.id === "stage-wake") return;
-    if (e.button !== 0 && e.button !== 2) return;
-    deviceState.pointer = { id: e.pointerId, x: e.clientX, y: e.clientY,
-                            t: Date.now(), button: e.button };
-    try { stage.setPointerCapture(e.pointerId); } catch (_) {}
+    down = { x: e.clientX, y: e.clientY, t: Date.now() };
   });
   stage.addEventListener("pointerup", async (e) => {
-    const down = deviceState.pointer;
-    if (!down || down.id !== e.pointerId) return;
-    deviceState.pointer = null;
-    try { stage.releasePointerCapture(e.pointerId); } catch (_) {}
     if (!down) return;
     const from = stagePoint(down.x, down.y);
     const to = stagePoint(e.clientX, e.clientY);
     const dragged = Math.hypot(e.clientX - down.x, e.clientY - down.y) > 18;
     const held = Date.now() - down.t;
+    down = null;
     if (!from || !to) return;
     if (window.fxTap) window.fxTap();
     showTapRipple(to.localX, to.localY);
     // A drag on the picture is a swipe on the phone. Without it the panel
     // could tap but not scroll, which makes most apps unusable remotely.
-    const mode = deviceState.kind === "desktop"
-      ? (down.button === 2 ? "right" : (deviceState.clickMode || "left")) : "left";
     const r = dragged
       ? await deviceAction({ action: "swipe", x1: from.x, y1: from.y, x2: to.x, y2: to.y,
                              ms: Math.max(80, Math.min(held, 800)) })
-      : await deviceAction({ action: "tap", x: to.x, y: to.y,
-                             button: mode === "right" ? "right" : "left",
-                             clicks: mode === "double" ? 2 : 1 });
+      : await deviceAction({ action: "tap", x: to.x, y: to.y });
     if (!r.ok) deviceSay(r.error, true);
     // No refresh call: the stream shows the result on its own. That is most
     // of what "zu langsam" was - every tap used to be followed by a second
     // and a half of waiting for a new still.
     if (!deviceState.live) refreshStill();
   });
-  const cancel = (e) => {
-    if (deviceState.pointer && (!e || deviceState.pointer.id === e.pointerId)) {
-      deviceState.pointer = null;
-    }
-  };
-  stage.addEventListener("pointercancel", cancel);
-  stage.addEventListener("lostpointercapture", cancel);
-  stage.addEventListener("contextmenu", (e) => e.preventDefault());
-  stage.addEventListener("wheel", async (e) => {
-    e.preventDefault();
-    const at = stagePoint(e.clientX, e.clientY);
-    if (!at) return;
-    let r;
-    if (deviceState.kind === "desktop") {
-      const dy = Math.max(-1200, Math.min(1200, -Math.round(e.deltaY * 3)));
-      r = await deviceAction({ action: "scroll", dy, x: at.x, y: at.y });
-    } else {
-      const distance = Math.max(-700, Math.min(700, Math.round(e.deltaY * 2)));
-      r = await deviceAction({ action: "swipe", x1: at.x, y1: at.y,
-                               x2: at.x, y2: Math.max(0, Math.min(deviceState.height, at.y - distance)),
-                               ms: 220 });
-    }
-    if (!r.ok) deviceSay(r.error, true);
-  }, { passive: false });
 }
 
 function showTapRipple(x, y) {
@@ -2015,10 +1831,6 @@ function renderStageBar() {
     <button class="chip ${deviceState.live ? "" : "on"}" id="st-still">Standbild</button>
     <button class="chip" id="st-full">${fs ? "Verlassen" : "Vollbild"}</button>
     <button class="chip ${deviceState.sharp ? "on" : ""}" id="st-sharp">Schärfer</button>
-    ${deviceState.kind === "desktop" ? `
-      <button class="chip ${(deviceState.clickMode || "left") === "left" ? "on" : ""}" data-clickmode="left">Klick</button>
-      <button class="chip ${deviceState.clickMode === "right" ? "on" : ""}" data-clickmode="right">Rechtsklick</button>
-      <button class="chip ${deviceState.clickMode === "double" ? "on" : ""}" data-clickmode="double">Doppelklick</button>` : ""}
     ${deviceState.actions.includes("record")
       ? `<button class="chip" id="st-rec">8s aufnehmen</button>` : ""}`;
   // In fullscreen the controls float over the picture, because the page they
@@ -2045,10 +1857,6 @@ function renderStageBar() {
     stopStream();
     startStream();
   });
-  host.querySelectorAll("[data-clickmode]").forEach((b) => b.addEventListener("click", () => {
-    deviceState.clickMode = b.dataset.clickmode;
-    renderStageBar();
-  }));
   host.querySelector("#st-rec")?.addEventListener("click", async () => {
     deviceSay("nimmt auf …");
     const r = await deviceAction({ action: "record", seconds: 8 });
@@ -2073,24 +1881,18 @@ function ensureFsBar() {
 }
 
 function renderDeviceControls() {
-  const noun = deviceState.kind === "desktop" ? "dem Laptop"
-    : (deviceState.kind === "headset" ? "der Brille" : "dem Handy");
   const el = document.getElementById("device-controls");
   el.innerHTML = `
     <div class="chip-row">
-      ${deviceState.kind === "desktop" ? `
-        <button class="chip" data-key="esc">Esc</button>
-        <button class="chip" data-key="tab">Tab</button>
-        <button class="chip" data-key="backspace">Löschen</button>` : `
-        <button class="chip" data-key="back">Zurück</button>
-        <button class="chip" data-key="home">Home</button>
-        <button class="chip" data-key="recents">Apps</button>
-        <button class="chip" data-key="wake">Wecken</button>
-        <button class="chip" data-key="sleep">Sperren</button>`}
+      <button class="chip" data-key="back">Zurück</button>
+      <button class="chip" data-key="home">Home</button>
+      <button class="chip" data-key="recents">Apps</button>
+      <button class="chip" data-key="wake">Wecken</button>
+      <button class="chip" data-key="sleep">Sperren</button>
       <button class="chip" data-key="enter">Enter</button>
     </div>
     <div class="inline-form">
-      <input id="dev-text" type="text" placeholder="Text auf ${noun} tippen…" autocomplete="off">
+      <input id="dev-text" type="text" placeholder="Text aufs Handy tippen…" autocomplete="off">
       <button class="pill-btn" id="dev-send">Senden</button>
     </div>`;
   el.querySelectorAll("[data-key]").forEach((b) => b.addEventListener("click", async () => {
@@ -2132,7 +1934,6 @@ const TOOLS = [
       (c) => [`${c.number || "?"}`, `${c.type || ""} ${c.duration ?? ""}`], (c) => c.date || "") },
   { id: "clipboard", label: "Zwischenablage", run: (r) => `<pre class="out">${escapeHtml(r.clipboard || "(leer)")}</pre>` },
   { id: "apps", label: "Apps", run: (r, ctx) => appList(r, ctx) },
-  { id: "install", label: "APK installieren", custom: "apk" },
   { id: "ls", label: "Dateien", run: (r, ctx) => fileList(r, ctx), arg: "path", argDefault: "/sdcard" },
   { id: "shell", label: "Shell", run: (r) => `<pre class="out">${escapeHtml(r.output || "(keine Ausgabe)")}</pre>`,
     arg: "command", argPlaceholder: "z.B. df -h" },
@@ -2176,9 +1977,7 @@ function renderDeviceTools() {
   const available = TOOLS.filter((t) => deviceState.actions.includes(t.id));
   hint.textContent = deviceState.rooted
     ? "Volles Root-Werkzeug: alles was phone_root.py kann, direkt hier."
-    : (deviceState.kind === "headset"
-      ? "Pico-Steuerung über ADB: Livebild, Eingabe, Apps und APK-Sideload."
-      : "Ohne root ist nur ein Teil möglich — der Rest braucht das gerootete Handy.");
+    : "Ohne root ist nur ein Teil möglich — der Rest braucht das gerootete Handy.";
   el.innerHTML = available.map((t) =>
     `<button class="chip" data-tool="${t.id}">${escapeHtml(t.label)}</button>`).join("")
     + (deviceState.rooted ? `<button class="chip danger" data-tool="_danger">Gefährlich…</button>` : "");
@@ -2187,39 +1986,9 @@ function renderDeviceTools() {
     el.querySelectorAll(".chip").forEach((c) => c.classList.remove("on"));
     b.classList.add("on");
     if (b.dataset.tool === "_danger") return renderDangerPanel();
-    const tool = TOOLS.find((t) => t.id === b.dataset.tool);
-    if (tool.custom === "apk") return renderApkInstaller();
-    runTool(tool);
+    runTool(TOOLS.find((t) => t.id === b.dataset.tool));
   }));
   document.getElementById("device-toolpanel").innerHTML = "";
-}
-
-function renderApkInstaller() {
-  const panel = document.getElementById("device-toolpanel");
-  panel.innerHTML = `<p class="hint">APK auswählen; sie wird auf den Server geladen und danach auf der Pico installiert.</p>
-    <div class="inline-form"><input id="pico-apk" type="file" accept=".apk,application/vnd.android.package-archive">
-    <button class="pill-btn" id="pico-install">Installieren</button></div>
-    <p class="hint" id="pico-install-status"></p>`;
-  panel.querySelector("#pico-install").addEventListener("click", async () => {
-    const file = panel.querySelector("#pico-apk").files[0];
-    const status = panel.querySelector("#pico-install-status");
-    if (!file || !file.name.toLowerCase().endsWith(".apk")) {
-      status.textContent = "Bitte eine APK auswählen.";
-      status.style.color = "var(--bad)";
-      return;
-    }
-    status.textContent = "lädt hoch …";
-    try {
-      const uploaded = await uploadOne(file);
-      status.textContent = "installiert …";
-      const result = await deviceAction({ action: "install", name: uploaded.name });
-      status.textContent = result.ok ? (result.output || "Installiert.") : result.error;
-      status.style.color = result.ok ? "var(--good)" : "var(--bad)";
-    } catch (err) {
-      status.textContent = err.message;
-      status.style.color = "var(--bad)";
-    }
-  });
 }
 
 async function runTool(tool, argValue) {

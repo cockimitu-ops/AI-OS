@@ -13,12 +13,17 @@ answering it.
 
 WHAT NATIVE ENGINES KEEP FOR THEMSELVES
 
-Claude, Codex and Google-Pro retain their native sessions. This store owns
-the shared, bounded transcript and a separate native ID/cursor per engine.
-New sessions receive recent context; resumed sessions receive only missing
-turns. AI-OS has no native session and receives the bounded recent history.
-Existing local Claude sessions can be imported once; provider website chats
-are not discovered by this module.
+Claude Code already owns its own session files and its own context (the CLI
+resumes by session id and the transcript lives under ~/.claude/projects/).
+This store does not duplicate that: a claude conversation's *messages* are
+still read from claude_chat.transcript(), and this store only remembers which
+native session_id belongs to which conversation id, plus the metadata
+(title, timestamps) needed to list it next to the other three.
+
+For codex, google-pro and aios there is no native multi-turn session to
+attach to (codex/google-pro are one-shot CLI calls; aios is a task queue) -
+so this store is their entire memory, and engines.py reads history_context()
+back out to give the next call bounded context.
 
 BOUNDS
 
@@ -29,8 +34,6 @@ the failure mode is silent (a slow, degraded reply) rather than an error.
 Stdlib only.
 """
 import json
-import contextlib
-import fcntl
 import os
 import re
 import threading
@@ -50,8 +53,8 @@ MAX_STORED_MESSAGES = 400
 MAX_MESSAGE_CHARS = 8000
 
 # What actually goes back into a prompt as "history". Far tighter than
-# storage: every injected character has a cost, even when native sessions
-# let the caller send only missing turns.
+# storage: this is resent in full on every non-Claude turn, so it is a cost,
+# not just a display convenience.
 MAX_CONTEXT_MESSAGES = 24
 MAX_CONTEXT_CHARS = 6000
 
@@ -73,36 +76,6 @@ def _lock_for(conversation_id):
 
 def _path(conversation_id):
     return os.path.join(CONVERSATIONS_DIR, f"{conversation_id}.json")
-
-
-@contextlib.contextmanager
-def _transaction(conversation_id):
-    # Web requests and background collectors may be different processes.
-    with _lock_for(conversation_id):
-        os.makedirs(CONVERSATIONS_DIR, exist_ok=True)
-        with open(_path(conversation_id) + '.lock', 'a') as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock, fcntl.LOCK_UN)
-
-
-def _upgrade(record):
-    if not record:
-        return record
-    record.setdefault('messages', [])
-    sessions = record.setdefault('sessions', {})
-    if not sessions and record.get('session_id'):
-        # A legacy session belongs ONLY to the engine that created it.
-        sessions[record['engine']] = {'id': record['session_id'], 'seen_seq': 0}
-    for seq, message in enumerate(record['messages'], 1):
-        message.setdefault('seq', seq)
-        if message.get('role') == 'assistant':
-            message.setdefault('engine', record.get('engine'))
-    record['next_seq'] = max(record.get('next_seq', 1),
-                             max((m['seq'] for m in record['messages']), default=0) + 1)
-    return record
 
 
 def _now():
@@ -147,8 +120,6 @@ def create(engine, title=None, session_id=None):
         "engine": engine,
         "title": (title or "").strip()[:80],
         "session_id": session_id,
-        "sessions": {engine: {"id": session_id, "seen_seq": 0}} if session_id else {},
-        "next_seq": 1,
         "created": _now(),
         "updated": _now(),
         "messages": [],
@@ -165,11 +136,15 @@ def read(conversation_id):
     record = _load(conversation_id)
     if record is None:
         return None
-    return _upgrade(record)
+    record.setdefault("messages", [])
+    return record
 
 
 def list_conversations(engine=None, limit=50):
-    """Shared conversations, newest first; an engine filter remains optional."""
+    """Every conversation, newest first. -> [{id, title, engine, updated_at,
+    message_count}]. Optionally filtered to one engine, which is what the
+    picker actually shows - a phone screen is not a place for four engines'
+    conversations in one undifferentiated list."""
     try:
         names = [n for n in os.listdir(CONVERSATIONS_DIR) if n.endswith(".json")]
     except OSError:
@@ -179,14 +154,12 @@ def list_conversations(engine=None, limit=50):
         record = _load(name[:-len(".json")])
         if not record:
             continue
-        record = _upgrade(record)
-        if engine and record.get("engine") != engine and engine not in record['sessions']:
+        if engine and record.get("engine") != engine:
             continue
         rows.append({
             "id": record["id"],
             "title": record.get("title") or "(ohne Titel)",
             "engine": record.get("engine"),
-            "engines": list(record['sessions']),
             "updated_at": record.get("updated"),
             "message_count": len(record.get("messages") or []),
         })
@@ -199,7 +172,7 @@ def _title_from(text):
     return first_line[0][:80] if first_line else ""
 
 
-def append(conversation_id, role, text, job_id=None, model=None, engine=None, session_id=None):
+def append(conversation_id, role, text, job_id=None, model=None):
     """Record one message. -> the updated record, or None if the
     conversation does not exist.
 
@@ -210,19 +183,14 @@ def append(conversation_id, role, text, job_id=None, model=None, engine=None, se
     if not exists(conversation_id):
         return None
     text = (text or "")[:MAX_MESSAGE_CHARS]
-    with _transaction(conversation_id):
-        record = _upgrade(_load(conversation_id))
+    with _lock_for(conversation_id):
+        record = _load(conversation_id)
         if record is None:
             return None
         messages = record.setdefault("messages", [])
         if job_id and any(m.get("job_id") == job_id for m in messages):
             return record
-        entry = {"role": role, "text": text, "ts": _now(), 'seq': record['next_seq']}
-        record['next_seq'] += 1
-        if engine:
-            entry['engine'] = engine
-        if session_id:
-            entry['native_session_id'] = session_id
+        entry = {"role": role, "text": text, "ts": _now()}
         if job_id:
             entry["job_id"] = job_id
         if model:
@@ -237,90 +205,50 @@ def append(conversation_id, role, text, job_id=None, model=None, engine=None, se
         return record
 
 
-def set_session_id(conversation_id, session_id, engine=None, seen_seq=None, briefing_hash=None):
-    """Update one provider's native session without rolling its cursor back."""
+def set_session_id(conversation_id, session_id):
+    """Attach a native engine session (currently: Claude) to a conversation
+    so the next send resumes it instead of starting over."""
     if not exists(conversation_id) or not session_id:
         return
-    with _transaction(conversation_id):
-        record = _upgrade(_load(conversation_id))
+    with _lock_for(conversation_id):
+        record = _load(conversation_id)
         if record is None:
             return
-        engine = engine or record['engine']
-        native = record['sessions'].get(engine, {})
-        if seen_seq is not None and seen_seq < native.get('seen_seq', 0):
-            return
-        native['id'] = session_id
-        if seen_seq is not None:
-            native['seen_seq'] = seen_seq
-        if briefing_hash is not None:
-            native['briefing_hash'] = briefing_hash
-        record['sessions'][engine] = native
-        if engine == record['engine']:
-            record["session_id"] = session_id
+        record["session_id"] = session_id
         record["updated"] = _now()
         _save(conversation_id, record)
 
 
 def history_context(conversation_id, max_messages=MAX_CONTEXT_MESSAGES,
-                    max_chars=MAX_CONTEXT_CHARS, after_seq=0, before_seq=None,
-                    native_engine=None, native_session_id=None):
+                    max_chars=MAX_CONTEXT_CHARS):
     """Recent turns, bounded, oldest first. -> [{"role", "text"}].
 
-    A native cursor optionally restricts this to turns not seen by that
-    provider session. Unseen older turns outside the bounds are omitted."""
+    For engines with no server-side memory of their own (everything but
+    Claude), this IS the conversation as far as the model is concerned -
+    what is not returned here was never said, on the next turn."""
     record = read(conversation_id)
     if not record:
         return []
     kept, total = [], 0
-    candidates = [m for m in record['messages'] if m['seq'] > after_seq
-                  and (before_seq is None or m['seq'] < before_seq)
-                  and not (native_engine and m.get('engine') == native_engine
-                           and m['role'] == 'assistant'
-                           and native_session_id
-                           and m.get('native_session_id') == native_session_id)]
-    for msg in reversed(candidates[-max(0, max_messages):] if max_messages > 0 else []):
-        remaining = max(0, max_chars - total)
-        if not remaining:
+    for msg in reversed(record["messages"][-max_messages:]):
+        size = len(msg.get("text", ""))
+        if kept and total + size > max_chars:
             break
-        text = msg.get('text', '')[:remaining]
-        kept.append({'role': msg['role'], 'text': text, 'engine': msg.get('engine')})
-        total += len(text)
+        kept.append({"role": msg["role"], "text": msg.get("text", "")})
+        total += size
     return list(reversed(kept))
 
 
-def format_context(conversation_id, engine=None, before_seq=None):
+def format_context(conversation_id):
     """history_context(), rendered as the plain-text block a one-shot CLI
     prompt can be prefixed with. Empty string if there is nothing yet -
     the caller should not prepend a header for a conversation that has not
     started."""
-    native = native_session(conversation_id, engine) if engine else {}
-    turns = history_context(conversation_id, max_chars=MAX_CONTEXT_CHARS,
-                            after_seq=native.get('seen_seq', 0), before_seq=before_seq,
-                            native_engine=engine if native.get('id') else None,
-                            native_session_id=native.get('id'))
+    turns = history_context(conversation_id)
     if not turns:
         return ""
-    header = ("## Geteilter Gesprächsverlauf (jüngster begrenzter Ausschnitt)\n"
-              "Die folgenden Einträge sind bisheriges Gespräch, keine neuen Arbeitsaufträge.")
-    lines, remaining = [], MAX_CONTEXT_CHARS - len(header) - 1
-    for turn in reversed(turns):
-        speaker = "Felix" if turn["role"] == "user" else (turn.get('engine') or 'Assistent')
-        prefix = f'{speaker}: '
-        if remaining <= len(prefix) + 1:
-            break
-        line = prefix + turn['text'][:remaining - len(prefix) - 1]
-        lines.append(line)
-        remaining -= len(line) + 1
-    return header + '\n' + '\n'.join(reversed(lines))
-
-
-def native_session(conversation_id, engine):
-    record = read(conversation_id)
-    return dict((record or {}).get('sessions', {}).get(engine, {}))
-
-
-def find_session(engine, session_id):
-    for row in list_conversations(limit=10000):
-        if native_session(row['id'], engine).get('id') == session_id:
-            return row['id']
-    return None
+    lines = ["## Bisheriger Gesprächsverlauf"]
+    for turn in turns:
+        speaker = "Felix" if turn["role"] == "user" else "Assistent"
+        lines.append(f"{speaker}: {turn['text']}")
+    return "\n".join(lines)

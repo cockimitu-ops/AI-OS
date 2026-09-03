@@ -1602,34 +1602,8 @@ function startStream() {
   // screen composites nothing, so screenrecord has nothing to encode.
   refreshStill(true);
   const done = () => { if (deviceState.gen === gen) deviceState.starting = false; };
-  if (deviceState.kind === "desktop") {
-    deviceState.path = "desktop-jpeg";
-    startDesktopStream(gen).then(done, done);
-    return;
-  }
   deviceState.path = mseSupported() ? "mse" : "mjpeg";
   (deviceState.path === "mse" ? startMse(gen) : Promise.resolve(startMjpeg(gen))).then(done, done);
-}
-
-async function startDesktopStream(gen) {
-  try {
-    const started = await deviceAction({ action: "stream_start" });
-    if (!started.ok || deviceState.gen !== gen) throw new Error(started.error || "Laptop offline");
-    let busy = false;
-    const update = async () => {
-      if (busy || !deviceState.live || deviceState.gen !== gen) return;
-      busy = true;
-      try {
-        await refreshStill(true);
-        stageBadge("live", true);
-      } finally { busy = false; }
-    };
-    await update();
-    clearInterval(deviceState.desktopTimer);
-    deviceState.desktopTimer = setInterval(update, 250);
-  } catch (err) {
-    if (deviceState.gen === gen) streamFailed(err.message);
-  }
 }
 
 // --- the fast path: the phone's own H.264, decoded by the viewer -----------
@@ -1840,9 +1814,6 @@ function stopStream() {
   clearInterval(deviceState.guard);
   deviceState.gen = (deviceState.gen || 0) + 1;   // orphans any start in flight
   clearInterval(deviceState.watch);
-  clearInterval(deviceState.desktopTimer);
-  deviceState.desktopTimer = null;
-  deviceState.pointer = null;
   if (deviceState.abort) { try { deviceState.abort.abort(); } catch (_) {} }
   deviceState.abort = null;
   const video = document.getElementById("dev-video");
@@ -1868,66 +1839,33 @@ function bindStageTaps(stage) {
   // every refresh and send one tap per stream restart.
   if (stage.dataset.tapsBound) return;
   stage.dataset.tapsBound = "1";
+  let down = null;
   stage.addEventListener("pointerdown", (e) => {
     if (e.target.id === "stage-wake") return;
-    if (e.button !== 0 && e.button !== 2) return;
-    deviceState.pointer = { id: e.pointerId, x: e.clientX, y: e.clientY,
-                            t: Date.now(), button: e.button };
-    try { stage.setPointerCapture(e.pointerId); } catch (_) {}
+    down = { x: e.clientX, y: e.clientY, t: Date.now() };
   });
   stage.addEventListener("pointerup", async (e) => {
-    const down = deviceState.pointer;
-    if (!down || down.id !== e.pointerId) return;
-    deviceState.pointer = null;
-    try { stage.releasePointerCapture(e.pointerId); } catch (_) {}
     if (!down) return;
     const from = stagePoint(down.x, down.y);
     const to = stagePoint(e.clientX, e.clientY);
     const dragged = Math.hypot(e.clientX - down.x, e.clientY - down.y) > 18;
     const held = Date.now() - down.t;
+    down = null;
     if (!from || !to) return;
     if (window.fxTap) window.fxTap();
     showTapRipple(to.localX, to.localY);
     // A drag on the picture is a swipe on the phone. Without it the panel
     // could tap but not scroll, which makes most apps unusable remotely.
-    const mode = deviceState.kind === "desktop"
-      ? (down.button === 2 ? "right" : (deviceState.clickMode || "left")) : "left";
     const r = dragged
       ? await deviceAction({ action: "swipe", x1: from.x, y1: from.y, x2: to.x, y2: to.y,
                              ms: Math.max(80, Math.min(held, 800)) })
-      : await deviceAction({ action: "tap", x: to.x, y: to.y,
-                             button: mode === "right" ? "right" : "left",
-                             clicks: mode === "double" ? 2 : 1 });
+      : await deviceAction({ action: "tap", x: to.x, y: to.y });
     if (!r.ok) deviceSay(r.error, true);
     // No refresh call: the stream shows the result on its own. That is most
     // of what "zu langsam" was - every tap used to be followed by a second
     // and a half of waiting for a new still.
     if (!deviceState.live) refreshStill();
   });
-  const cancel = (e) => {
-    if (deviceState.pointer && (!e || deviceState.pointer.id === e.pointerId)) {
-      deviceState.pointer = null;
-    }
-  };
-  stage.addEventListener("pointercancel", cancel);
-  stage.addEventListener("lostpointercapture", cancel);
-  stage.addEventListener("contextmenu", (e) => e.preventDefault());
-  stage.addEventListener("wheel", async (e) => {
-    e.preventDefault();
-    const at = stagePoint(e.clientX, e.clientY);
-    if (!at) return;
-    let r;
-    if (deviceState.kind === "desktop") {
-      const dy = Math.max(-1200, Math.min(1200, -Math.round(e.deltaY * 3)));
-      r = await deviceAction({ action: "scroll", dy, x: at.x, y: at.y });
-    } else {
-      const distance = Math.max(-700, Math.min(700, Math.round(e.deltaY * 2)));
-      r = await deviceAction({ action: "swipe", x1: at.x, y1: at.y,
-                               x2: at.x, y2: Math.max(0, Math.min(deviceState.height, at.y - distance)),
-                               ms: 220 });
-    }
-    if (!r.ok) deviceSay(r.error, true);
-  }, { passive: false });
 }
 
 function showTapRipple(x, y) {
@@ -2015,10 +1953,6 @@ function renderStageBar() {
     <button class="chip ${deviceState.live ? "" : "on"}" id="st-still">Standbild</button>
     <button class="chip" id="st-full">${fs ? "Verlassen" : "Vollbild"}</button>
     <button class="chip ${deviceState.sharp ? "on" : ""}" id="st-sharp">Schärfer</button>
-    ${deviceState.kind === "desktop" ? `
-      <button class="chip ${(deviceState.clickMode || "left") === "left" ? "on" : ""}" data-clickmode="left">Klick</button>
-      <button class="chip ${deviceState.clickMode === "right" ? "on" : ""}" data-clickmode="right">Rechtsklick</button>
-      <button class="chip ${deviceState.clickMode === "double" ? "on" : ""}" data-clickmode="double">Doppelklick</button>` : ""}
     ${deviceState.actions.includes("record")
       ? `<button class="chip" id="st-rec">8s aufnehmen</button>` : ""}`;
   // In fullscreen the controls float over the picture, because the page they
@@ -2045,10 +1979,6 @@ function renderStageBar() {
     stopStream();
     startStream();
   });
-  host.querySelectorAll("[data-clickmode]").forEach((b) => b.addEventListener("click", () => {
-    deviceState.clickMode = b.dataset.clickmode;
-    renderStageBar();
-  }));
   host.querySelector("#st-rec")?.addEventListener("click", async () => {
     deviceSay("nimmt auf …");
     const r = await deviceAction({ action: "record", seconds: 8 });
@@ -2073,24 +2003,18 @@ function ensureFsBar() {
 }
 
 function renderDeviceControls() {
-  const noun = deviceState.kind === "desktop" ? "dem Laptop"
-    : (deviceState.kind === "headset" ? "der Brille" : "dem Handy");
   const el = document.getElementById("device-controls");
   el.innerHTML = `
     <div class="chip-row">
-      ${deviceState.kind === "desktop" ? `
-        <button class="chip" data-key="esc">Esc</button>
-        <button class="chip" data-key="tab">Tab</button>
-        <button class="chip" data-key="backspace">Löschen</button>` : `
-        <button class="chip" data-key="back">Zurück</button>
-        <button class="chip" data-key="home">Home</button>
-        <button class="chip" data-key="recents">Apps</button>
-        <button class="chip" data-key="wake">Wecken</button>
-        <button class="chip" data-key="sleep">Sperren</button>`}
+      <button class="chip" data-key="back">Zurück</button>
+      <button class="chip" data-key="home">Home</button>
+      <button class="chip" data-key="recents">Apps</button>
+      <button class="chip" data-key="wake">Wecken</button>
+      <button class="chip" data-key="sleep">Sperren</button>
       <button class="chip" data-key="enter">Enter</button>
     </div>
     <div class="inline-form">
-      <input id="dev-text" type="text" placeholder="Text auf ${noun} tippen…" autocomplete="off">
+      <input id="dev-text" type="text" placeholder="Text auf ${deviceState.kind === "headset" ? "der Brille" : "dem Handy"} tippen…" autocomplete="off">
       <button class="pill-btn" id="dev-send">Senden</button>
     </div>`;
   el.querySelectorAll("[data-key]").forEach((b) => b.addEventListener("click", async () => {

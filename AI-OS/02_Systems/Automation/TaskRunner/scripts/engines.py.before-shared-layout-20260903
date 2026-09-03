@@ -33,9 +33,6 @@ queue and its agent routing. The caller picks a name and a model.
 Stdlib only.
 """
 import json
-import contextlib
-import fcntl
-import hashlib
 import os
 import re
 import shlex
@@ -260,8 +257,6 @@ def in_flight():
             if not name.endswith(".meta"):
                 continue
             job_id = name[:-len(".meta")]
-            if job_id.startswith('task_web_'):
-                continue  # worker tasks have their own queue/status, not CLI jobs
             # Ein fertiges .json heisst fertig, egal was der Prozess macht.
             if os.path.exists(os.path.join(directory, f"{job_id}.json")):
                 continue
@@ -407,8 +402,7 @@ def catalogue():
 
 
 def send(engine, message, model=None, thread=None, session=None, fallback=True,
-        conversation_id=None, _record_input=True, read_only=False,
-        _input_seq=None, _visited=None):
+        conversation_id=None, _record_input=True, read_only=False):
     """Ask one engine. -> a ticket that result() can collect.
 
     If that engine is already known to be out - it refused within the last
@@ -417,11 +411,13 @@ def send(engine, message, model=None, thread=None, session=None, fallback=True,
     minutes ago is not respecting a choice, it is wasting a turn.
 
     conversation_id, when given, must already exist (created through
-    conversation_store.create() / POST /api/conversations). Each provider
-    resumes its own native session and receives only missing shared turns;
-    the worker receives bounded recent history without a second memory layer.
-    Internal handoffs reuse the recorded input sequence rather than appending
-    another copy. Job metadata preserves that identity across browser reloads."""
+    conversation_store.create() / POST /api/conversations). It does two
+    things: non-Claude engines get the conversation's recent turns prepended
+    as bounded context (they have no memory of their own - Claude does, via
+    its native session), and the user's turn is recorded once. _record_input
+    is False only on the internal recursive calls this function makes to
+    itself (a limit handoff) - the turn was already recorded by the call
+    that discovered the limit, and recording it again would duplicate it."""
     spec = ENGINES.get(engine)
     if read_only and engine not in ("google-pro", "codex"):
         raise ValueError(f"{engine} has no capability-restricted review mode")
@@ -434,21 +430,9 @@ def send(engine, message, model=None, thread=None, session=None, fallback=True,
     if conversation_id and not conversation_store.exists(conversation_id):
         raise ValueError(f"unbekannte conversation_id: {conversation_id!r}")
 
-    message = (message or "").strip()
-    if not message:
-        raise ValueError("leere Nachricht")
-    model = model or spec["default_model"]
-    if model not in spec["models"]:
-        raise ValueError(f"{spec['label']} kennt das Modell {model!r} nicht")
-    visited = list(dict.fromkeys(list(_visited or []) + [engine]))
-    if conversation_id and _record_input:
-        record = conversation_store.append(conversation_id, "user", message)
-        _input_seq = record['messages'][-1]['seq']
-
     row = limited(engine) if fallback else None
     if row:
-        excluded = visited + (["claude", "aios"] if read_only else [])
-        nxt = next_engine(engine, exclude=excluded)
+        nxt = next_engine(engine)
         if nxt:
             note = (f"{spec['label']} ist am Limit"
                     + (f" (zurück {row['resets']})" if row.get("resets") else "")
@@ -456,32 +440,34 @@ def send(engine, message, model=None, thread=None, session=None, fallback=True,
             _tell_felix(note + f"\n\nFrage: {message.strip()[:300]}")
             ticket = send(nxt, message, thread=thread, fallback=False,
                          conversation_id=conversation_id, _record_input=False,
-                         read_only=read_only, _input_seq=_input_seq, _visited=visited)
+                         read_only=read_only)
             ticket["handed_off"] = {"from": engine, "to": nxt,
                                     "note": note, "limit": row}
             return ticket
+    message = (message or "").strip()
+    if not message:
+        raise ValueError("leere Nachricht")
+    model = model or spec["default_model"]
+    if model not in spec["models"]:
+        raise ValueError(f"{spec['label']} kennt das Modell {model!r} nicht")
+
     outgoing = message
-    briefing_hash = None
     if conversation_id:
-        native = conversation_store.native_session(conversation_id, engine)
-        # Never resume a session from a different provider or a client-supplied
-        # stale browser value. The server owns this mapping.
-        session = native.get('id')
-        context = conversation_store.format_context(conversation_id, engine, _input_seq)
-        parts = []
-        if engine != 'aios':  # the worker already loads the standing core
-            briefing = shared_briefing.system_instruction(include_activity=False)
-            briefing_hash = hashlib.sha256(briefing.encode('utf-8')).hexdigest()
-            if not session or native.get('briefing_hash') != briefing_hash:
-                parts.append(briefing)
-        if context:
-            parts.append(context)
-        parts.append(f"## Felix's current request\n{message}")
-        outgoing = '\n\n'.join(parts)
+        record = conversation_store.read(conversation_id)
+        session = session or ((record or {}).get("session_id") or None)
+
+        if engine == "aios":
+            # aios is a one-shot call, and this bounded block IS its
+            # memory of the conversation so far.
+            context = conversation_store.format_context(conversation_id)
+            if context:
+                outgoing = f"{context}\n\n## Neue Nachricht\n{message}"
+        if _record_input:
+            conversation_store.append(conversation_id, "user", message)
 
     if engine == "claude":
         ticket = {"engine": "claude",
-                 "job": claude_chat.send(session or "", outgoing, model=model)}
+                 "job": claude_chat.send(session or "", message, model=model)}
     elif engine == "google-pro":
         ticket = {"engine": "google-pro", "job": _spawn(
             "gpro",
@@ -489,8 +475,7 @@ def send(engine, message, model=None, thread=None, session=None, fallback=True,
                 "python3", os.path.join(SCRIPT_DIR, "antigravity_chat.py"),
                 "--json", "--model", model, "--prompt-file", prompt_path] + 
                 (["--read-only"] if read_only else []) +
-                (["--no-briefing"] if conversation_id else []) +
-                (["--conversation", session] if session else []),
+                (["--conversation", session, "--continue"] if session else []),
             outgoing, meta={"model": model, "thread": thread, "session_id": session}, cwd=claude_chat.PROJECT_DIR)}
     elif engine == "codex":
         ticket = {"engine": "codex", "job": _spawn(
@@ -499,47 +484,33 @@ def send(engine, message, model=None, thread=None, session=None, fallback=True,
                 "python3", os.path.join(SCRIPT_DIR, "codex_chat.py"),
                 "--json", "--model", model, "--prompt-file", prompt_path] + 
                 (["--read-only"] if read_only else []) +
-                (["--no-briefing"] if conversation_id else []) +
                 (["--resume", session] if session else []),
             outgoing, meta={"model": model, "session_id": session}, cwd=claude_chat.PROJECT_DIR)}
     else:
         # aios: the same task file dispatch_task.py and telegram_bridge.py
         # write.
-        ticket = {"engine": "aios", "job": _aios_send(outgoing, thread, model,
-                          managed=bool(conversation_id), original_message=message,
-                          conversation_id=conversation_id)}
-    if conversation_id or engine != 'aios':
-        _update_meta(engine, ticket['job'], {
-            'message': message, 'conversation_id': conversation_id,
-            'input_seq': _input_seq, 'briefing_hash': briefing_hash,
-            'thread': thread, 'read_only': read_only, 'visited': visited})
+        ticket = {"engine": "aios", "job": _aios_send(outgoing, thread, model)}
     ticket["conversation_id"] = conversation_id
     return ticket
 
 
-def _aios_send(message, thread, model, managed=False, original_message=None, conversation_id=None):
+def _aios_send(message, thread, model):
     import agents
     import memory
     agent = None
-    original = original_message if managed else message
-    if original and original.startswith("@"):
-        head, _, rest = original.partition(" ")
+    if message.startswith("@"):
+        head, _, rest = message.partition(" ")
         resolved = agents.resolve(head)
         if resolved:
-            agent = resolved
-            if not rest.strip():
-                raise ValueError("nach dem @agent-Präfix steht nichts")
-            if not managed:
-                message = rest.strip()
+            agent, message = resolved, rest.strip()
     if not message:
         raise ValueError("nach dem @agent-Präfix steht nichts")
-    memory_thread = f"web_{conversation_id if managed else (thread or 'engine')}"
+    memory_thread = f"web_{thread or 'engine'}"
     # The thread directive must stay the very first thing in the file -
     # aios_runner.py's parser only recognises it anchored at position 0 - so
     # anything else added here goes after it and after the agent directive,
     # never before.
     body = (memory.directive(memory_thread)
-            + ('<!-- shared-history -->\n' if managed else '')
             + (agents.directive(agent) if agent else ""))
     # The worker reads its model preference from the task itself, so "free"
     # and "paid" are a line in the file rather than a second code path.
@@ -548,7 +519,7 @@ def _aios_send(message, thread, model, managed=False, original_message=None, con
     # aios_runner.py loads Knowledge_Core.md itself but knows nothing of the
     # shared event journal - unlike codex/google-pro, which pick it up
     # automatically through shared_briefing.prepend() inside their own ask().
-    activity = "" if managed else shared_briefing.recent_activity()
+    activity = shared_briefing.recent_activity()
     if activity:
         body += activity + "\n\n"
     body += message
@@ -575,50 +546,16 @@ def _raw_result(engine, job):
 
 def job_message(engine, job):
     """What was originally asked. -> the text, or ""."""
-    return _read_meta(engine, job).get('message', '')
-
-
-def _meta_path(engine, job):
-    valid = (re.fullmatch(r'task_web_[\w.-]{1,60}\.md', job or '')
-             if engine == 'aios' else JOB_RE.fullmatch(job or ''))
-    if engine not in ENGINES or not valid:
-        raise ValueError('ungültige Engine oder Job-ID')
-    return (os.path.join(claude_chat.JOBS_DIR, f'{job}.meta')
-            if engine == 'claude' else _paths(job)['meta'])
-
-
-def _read_meta(engine, job):
+    meta = (os.path.join(TASK_RUNNER_DIR, "claude_jobs", f"{job}.meta")
+            if engine == "claude" else _paths(job)["meta"])
     try:
-        with open(_meta_path(engine, job), encoding='utf-8') as f:
-            return json.load(f)
+        with open(meta, encoding="utf-8") as f:
+            return json.load(f).get("message", "")
     except (OSError, json.JSONDecodeError):
-        return {}
+        return ""
 
 
-def _update_meta(engine, job, values):
-    path = _meta_path(engine, job)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    meta = _read_meta(engine, job)
-    meta.update(values)
-    with open(path + '.part', 'w', encoding='utf-8') as f:
-        json.dump(meta, f, ensure_ascii=False)
-    os.replace(path + '.part', path)
-
-
-@contextlib.contextmanager
-def _job_lock(engine, job):
-    path = _meta_path(engine, job) + '.lock'
-    with conversation_store._lock_for('job:' + engine + ':' + job):
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, 'a') as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock, fcntl.LOCK_UN)
-
-
-def _record_conversation(engine, job, res, conversation_id, meta=None):
+def _record_conversation(engine, job, res, conversation_id):
     """Idempotent on job (append() itself dedupes by job_id) - a client that
     polls the same finished ticket twice, or a browser and a background
     watcher racing the same job, must never produce two stored replies.
@@ -628,17 +565,10 @@ def _record_conversation(engine, job, res, conversation_id, meta=None):
     next turn teaches nothing and wastes the budget a real turn needs."""
     if not conversation_id or not res.get("ready") or not res.get("ok"):
         return
-    meta = meta or {}
-    if meta.get('recorded'):
-        return
     conversation_store.append(conversation_id, "assistant", res.get("reply") or "",
-                              job_id=job, model=res.get("model"), engine=engine,
-                              session_id=res.get('session_id'))
+                              job_id=job, model=res.get("model"))
     if res.get("session_id"):
-        conversation_store.set_session_id(
-            conversation_id, res['session_id'], engine=engine,
-            seen_seq=meta.get('input_seq'), briefing_hash=meta.get('briefing_hash'))
-    _update_meta(engine, job, {'recorded': True})
+        conversation_store.set_session_id(conversation_id, res["session_id"])
     try:
         import knowledge_store
         knowledge_store.save(conversation_id, engine, text=None, source="auto")
@@ -652,23 +582,9 @@ def result(engine, job, fallback=True, notify=True, conversation_id=None):
     The handoff returns a NEW ticket rather than an answer: the next engine
     has only just been asked. The caller follows the engine/job it gets back,
     which is the same thing it was already doing."""
-    with _job_lock(engine, job):
-        return _result_locked(engine, job, fallback, notify, conversation_id)
-
-
-def _result_locked(engine, job, fallback, notify, conversation_id):
-    meta = _read_meta(engine, job)
-    stored_id = meta.get('conversation_id')
-    if stored_id and conversation_id and stored_id != conversation_id:
-        raise ValueError('Job gehört zu einem anderen Gespräch')
-    conversation_id = stored_id or conversation_id
-    if meta.get('handoff'):
-        return meta['handoff']
     res = _raw_result(engine, job)
-    res['conversation_id'] = conversation_id
-    res['engine'] = engine
     if not (res.get("ready") and not res.get("ok") and is_limit(res.get("error"))):
-        _record_conversation(engine, job, res, conversation_id, meta)
+        _record_conversation(engine, job, res, conversation_id)
         return res
 
     row = mark_limited(engine, res.get("error"))
@@ -676,8 +592,7 @@ def _result_locked(engine, job, fallback, notify, conversation_id):
         _record_conversation(engine, job, res, conversation_id)
         return res
     message = job_message(engine, job)
-    excluded = list(meta.get('visited') or []) + (["claude", "aios"] if meta.get('read_only') else [])
-    nxt = next_engine(engine, exclude=excluded)
+    nxt = next_engine(engine)
     if not nxt or not message:
         # Nowhere to go, or nothing left to re-ask. Say which, rather than
         # reporting the original refusal as if nothing had been tried.
@@ -691,9 +606,7 @@ def _result_locked(engine, job, fallback, notify, conversation_id):
 
     try:
         ticket = send(nxt, message, thread=_job_thread(engine, job),
-                      conversation_id=conversation_id, _record_input=False,
-                      _input_seq=meta.get('input_seq'), _visited=excluded + [engine],
-                      read_only=bool(meta.get('read_only')))
+                      conversation_id=conversation_id, _record_input=False)
     except ValueError as e:
         res["limit"] = row
         res["error"] = f"{ENGINES[engine]['label']} am Limit, {nxt} auch nicht möglich: {e}"
@@ -705,16 +618,20 @@ def _result_locked(engine, job, fallback, notify, conversation_id):
             + f" — {ENGINES[nxt]['label']} übernimmt.")
     if notify:
         _tell_felix(note + f"\n\nFrage: {message[:300]}")
-    handoff = {"ready": False, "handed_off": {"from": engine, "to": ticket['engine'],
+    return {"ready": False, "handed_off": {"from": engine, "to": nxt,
                                            "note": note, "limit": row},
-            "engine": ticket['engine'], "job": ticket["job"], "elapsed": 0,
+            "engine": nxt, "job": ticket["job"], "elapsed": 0,
             "conversation_id": conversation_id}
-    _update_meta(engine, job, {'handoff': handoff})
-    return handoff
 
 
 def _job_thread(engine, job):
-    return _read_meta(engine, job).get('thread')
+    meta = (os.path.join(TASK_RUNNER_DIR, "claude_jobs", f"{job}.meta")
+            if engine == "claude" else _paths(job)["meta"])
+    try:
+        with open(meta, encoding="utf-8") as f:
+            return json.load(f).get("thread")
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def _tell_felix(text):
@@ -733,10 +650,7 @@ def _aios_result(task_id):
     log_path = os.path.join(LOGS, f"{task_id}.log")
     if os.path.exists(log_path):
         with open(log_path, encoding="utf-8") as f:
-            reply = f.read().strip()
-        failed = not reply or reply.startswith('ERROR')
-        return {"ready": True, "ok": not failed, "reply": reply,
-                "error": (reply or 'leere Worker-Antwort') if failed else None}
+            return {"ready": True, "ok": True, "reply": f.read().strip()}
     queued = os.path.join(INBOX, task_id)
     running = os.path.join(TASK_RUNNER_DIR, "tasks", "completed", task_id)
     if not os.path.exists(queued) and not os.path.exists(running):

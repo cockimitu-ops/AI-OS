@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>AI-OS · Malschicht (Prototyp)</title>
+<!--
+  PROTOTYP - steht neben der App, verändert sie nicht.
+
+  Was hier anders ist als in fx.js:
+
+  fx.js malt 42 weiche Farbkreise auf ein Achtel der Auflösung und skaliert
+  das hoch. Das Hochskalieren IST dort die Technik, und es löscht jede Kante -
+  deshalb kommt ein Farbfeld heraus und keine Malerei.
+
+  Hier wird stattdessen wirklich gestrichen:
+
+  1. BORSTEN. Ein Pinselstrich ist kein Fleck, sondern 4-7 parallele Linien
+     mit Lücken dazwischen. Diese Striemen sind das, woran das Auge einen
+     Borstenpinsel erkennt. Jede Borste bekommt einen leicht anderen Ton -
+     das ist Monets "couleur rompue": ungemischte Farben nebeneinander, die
+     sich erst im Auge mischen. Er hat Grau nie angerührt, sondern Blau neben
+     Orange gelegt.
+
+  2. IMPASTO. Die Farbe steht auf der Leinwand. Deshalb wird jeder Strich
+     dreimal gemalt: ein abgedunkelter Schatten leicht nach unten-rechts, der
+     Körper, und ein aufgehellter Grat nach oben-links. Das ist Relief ohne
+     3D, ohne WebGL.
+
+  3. RICHTUNG. Striche folgen der Form, nie dem Zufall: Wasser waagerecht,
+     Spiegelungen senkrecht, Himmel in langen Bögen. Ein Strömungsfeld gibt
+     jedem Strich seinen Winkel.
+
+  4. LEINWAND. Grobes Leinen, einmal erzeugt, das in den dünnen Stellen
+     durchscheint - und eine Grundierung, die zwischen den Strichen sichtbar
+     bleibt. Genau das macht Monets Bilder hell.
+
+  5. STILLSTAND. Ein Gemälde bewegt sich nicht. Was sich bewegt, ist das
+     Licht darauf: kippe das Handy und der Grat der Farbe fängt es. Deshalb
+     ist das Bild EINMAL gerendert und liegt in drei Ebenen (Körper, Grat,
+     Schatten) - pro Bild kostet es drei drawImage statt tausend Striche.
+     Das ist zugleich schöner und billiger als das Driften bisher.
+-->
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: #14161f; }
+  body {
+    font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    color: var(--ink, #fff);
+    touch-action: none;
+  }
+  #stage { position: fixed; inset: 0; }
+  #stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+  /* Die Leinwandnarbe liegt über allem, auch über der Oberfläche - eine
+     Struktur, die nur hinter den Panels läge, wäre eine Tapete, keine
+     Leinwand, auf der das Bild gemalt ist. */
+  #weave {
+    position: fixed; inset: 0; z-index: 40; pointer-events: none;
+    mix-blend-mode: var(--weave-blend, multiply);
+    opacity: var(--weave-op, 0.5);
+  }
+
+  .ui { position: relative; z-index: 30; height: 100%;
+        display: flex; flex-direction: column; padding: 22px 18px;
+        padding-top: max(22px, env(safe-area-inset-top));
+        gap: 14px; }
+
+  h1 { font-size: 13px; letter-spacing: .18em; text-transform: uppercase;
+       font-weight: 600; opacity: .75; }
+  .ref { font-size: 12px; opacity: .6; font-style: italic; }
+
+  /* Gesso statt Glas: eine matte, grundierte Tafel. Kein backdrop-filter,
+     keine Spiegelung - Papier auf Leinwand, nicht Glas darüber. Der Rand ist
+     oben hell und unten dunkel, wie eine Kante, auf der Farbe liegt. */
+  .panel {
+    background: var(--gesso);
+    border-radius: 3px;
+    padding: 14px 16px;
+    box-shadow:
+      inset 0 1px 0 var(--gesso-lit),
+      inset 0 -1px 0 var(--gesso-dim),
+      0 2px 10px -4px rgba(0,0,0,.4);
+  }
+  .panel h2 { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  .panel p { font-size: 13px; opacity: .78; }
+
+  .spacer { flex: 1; }
+
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  button {
+    font: inherit; font-size: 13px; color: inherit; cursor: pointer;
+    background: var(--gesso); border: 0; border-radius: 3px;
+    padding: 9px 13px;
+    box-shadow: inset 0 1px 0 var(--gesso-lit), inset 0 -1px 0 var(--gesso-dim);
+  }
+  button[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .hint { font-size: 12px; opacity: .55; }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <canvas id="shadow"></canvas>
+  <canvas id="body-l"></canvas>
+  <canvas id="ridge"></canvas>
+</div>
+<canvas id="weave"></canvas>
+
+<!-- Weitere Motive, getrennt gehalten, damit zwei Leute gleichzeitig daran
+     arbeiten können. Fehlt die Datei, malt die Seite ohne sie weiter: der
+     Lader unten prüft window.MOTIFS, bevor er etwas davon aufruft. -->
+<script src="paint-motifs.js" onerror="console.info('paint-motifs.js fehlt - male ohne die Zusatzmotive')"></script>
+
+<div class="ui">
+  <h1 id="title">Malschicht</h1>
+  <div class="ref" id="ref"></div>
+
+  <div class="panel">
+    <h2>Lesbarkeit auf Farbe</h2>
+    <p>Eine Tafel wie diese trägt den Text. Matt grundiert, nicht Glas —
+       Kante oben hell, unten dunkel, so als läge Farbe darauf.</p>
+  </div>
+
+  <div class="panel">
+    <h2>Kipp das Handy</h2>
+    <p>Der Grat der Farbe fängt das Licht. Das Bild bleibt stehen — nur die
+       Beleuchtung wandert. Ohne Sensor: mit dem Finger über den Schirm.</p>
+  </div>
+
+  <div class="spacer"></div>
+
+  <div class="row" id="lights"></div>
+  <div class="row">
+    <button id="repaint">Neu malen</button>
+    <button id="toggle-relief" aria-pressed="true">Relief</button>
+    <button id="toggle-weave" aria-pressed="true">Leinen</button>
+  </div>
+  <div class="hint" id="stat"></div>
+</div>
+
+<script>
+(() => {
+"use strict";
+
+// --- die Lichter ----------------------------------------------------------
+//
+// Jedes ist ein konkretes Bild, nicht eine Stimmung. Die Pigmente sind
+// ungemischt: Monet legte Blau neben Orange, statt Grau anzurühren.
+// "accent" ist die eine hohe Chroma-Note, die sparsam gesetzt wird - das
+// Orange der Sonne im Hafennebel ist auf der ganzen Leinwand ein Fingernagel
+// groß und trägt trotzdem das Bild.
+
+// Jedes Licht ist jetzt eine KOMPOSITION, nicht nur eine Palette:
+//
+//   horizon  wo die Trennlinie liegt (0 = oben, 1 = unten)
+//   sky      die Pigmente oberhalb, water die unterhalb - denn Himmel und
+//            Wasser sind nie dieselben Farben, auch wenn eines das andere
+//            spiegelt
+//   haze     wohin beide Zonen zum Horizont hin verblassen (Luftperspektive:
+//            was weit weg ist, verliert Sättigung an die Luft dazwischen)
+//   scene    welche Motive in welcher Reihenfolge daraufkommen
+//
+// Das ist der Unterschied zwischen "Textur mit einem Objekt darin" und einem
+// Bild: ohne Horizont gibt es kein Vorn und Hinten, und ohne das bleibt jede
+// Fläche gleich weit weg.
+
+const LIGHTS = {
+  dawn: {
+    label: "Morgen",
+    ref: "Impression, soleil levant (1872) — Hafen von Le Havre im Nebel",
+    ground: [188, 192, 196],
+    horizon: 0.46,
+    sky:   [[198,202,208],[182,188,200],[206,202,196],[190,194,204],[172,180,196]],
+    water: [[132,150,166],[150,166,180],[120,138,152],[164,158,176],[142,154,170]],
+    haze:  [[202,206,210]], hazeAmt: 0.65,   // Hafen, offene See: viel Luft dazwischen
+    pigments: [[150,166,180],[178,180,192],[196,190,188],[132,150,166],
+               [206,202,196],[164,158,176],[120,138,152]],
+    accent:  [[214,108,52],[226,140,72]],
+    // Niedrig gehalten: die Sonnenscheibe ist die einzige konzentrierte
+    // Akzentfläche im Bild. Streute die freie Textur genauso viel Orange
+    // wie sonst, gäbe es ein Dutzend kleiner "Sonnen" statt einer.
+    accentRate: 0.015,
+    flow: { base: -0.06, amp: 0.22, fx: 1.6, fy: 0.7 },
+    ink: "#1b2029", gesso: "rgba(238,240,242,.80)",
+    gessoLit: "rgba(255,255,255,.9)", gessoDim: "rgba(70,80,95,.16)",
+    weaveBlend: "multiply", weaveOp: 0.5,
+    scene: ["cliff", "sun", "sailboats"],
+  },
+  day: {
+    label: "Mittag",
+    ref: "Le Bassin aux nymphéas (1899) — Japanische Brücke über dem Teich",
+    ground: [226, 220, 200],
+    // Bei der Brücken-Fassung ist fast alles Wasser, und oben steht nur die
+    // Uferböschung mit dem Laub - kein offener Himmel. Trotzdem nicht höher
+    // als hier: darüber sitzt im fertigen Client die Oberfläche, und ein
+    // Ufer hinter einem Panel ist ein Ufer, das niemand sieht.
+    horizon: 0.50,
+    sky:   [[92,132,112],[104,140,96],[168,186,132],[128,158,104],[86,116,92]],
+    water: [[74,116,140],[126,150,178],[104,140,96],[142,124,160],[96,134,150]],
+    haze:  [[206,210,186]], hazeAmt: 0.16,   // Teich, alles nah: fast kein Dunst
+    pigments: [[104,140,96],[74,116,140],[168,186,132],[126,150,178],
+               [214,206,172],[142,124,160],[92,132,112]],
+    accent:  [[226,138,150],[240,214,96]],
+    accentRate: 0.05,
+    flow: { base: 0.0, amp: 0.13, fx: 2.1, fy: 0.5 },
+    ink: "#1e2118", gesso: "rgba(246,243,231,.80)",
+    gessoLit: "rgba(255,255,255,.92)", gessoDim: "rgba(60,66,44,.16)",
+    weaveBlend: "multiply", weaveOp: 0.55,
+    scene: ["poplars", "bridge", "willow", "pond"],
+  },
+  dusk: {
+    label: "Abend",
+    ref: "Le Parlement, coucher de soleil — Rosé, Violett, Gold",
+    ground: [196, 158, 148],
+    horizon: 0.56,
+    sky:   [[232,190,150],[226,170,96],[212,132,120],[236,200,170],[204,146,132]],
+    water: [[150,110,146],[120,104,150],[96,88,130],[168,126,132],[132,102,140]],
+    haze:  [[236,196,168]], hazeAmt: 0.55,   // Fluss, Stadt am anderen Ufer
+    pigments: [[212,132,120],[150,110,146],[226,170,96],[120,104,150],
+               [232,190,150],[168,126,132],[96,88,130]],
+    accent:  [[240,88,64],[252,206,110]],
+    accentRate: 0.05,
+    flow: { base: 0.10, amp: 0.30, fx: 1.2, fy: 1.1 },
+    ink: "#241a1c", gesso: "rgba(250,238,232,.78)",
+    gessoLit: "rgba(255,255,255,.9)", gessoDim: "rgba(80,50,50,.18)",
+    weaveBlend: "multiply", weaveOp: 0.5,
+    scene: ["cathedral", "spires", "sun", "sailboats"],
+  },
+  night: {
+    label: "Nacht",
+    ref: "Nymphéas, effet du soir — Preußischblau, tiefes Violett",
+    ground: [20, 26, 40],
+    // Die späten Seerosenbilder haben überhaupt keinen Horizont mehr - nur
+    // Wasseroberfläche. Er steht deshalb hoch, aber nicht so hoch, dass das
+    // Ufer hinter der Oberfläche verschwindet.
+    horizon: 0.40,
+    sky:   [[26,58,78],[22,52,66],[38,30,58],[30,48,70]],
+    water: [[28,42,72],[46,36,74],[16,22,38],[58,48,88],[24,50,68]],
+    haze:  [[46,58,86]], hazeAmt: 0.20,      // Teich bei Nacht: nah, aber dunstig
+    pigments: [[28,42,72],[46,36,74],[22,52,66],[16,22,38],
+               [58,48,88],[26,58,78],[38,30,58]],
+    accent:  [[92,150,150],[150,130,90]],
+    accentRate: 0.05,
+    flow: { base: 0.02, amp: 0.16, fx: 1.8, fy: 0.6 },
+    ink: "#eef2fb", gesso: "rgba(30,38,58,.72)",
+    gessoLit: "rgba(150,170,210,.22)", gessoDim: "rgba(0,0,0,.35)",
+    weaveBlend: "overlay", weaveOp: 0.35,
+    scene: ["poplars", "willow", "pond-dim"],
+  },
+};
+
+function lightForHour(h) {
+  if (h >= 22 || h < 6) return "night";
+  if (h < 9) return "dawn";
+  if (h < 17) return "day";
+  return "dusk";
+}
+
+const shadowC = document.getElementById("shadow");
+const bodyC   = document.getElementById("body-l");
+const ridgeC  = document.getElementById("ridge");
+const weaveC  = document.getElementById("weave");
+const layers  = [shadowC, bodyC, ridgeC];
+
+let W = 0, H = 0, dpr = 1;
+// ?light=day etc. for taking a screenshot of an hour without waiting for it.
+const forcedLight = new URLSearchParams(location.search).get("light");
+let name = (forcedLight && LIGHTS[forcedLight]) ? forcedLight : lightForHour(new Date().getHours());
+let L = LIGHTS[name];
+let relief = true, weaveOn = true;
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp255 = (v) => v < 0 ? 0 : v > 255 ? 255 : v;
+const shade = (c, k) => [clamp255(c[0]*k), clamp255(c[1]*k), clamp255(c[2]*k)];
+// Zwei Farben mischen. Für die Luftperspektive: je weiter hinten, desto mehr
+// Dunst zwischen Auge und Sache, desto weiter rückt die Farbe zum Dunst hin.
+const mix = (a, b, t) =>
+  [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t];
+const one = (arr) => arr[Math.random() * arr.length | 0];
+const rgba = (c, a) => `rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a})`;
+
+// --- das Strömungsfeld ----------------------------------------------------
+//
+// Der Winkel eines Strichs an einer Stelle. Monets Striche folgen der Form:
+// Wasser waagerecht, Spiegelungen senkrecht. Ein einziges Feld reicht, damit
+// tausend Striche zusammen eine Oberfläche ergeben statt Konfetti.
+
+function flowAngle(x, y) {
+  const f = L.flow;
+  return f.base
+       + Math.sin(x * f.fx * Math.PI * 2 + y * 1.3) * f.amp
+       + Math.cos(y * f.fy * Math.PI * 2) * f.amp * 0.6;
+}
+
+// --- ein Strich -----------------------------------------------------------
+//
+// Kein Fleck: 4-7 parallele Borstenlinien mit Lücken. Jede bekommt ihren
+// eigenen Ton (Broken Colour) und leicht andere Länge, damit die Enden
+// ausfransen wie bei echtem Haar. Gemalt wird auf alle drei Ebenen zugleich:
+// Schatten, Körper, Grat - das ist das Impasto.
+
+// --- einreihen statt sofort zeichnen ---------------------------------------
+//
+// Ein ganzes Bild am Stück zu malen dauert auf dem Telefon mehrere Sekunden,
+// und solange steht alles. Deshalb zeichnet stroke() nicht selbst, sondern
+// legt den Strich in eine Schlange, die drain() über viele Frames verteilt
+// abarbeitet. Der Eingriff sitzt bewusst HIER und nicht in den einzelnen
+// Motiven: so wird auch alles aus paint-motifs.js automatisch häppchenweise
+// gemalt, ohne dass eine einzige Zeile darin davon wissen muss.
+
+let queue = null;
+
+function stroke(ctxs, x, y, len, wide, ang, col, alpha) {
+  if (queue) {
+    queue.push(() => drawStroke(ctxs, x, y, len, wide, ang, col, alpha));
+    return;
+  }
+  drawStroke(ctxs, x, y, len, wide, ang, col, alpha);
+}
+
+function drawStroke(ctxs, x, y, len, wide, ang, col, alpha) {
+  const [sctx, bctx, rctx] = ctxs;
+  const n = 4 + (Math.random() * 4 | 0);
+  const step = wide / n;
+  const cos = Math.cos(ang), sin = Math.sin(ang);
+  // Leichte Krümmung: ein Handgelenk zieht keine Geraden.
+  const bow = rand(-0.22, 0.22) * len;
+
+  for (let i = 0; i < n; i++) {
+    const off = (i - (n - 1) / 2) * step;
+    const ox = -sin * off, oy = cos * off;
+    // Borsten fransen an den Enden unterschiedlich weit aus.
+    const l = len * rand(0.72, 1.0);
+    const x0 = x - cos * l / 2 + ox, y0 = y - sin * l / 2 + oy;
+    const x1 = x + cos * l / 2 + ox, y1 = y + sin * l / 2 + oy;
+    const mx = (x0 + x1) / 2 - sin * bow, my = (y0 + y1) / 2 + cos * bow;
+    // Jede Borste ein anderer Ton - das ist die eigentliche Farbmischung.
+    const jitter = rand(0.86, 1.14);
+    const c = shade(col, jitter);
+    const bw = step * rand(0.55, 0.95);
+    const a = alpha * rand(0.75, 1.0);
+
+    const path = (cx) => {
+      cx.beginPath();
+      cx.moveTo(x0, y0);
+      cx.quadraticCurveTo(mx, my, x1, y1);
+      cx.stroke();
+    };
+
+    if (relief) {
+      sctx.lineWidth = bw * 1.15; sctx.lineCap = "round";
+      sctx.strokeStyle = rgba(shade(c, 0.55), a * 0.55);
+      sctx.save(); sctx.translate(1.1, 1.4); path(sctx); sctx.restore();
+    }
+
+    bctx.lineWidth = bw; bctx.lineCap = "round";
+    bctx.strokeStyle = rgba(c, a);
+    path(bctx);
+
+    if (relief) {
+      // Der Grat ist dünner als der Strich: Licht fängt sich auf der Kante,
+      // nicht auf der ganzen Breite.
+      rctx.lineWidth = bw * 0.42; rctx.lineCap = "round";
+      rctx.strokeStyle = rgba(shade(c, 1.5), a * 0.5);
+      rctx.save(); rctx.translate(-1.0, -1.3); path(rctx); rctx.restore();
+    }
+  }
+}
+
+// --- erkennbare Motive ------------------------------------------------------
+//
+// Textur allein bleibt abstrakt, wenn nichts eine Form hat, an der sich das
+// Auge festhalten kann. Jedes Licht bekommt daher ein konkretes Motiv aus
+// Monets eigenen Bildern - gemalt mit demselben Borstenstrich wie der Rest,
+// nicht als Vektorform obendrauf geklebt. Deshalb ruft jede Funktion hier
+// nur stroke() auf, nie fillRect/arc direkt.
+
+function lilyPad(ctxs, cx, cy, r, col) {
+  // Ein Seerosenblatt: ein Ring aus Strichen um den Mittelpunkt, mit einer
+  // ausgesparten Kerbe zur Mitte hin - die Kerbe ist es, an der jeder ein
+  // Seerosenblatt erkennt, nicht der Kreis selbst.
+  const notch = Math.random() * Math.PI * 2;
+  const notchWidth = rand(0.35, 0.55);
+  const rim = shade(col, 0.6);
+  const steps = 16;
+  for (let i = 0; i < steps; i++) {
+    const a = (i / steps) * Math.PI * 2;
+    let d = a - notch; d = ((d + Math.PI) % (Math.PI * 2)) - Math.PI;
+    if (Math.abs(d) < notchWidth / 2) continue;
+    const px = cx + Math.cos(a) * r, py = cy + Math.sin(a) * r * 0.55;
+    stroke(ctxs, px, py, r * rand(0.5, 0.75), r * rand(0.28, 0.4),
+           a + Math.PI / 2, col, rand(0.55, 0.85));
+    // Die Kante, dunkler und knapp innen - das macht aus einem Fleck ein Blatt.
+    stroke(ctxs, px * 0.94 + cx * 0.06, py * 0.94 + cy * 0.06,
+           r * 0.5, r * 0.14, a, rim, rand(0.4, 0.6));
+  }
+  // Manche Blätter tragen eine Blüte: ein paar helle Tupfer im Zentrum.
+  if (Math.random() < 0.32) {
+    const petal = Math.random() < 0.5 ? [252, 238, 244] : [250, 248, 232];
+    for (let i = 0; i < 6; i++) {
+      const a = Math.random() * Math.PI * 2;
+      stroke(ctxs, cx + Math.cos(a) * r * 0.14, cy + Math.sin(a) * r * 0.10,
+             r * 0.22, r * 0.12, a, petal, rand(0.7, 0.95));
+    }
+  }
+}
+
+function pond(ctxs, W, H, col, density = 1) {
+  // Seerosenteich: Blätter clustern in unregelmäßigen Gruppen in der unteren
+  // Bildhälfte statt in einem Raster - ein Raster wäre Tapete, kein Teich.
+  const clusters = Math.round((4 + Math.random() * 3) * density);
+  for (let c = 0; c < clusters; c++) {
+    const ccx = rand(0.06, 0.94) * W, ccy = rand(0.5, 0.95) * H;
+    const n = Math.round((2 + Math.random() * 4) * density);
+    for (let i = 0; i < n; i++) {
+      const px = ccx + rand(-1, 1) * W * 0.09, py = ccy + rand(-1, 1) * H * 0.05;
+      const r = Math.min(W, H) * rand(0.032, 0.062);
+      lilyPad(ctxs, px, Math.min(py, H * 0.97), r, shade(col, rand(0.85, 1.15)));
+    }
+  }
+}
+
+function sunDisc(ctxs, W, H, col) {
+  // Impression, Soleil Levant: eine satte, klar umrissene Scheibe tief am
+  // Horizont, darunter eine breite zitternde Spiegelsäule. Muss deutlich
+  // größer und dichter sein als jeder Strich der Umgebung, sonst verschwindet
+  // sie im übrigen Feld statt als DAS eine Motiv zu gelten, das das Bild trägt.
+  const cx = W * rand(0.44, 0.56), cy = H * rand(0.38, 0.44);
+  const r = Math.min(W, H) * 0.11;
+  // Kurze, dicke Tupfer an fast derselben Stelle, aus vielen Winkeln - das
+  // baut über Alpha-Stapelung eine fast geschlossene Scheibe auf, statt
+  // einzelne Striche erkennen zu lassen.
+  for (let i = 0; i < 30; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const jr = rand(0, r * 0.35);
+    stroke(ctxs, cx + Math.cos(a) * jr, cy + Math.sin(a) * jr * 0.6,
+           r * rand(0.9, 1.3), r * rand(1.1, 1.5), a, col, rand(0.55, 0.8));
+  }
+  // Ein dichter, heller Kern obendrauf - der eigentliche Blick in die Sonne.
+  const core = shade(col, 1.25);
+  for (let i = 0; i < 12; i++) {
+    const a = Math.random() * Math.PI * 2;
+    stroke(ctxs, cx, cy, r * 0.7, r * 0.9, a, core, rand(0.65, 0.9));
+  }
+  // Die Spiegelung: eine breite, wackelige senkrechte Säule aus waagerechten
+  // Tupfern, eng um die Mittelachse gehalten statt frei zu streuen, damit sie
+  // als EINE Säule liest statt als Streuung von Punkten.
+  for (let i = 0; i < 30; i++) {
+    const py = cy + r * 0.9 + (i / 30) * (H * 0.4);
+    const wob = Math.sin(i * 0.9) * r * 0.22 + rand(-r * 0.08, r * 0.08);
+    stroke(ctxs, cx + wob, py, r * rand(0.9, 1.6), r * rand(0.55, 0.85), 0, col,
+           rand(0.35, 0.6) * (1 - i / 34));
+  }
+}
+
+function spires(ctxs, W, H, col) {
+  // Le Parlement, coucher de soleil: eine gezackte Silhouette am Horizont,
+  // aus lauter kurzen senkrechten Strichen aufgebaut statt aus einer glatten
+  // Vektorform - so bleibt sie Farbe und wird nie ein Aufkleber.
+  const baseY = H * rand(0.56, 0.64);
+  const n = 9 + (Math.random() * 4 | 0);
+  for (let i = 0; i < n; i++) {
+    const x = (i / n) * W + rand(-10, 10);
+    const h = H * rand(0.05, 0.16) * (i % 3 === 0 ? 1.6 : 1);
+    const steps = 6;
+    for (let s = 0; s < steps; s++) {
+      const t2 = s / steps;
+      const width = (1 - t2) * rand(10, 22) + 4;
+      stroke(ctxs, x, baseY - h * t2, h / steps * 1.6, width, Math.PI / 2, col, rand(0.55, 0.8));
+    }
+  }
+  // Eine schmale, dunkle Wasserlinie darunter - die Silhouette steht im Fluss.
+  for (let i = 0; i < 26; i++) {
+    stroke(ctxs, (i / 26) * W, baseY + rand(2, 14), W / 24, rand(4, 10),
+           rand(-0.05, 0.05), col, rand(0.2, 0.35));
+  }
+}
+
+function reflect(ctxs, x, w, col, strength = 1) {
+  // Was über dem Wasser steht, steht auch darin - aber zerrissen. Eine
+  // Spiegelung ist keine Kopie, sondern eine senkrechte Kette waagerechter
+  // Tupfer, die nach unten auseinanderläuft und ausblasst. Genau daran
+  // erkennt man Wasser, ohne dass eine einzige Welle gezeichnet wird.
+  const hz = H * (L.horizon ?? 0.45);
+  const depth = (H - hz) * 0.6;
+  const n = 20;
+  for (let i = 0; i < n; i++) {
+    const t2 = i / n;
+    const y = hz + t2 * depth;
+    const wob = Math.sin(i * 0.85) * w * 0.18 + rand(-w * 0.06, w * 0.06);
+    stroke(ctxs, x + wob, y, w * rand(0.45, 1.05) * (1 + t2), rand(4, 11), 0,
+           col, rand(0.10, 0.28) * strength * (1 - t2));
+  }
+}
+
+function willow(ctxs, W, H, col) {
+  // Trauerweide über dem Teich: von oben herabhängende Strichbündel, oben
+  // dicht, unten ausgefranst. Sie hängt an EINER Stelle am Rand, nicht
+  // gleichmäßig über das Bild verteilt - ein Baum, kein Vorhang.
+  // Die Krone sitzt am Ufer, nicht an der Bildkante: ein Baum wächst aus dem
+  // Horizont, und die Zweige hängen von dort über das Wasser. Vom oberen
+  // Rand herabhängend wäre er nicht nur falsch, sondern im fertigen Client
+  // auch unsichtbar - dort steht in dem Bereich die Oberfläche.
+  const hz = H * (L.horizon ?? 0.45);
+  const side = Math.random() < 0.5 ? 0 : 1;
+  const rootX = side ? W * rand(0.72, 0.95) : W * rand(0.05, 0.28);
+  const spread = W * rand(0.28, 0.44);
+  const strands = 26;
+  for (let i = 0; i < strands; i++) {
+    const x = rootX + (side ? -1 : 1) * Math.pow(Math.random(), 1.5) * spread;
+    const top = hz - H * rand(0.06, 0.14);
+    const len = H * rand(0.20, 0.48);
+    const segs = 9;
+    for (let s = 0; s < segs; s++) {
+      const t2 = s / segs;
+      const y = top + t2 * len;
+      // Nach unten fransen die Strähnen auseinander und werden dünner.
+      const sway = Math.sin(t2 * 3 + i) * 10 * t2;
+      stroke(ctxs, x + sway, y, len / segs * 1.5, rand(4, 11) * (1 - t2 * 0.5),
+             Math.PI / 2 + rand(-0.12, 0.12),
+             shade(col, rand(0.75, 1.15)), rand(0.3, 0.62) * (1 - t2 * 0.35));
+    }
+  }
+}
+
+function sailboats(ctxs, W, H, col) {
+  // Régates à Argenteuil: zwei bis vier Segel, klein und knapp über dem
+  // Horizont - sie geben dem Wasser seinen Maßstab. Zu groß, und aus einem
+  // weiten Hafen wird ein Teich mit Spielzeug darin.
+  const hz = H * (L.horizon ?? 0.45);
+  const n = 2 + (Math.random() * 3 | 0);
+  const dark = shade(col, 0.45);
+  for (let i = 0; i < n; i++) {
+    const x = W * rand(0.08, 0.92);
+    // Je höher am Horizont, desto weiter weg, desto kleiner.
+    const far = rand(0, 1);
+    const y = hz - rand(2, 26) * (1 - far * 0.5);
+    const h = H * rand(0.07, 0.15) * (1 - far * 0.4);
+    // Das Segel: ein schmales Dreieck aus Strichen, die nach oben kürzer
+    // werden - kein gefülltes Polygon.
+    const segs = 7;
+    for (let s = 0; s < segs; s++) {
+      const t2 = s / segs;
+      stroke(ctxs, x + t2 * h * 0.12, y - t2 * h,
+             h * 0.10 * (1 - t2) + 3, h * 0.16 * (1 - t2) + 2,
+             Math.PI / 2, shade(dark, rand(0.9, 1.3)), rand(0.45, 0.75));
+    }
+    // Rumpf: ein einziger kurzer waagerechter Strich.
+    stroke(ctxs, x, y + 2, h * 0.34, rand(4, 7), 0, dark, rand(0.5, 0.8));
+    reflect(ctxs, x, h * 0.3, dark, 0.75);
+  }
+}
+
+// --- Motive von außen -------------------------------------------------------
+//
+// paint-motifs.js darf weitere Motive beisteuern, ohne diese Datei anzufassen.
+// Fehlt die Datei oder ein Name darin, passiert nichts - ein fehlendes Motiv
+// darf nie das ganze Bild kosten.
+
+function motifApi(ctxs) {
+  return {
+    stroke: (x, y, len, wide, ang, col, alpha) =>
+      stroke(ctxs, x, y, len, wide, ang, col, alpha),
+    rand, shade, mix, reflect: (x, w, col, s) => reflect(ctxs, x, w, col, s),
+  };
+}
+
+function runMotif(name, ctxs) {
+  const water = L.water || L.pigments;
+  if (name === "pond")     return pond(ctxs, W, H, water[0]);
+  if (name === "pond-dim") return pond(ctxs, W, H, water[0], 0.6);
+  if (name === "sun")      return sunDisc(ctxs, W, H, L.accent[0]);
+  if (name === "spires")   return spires(ctxs, W, H, shade(L.pigments[3], 0.55));
+  if (name === "willow")   return willow(ctxs, W, H, (L.sky || L.pigments)[0]);
+  if (name === "sailboats")return sailboats(ctxs, W, H, water[0]);
+  const ext = window.MOTIFS && window.MOTIFS[name];
+  if (typeof ext === "function") {
+    try { ext(motifApi(ctxs), W, H, L); }
+    catch (e) { console.warn("Motiv", name, "ist gescheitert:", e); }
+  }
+}
+
+// --- das Bild -------------------------------------------------------------
+//
+// In der Reihenfolge, in der auch wirklich gemalt wird: Grundierung, dann
+// breite Untermalung, die die Massen setzt, dann die eigentliche Schicht,
+// dann wenige hohe Akzente. Die Grundierung bleibt zwischen den Strichen
+// sichtbar - das ist, was ein Bild leuchten lässt.
+
+let drainId = null;
+
+// Verteilt die Schlange über die Frames. Zehn Millisekunden pro Frame: genug,
+// dass das Bild zügig wächst, wenig genug, dass Wischen und Tippen daneben
+// flüssig bleiben.
+function drain(tasks, t0, blockMs) {
+  let i = 0;
+  const stat = document.getElementById("stat");
+  const step = () => {
+    const frameStart = performance.now();
+    while (i < tasks.length && performance.now() - frameStart < 10) tasks[i++]();
+    if (i < tasks.length) {
+      stat.textContent = `malt … ${Math.round((i / tasks.length) * 100)} %`;
+      drainId = requestAnimationFrame(step);
+      return;
+    }
+    drainId = null;
+    // Zwei Zahlen, und die erste ist die wichtige: so lange steht die
+    // Oberfläche wirklich still. Die zweite ist nur, wie lange das Bild
+    // zum Wachsen braucht - dabei ist alles längst bedienbar.
+    stat.textContent = `${tasks.length} Striche · ${Math.round(blockMs)} ms blockiert · `
+                     + `${Math.round(performance.now() - t0)} ms bis fertig`;
+  };
+  drainId = requestAnimationFrame(step);
+}
+
+function paint() {
+  const t0 = performance.now();
+  // Ein laufender Auftrag wird abgebrochen, sonst malen zwei Bilder
+  // gleichzeitig übereinander, wenn man schnell das Licht wechselt.
+  if (drainId !== null) { cancelAnimationFrame(drainId); drainId = null; }
+  const ctxs = layers.map((c) => {
+    const cx = c.getContext("2d");
+    cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    cx.clearRect(0, 0, W, H);
+    return cx;
+  });
+  const [, bctx] = ctxs;
+
+  // Die Grundierung sofort und unaufgeschoben: es darf nie eine leere
+  // Leinwand zu sehen sein, auch nicht für einen Frame.
+  bctx.fillStyle = rgba(L.ground, 1);
+  bctx.fillRect(0, 0, W, H);
+
+  queue = [];
+
+  const diag = Math.hypot(W, H);
+  const hz = H * (L.horizon ?? 0.45);
+  const sky = L.sky || L.pigments;
+  const water = L.water || L.pigments;
+  const haze = (L.haze && L.haze[0]) || shade(L.ground, 1.05);
+  // Wie stark der Dunst zieht. Bei einem Hafen viel, an einem Teich fast
+  // nichts: Luftperspektive ist eine Funktion der Entfernung, und wer drei
+  // Meter vor dem Ufer steht, hat keine Luft dazwischen, die etwas ausbleicht.
+  const hazeAmt = L.hazeAmt ?? 0.55;
+
+  // Untermalung, zonenweise: die groben Massen, bevor irgendein Detail da ist.
+  // Oben mit Himmelsfarben, unten mit Wasserfarben - eine gemeinsame
+  // Untermalung über beides würde die Trennung gleich wieder einebnen.
+  for (let i = 0; i < 140; i++) {
+    const x = Math.random() * W, y = Math.random() * H;
+    const above = y < hz;
+    stroke(ctxs, x, y, diag * rand(0.10, 0.26), rand(40, 92),
+           (above ? rand(-0.10, 0.10) : rand(-0.05, 0.05)),
+           one(above ? sky : water), rand(0.10, 0.22));
+  }
+
+  // --- Himmel ---------------------------------------------------------------
+  // Fast waagerechte Züge. Zum Horizont hin kürzer, blasser und näher am
+  // Dunst: das ist Luftperspektive, und sie ist der Grund, warum ein Bild
+  // Tiefe hat, obwohl es flach ist.
+  const skyN = Math.round((W * hz) / 560);
+  for (let i = 0; i < skyN; i++) {
+    const x = Math.random() * W;
+    const y = Math.random() * hz;
+    const far = Math.pow(y / Math.max(1, hz), 1.6);
+    stroke(ctxs, x, y,
+           rand(34, 104) * (1 - far * 0.45),
+           rand(11, 28) * (1 - far * 0.35),
+           rand(-0.12, 0.12),
+           mix(one(sky), haze, far * hazeAmt),
+           rand(0.24, 0.55) * (1 - far * 0.25));
+  }
+
+  // --- Wasser ---------------------------------------------------------------
+  // Strikt waagerecht - das ist die einzige Regel, die eine Fläche zu Wasser
+  // macht. Nach vorn werden die Züge länger und dunkler, nach hinten kürzer
+  // und dunstiger, sodass die Oberfläche in die Tiefe kippt.
+  const waterN = Math.round((W * (H - hz)) / 460);
+  for (let i = 0; i < waterN; i++) {
+    const x = Math.random() * W;
+    const y = hz + Math.random() * (H - hz);
+    const near = (y - hz) / Math.max(1, H - hz);
+    const base = one(water);
+    stroke(ctxs, x, y,
+           rand(26, 104) * (0.45 + near * 0.85),
+           rand(8, 24) * (0.55 + near * 0.7),
+           rand(-0.045, 0.045),
+           mix(mix(base, haze, (1 - near) * hazeAmt * 0.8), shade(base, 0.78), near * 0.45),
+           rand(0.28, 0.6));
+  }
+
+  // Eine harte, helle Kante genau auf dem Horizont. Ohne sie verlaufen die
+  // beiden Zonen ineinander und die Tiefe geht wieder verloren.
+  for (let i = 0; i < 26; i++) {
+    stroke(ctxs, Math.random() * W, hz + rand(-3, 3),
+           rand(40, 130), rand(3, 7), 0,
+           mix(haze, one(sky), 0.4), rand(0.22, 0.5));
+  }
+
+  // --- die Szene ------------------------------------------------------------
+  // Zuletzt eingesetzt, nicht zuerst geblockt: sonst wäscht der freie Teppich
+  // darüber jede erkennbare Form wieder aus. Monet hat genauso gearbeitet -
+  // erst die Fläche, dann das, woran das Auge sich festhält.
+  for (const m of (L.scene || [])) runMotif(m, ctxs);
+
+  // Akzente: kurz, dick, hoch gesättigt, wenige. Das Letzte, was auf ein
+  // Bild kommt, und das Erste, was man sieht.
+  const n = skyN + waterN;
+  for (let i = 0; i < n * 0.05; i++) {
+    const x = Math.random() * W, y = Math.random() * H;
+    const col = one(L.accent);
+    stroke(ctxs, x, y, rand(8, 22), rand(7, 15),
+           flowAngle(x / W, y / H) + rand(-0.5, 0.5), col, rand(0.35, 0.7));
+  }
+
+  const tasks = queue;
+  queue = null;
+  // Alles bis hier lief am Stück: Grundierung, Positionen ausrechnen, Motive
+  // aufbauen. Nur das ist die Zeit, in der die Seite wirklich hängt.
+  drain(tasks, t0, performance.now() - t0);
+}
+
+// --- die Leinwand ---------------------------------------------------------
+//
+// Grobes Leinen: zwei Rippenrichtungen plus Unregelmäßigkeit im Faden.
+// Einmal in eine Kachel gemalt und dann gefliest, statt über den ganzen
+// Schirm gerechnet.
+
+function weave() {
+  const S = 64;
+  const tile = document.createElement("canvas");
+  tile.width = tile.height = S;
+  const tx = tile.getContext("2d");
+  const img = tx.createImageData(S, S);
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      // Zwei senkrecht zueinander laufende Fadenlagen.
+      const warp = Math.sin(x * Math.PI / 3.1) * 0.5 + 0.5;
+      const weft = Math.sin(y * Math.PI / 3.4) * 0.5 + 0.5;
+      // Über/unter: die Bindung, die ein Gewebe von Streifen unterscheidet.
+      const over = ((x / 3 | 0) + (y / 3 | 0)) % 2 ? warp : weft;
+      const slub = (Math.random() - 0.5) * 0.22;
+      const v = clamp255((0.62 + over * 0.38 + slub) * 255);
+      const i = (y * S + x) * 4;
+      img.data[i] = img.data[i+1] = img.data[i+2] = v;
+      img.data[i+3] = 255;
+    }
+  }
+  tx.putImageData(img, 0, 0);
+
+  const wx = weaveC.getContext("2d");
+  weaveC.width = Math.round(W * dpr); weaveC.height = Math.round(H * dpr);
+  wx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  wx.fillStyle = wx.createPattern(tile, "repeat");
+  wx.fillRect(0, 0, W, H);
+}
+
+// --- Licht, das wandert ---------------------------------------------------
+//
+// Das Bild bewegt sich nicht. Grat und Schatten werden gegeneinander
+// verschoben, und genau das liest das Auge als Farbe, die Licht fängt.
+// Drei drawImage pro Bild statt tausend Striche - billiger als das Driften
+// vorher und ungleich mehr Bild.
+
+let lx = 0, ly = 0, tx_ = 0, ty_ = 0;
+
+function frame() {
+  lx += (tx_ - lx) * 0.08;
+  ly += (ty_ - ly) * 0.08;
+  ridgeC.style.transform  = `translate(${(-lx * 3).toFixed(2)}px,${(-ly * 3).toFixed(2)}px)`;
+  shadowC.style.transform = `translate(${(lx * 3).toFixed(2)}px,${(ly * 3).toFixed(2)}px)`;
+  requestAnimationFrame(frame);
+}
+
+window.addEventListener("deviceorientation", (e) => {
+  if (e.gamma == null) return;
+  tx_ = Math.max(-1, Math.min(1, e.gamma / 35));
+  ty_ = Math.max(-1, Math.min(1, ((e.beta || 0) - 45) / 35));
+}, { passive: true });
+
+document.addEventListener("pointermove", (e) => {
+  tx_ = (e.clientX / window.innerWidth) * 2 - 1;
+  ty_ = (e.clientY / window.innerHeight) * 2 - 1;
+}, { passive: true });
+
+// --- Aufbau ---------------------------------------------------------------
+
+function applyLight() {
+  L = LIGHTS[name];
+  const r = document.documentElement.style;
+  r.setProperty("--ink", L.ink);
+  r.setProperty("--gesso", L.gesso);
+  r.setProperty("--gesso-lit", L.gessoLit);
+  r.setProperty("--gesso-dim", L.gessoDim);
+  r.setProperty("--accent", rgba(L.accent[0], 1));
+  r.setProperty("--weave-blend", L.weaveBlend);
+  r.setProperty("--weave-op", weaveOn ? L.weaveOp : 0);
+  document.getElementById("title").textContent = "Malschicht · " + L.label;
+  document.getElementById("ref").textContent = L.ref;
+  document.querySelectorAll("[data-light]").forEach((b) =>
+    b.setAttribute("aria-pressed", String(b.dataset.light === name)));
+}
+
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  for (const c of layers) {
+    c.width = Math.round(W * dpr); c.height = Math.round(H * dpr);
+  }
+  weave();
+  paint();
+}
+
+const lightsRow = document.getElementById("lights");
+for (const key of Object.keys(LIGHTS)) {
+  const b = document.createElement("button");
+  b.textContent = LIGHTS[key].label;
+  b.dataset.light = key;
+  b.onclick = () => { name = key; applyLight(); paint(); };
+  lightsRow.appendChild(b);
+}
+document.getElementById("repaint").onclick = paint;
+document.getElementById("toggle-relief").onclick = (e) => {
+  relief = !relief;
+  e.target.setAttribute("aria-pressed", String(relief));
+  paint();
+};
+document.getElementById("toggle-weave").onclick = (e) => {
+  weaveOn = !weaveOn;
+  e.target.setAttribute("aria-pressed", String(weaveOn));
+  applyLight();
+};
+
+let rt = null;
+window.addEventListener("resize", () => {
+  clearTimeout(rt); rt = setTimeout(resize, 200);
+});
+
+applyLight();
+resize();
+frame();
+})();
+</script>
+</body>
+</html>

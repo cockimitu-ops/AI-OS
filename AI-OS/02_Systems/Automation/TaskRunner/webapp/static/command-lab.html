@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>AI-OS · Kommandozentrale (Prototyp)</title>
+<!--
+  KOMMANDOZENTRALE, Prototyp. Steht neben der App und ändert nichts an ihr.
+
+  Die Frage, die vorher nirgends beantwortet wurde: wer arbeitet gerade, woran,
+  und womit halte ich ihn an. Die Teile lagen verstreut - laufende Engine-Jobs
+  kannte nur engines.py, die Warteschlange stand im Dateisystem, die Schalter
+  in safety_controls, die Dienste in systemd - und keine Oberfläche hat sie je
+  nebeneinander gestellt. /api/workers tut jetzt genau das.
+
+  WAS HIER ECHT IST
+
+  Alles. Die Liste oben zeigt wirklich laufende Prozesse, die Schalter
+  schreiben wirklich in safety_controls.json, der Notaus hält wirklich jede
+  Engine an. Das ist kein Attrappen-Bildschirm - deshalb sind die
+  gefährlichen Sachen auch zweistufig.
+
+  EINE ENTSCHEIDUNG ZUR ANZEIGE DER DIENSTE
+
+  Von siebzehn aios-Einheiten sind die meisten fast immer "inactive dead", und
+  das ist völlig richtig so: es sind Timer-Dienste, die nur zur vollen Stunde
+  kurz laufen. Sie rot zu färben, weil sie gerade nicht laufen, wäre ein
+  Alarm, der nie aufhört und den man deshalb nach drei Tagen nicht mehr liest.
+  Rot ist hier nur "failed".
+-->
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    color: var(--ink); background: var(--ground); overflow: hidden;
+  }
+
+  :root, body[data-light="dawn"] {
+    --ink: #1b2029; --ink-dim: #4a5464; --ground: #bcc0c4;
+    --gesso: rgba(240,242,244,.88); --gesso-lit: rgba(255,255,255,.95);
+    --gesso-dim: rgba(70,80,95,.18); --hot: #b4501f; --good: #2f6f4e;
+  }
+  body[data-light="day"] {
+    --ink: #1e2118; --ink-dim: #4e5445; --ground: #e2dcc8;
+    --gesso: rgba(247,244,233,.88); --gesso-lit: rgba(255,255,255,.96);
+    --gesso-dim: rgba(60,66,44,.18); --hot: #9c4a12; --good: #33683f;
+  }
+  body[data-light="dusk"] {
+    --ink: #241a1c; --ink-dim: #5c4749; --ground: #c49e94;
+    --gesso: rgba(251,240,234,.88); --gesso-lit: rgba(255,255,255,.95);
+    --gesso-dim: rgba(80,50,50,.2); --hot: #b03a28; --good: #2f6f4e;
+  }
+  body[data-light="night"] {
+    --ink: #eef2fb; --ink-dim: #9aa8c4; --ground: #141a28;
+    --gesso: rgba(30,38,58,.84); --gesso-lit: rgba(150,170,210,.24);
+    --gesso-dim: rgba(0,0,0,.4); --hot: #e0855a; --good: #6fbf8f;
+  }
+
+  #fx-grain { position: fixed; inset: -50%; z-index: 60; pointer-events: none;
+              opacity: .06; mix-blend-mode: multiply; }
+  body[data-light="night"] #fx-grain { mix-blend-mode: overlay; opacity: .04; }
+
+  .wrap { position: relative; z-index: 20; height: 100%; display: flex;
+          flex-direction: column; padding: max(16px, env(safe-area-inset-top)) 14px 14px;
+          gap: 12px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; }
+  .mark { font-size: 12px; letter-spacing: .22em; font-weight: 600; opacity: .6; }
+  .pulse { font-size: 11.5px; opacity: .5; font-style: italic; }
+
+  .scroll { flex: 1; overflow-y: auto; display: flex; flex-direction: column;
+            gap: 12px; margin: 0 -2px; padding: 0 2px 6px; }
+
+  .panel { background: var(--gesso); border-radius: 3px; padding: 13px 14px;
+           box-shadow: inset 0 1px 0 var(--gesso-lit), inset 0 -1px 0 var(--gesso-dim),
+                       0 3px 14px -6px rgba(0,0,0,.45); }
+  h2 { font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
+       font-weight: 700; opacity: .5; margin-bottom: 10px; }
+
+  /* Wer arbeitet */
+  .worker { border-left: 3px solid var(--good); padding: 8px 0 8px 11px;
+            margin-bottom: 10px; }
+  .worker:last-child { margin-bottom: 0; }
+  .w-top { display: flex; align-items: baseline; gap: 8px; }
+  .w-who { font-size: 15px; font-weight: 700; }
+  .w-model { font-size: 11.5px; opacity: .55; }
+  .w-age { margin-left: auto; font-size: 12px; opacity: .6; font-variant-numeric: tabular-nums; }
+  .w-what { font-size: 13px; color: var(--ink-dim); margin-top: 3px;
+            display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+            overflow: hidden; }
+  .idle { font-size: 14px; opacity: .55; }
+
+  /* Zahlenreihe */
+  .nums { display: flex; gap: 18px; }
+  .num b { display: block; font-size: 21px; font-weight: 700; letter-spacing: -.02em;
+           font-variant-numeric: tabular-nums; }
+  .num span { font-size: 11.5px; opacity: .55; }
+
+  /* Schalter */
+  /* Umbrechend statt quetschend: auf einem schmalen Telefon drückte die
+     dreizeilige Beschriftung die Router-Knöpfe sonst zu Briefmarken zusammen.
+     Lieber rutscht die Knopfreihe in die nächste Zeile. */
+  .sw { display: flex; align-items: center; justify-content: space-between;
+        gap: 10px 12px; padding: 9px 0; flex-wrap: wrap;
+        border-bottom: 1px solid var(--gesso-dim); }
+  .sw-label { flex: 1 1 150px; }
+  .sw:last-child { border-bottom: 0; }
+  .sw-label { font-size: 14px; }
+  .sw-label i { display: block; font-style: normal; font-size: 11.5px;
+                opacity: .55; margin-top: 1px; }
+  button, .btn { font: inherit; color: inherit; cursor: pointer;
+                 background: transparent; border: 1px solid var(--gesso-dim);
+                 border-radius: 3px; padding: 8px 13px; font-size: 13.5px;
+                 -webkit-tap-highlight-color: transparent; }
+  button[aria-pressed="true"] { background: var(--ink); color: var(--gesso);
+                                border-color: var(--ink); font-weight: 600; }
+  .seg { display: flex; gap: 6px; }
+  .seg button { padding: 7px 11px; font-size: 13px; }
+
+  /* Der Notaus. Bewusst als einziges Element mit Farbfläche - er ist nicht
+     eine Einstellung unter vielen, sondern das, was man im Zweifel sucht. */
+  .stop { width: 100%; padding: 14px; font-size: 15px; font-weight: 700;
+          border: 2px solid var(--hot); color: var(--hot); background: transparent; }
+  .stop.on { background: var(--hot); color: #fff; border-color: var(--hot); }
+
+  .row { display: flex; justify-content: space-between; gap: 10px; font-size: 13px;
+         padding: 5px 0; }
+  .row.bad { color: var(--hot); font-weight: 600; }
+  .dim { opacity: .5; font-size: 12px; }
+  .out { font-size: 12.5px; opacity: .7; margin-top: 9px; line-height: 1.5;
+         white-space: pre-wrap; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+</style>
+</head>
+<body>
+
+<canvas id="fx-canvas" aria-hidden="true"></canvas>
+<div id="fx-grain" aria-hidden="true"></div>
+
+<div class="wrap">
+  <header>
+    <span class="mark">AI · OS · ZENTRALE</span>
+    <span class="pulse" id="pulse"></span>
+  </header>
+
+  <div class="scroll">
+    <div class="panel">
+      <h2>Wer arbeitet</h2>
+      <div id="workers"><div class="idle">…</div></div>
+    </div>
+
+    <div class="panel">
+      <h2>Warteschlange</h2>
+      <div class="nums" id="queue"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Schalter</h2>
+      <button class="stop" id="freeze">…</button>
+      <div style="margin-top:12px">
+        <div class="sw">
+          <span class="sw-label">Router<i>wer zuerst gefragt wird</i></span>
+          <span class="seg" id="router"></span>
+        </div>
+        <div class="sw">
+          <span class="sw-label">Bezahlte Route<i id="paid-note">GLM über OpenRouter</i></span>
+          <button id="paid">…</button>
+        </div>
+        <div class="sw">
+          <span class="sw-label">Tageslimit<i id="spent-note"></i></span>
+          <button id="cap">…</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Knöpfe</h2>
+      <div class="actions">
+        <button id="ckpt">Wiederherstellungspunkt</button>
+        <button id="ckpt-list">Punkte zeigen</button>
+        <button id="ideas">Ideen sammeln</button>
+      </div>
+      <div class="out" id="out"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Dienste</h2>
+      <div id="services"></div>
+    </div>
+  </div>
+</div>
+
+<script src="paint-motifs.js"></script>
+<script src="fx.js"></script>
+<script>
+(() => {
+"use strict";
+
+const TOKEN_KEY = "aios_web_token";
+const PARAMS = new URLSearchParams(location.search);
+function token() {
+  const p = PARAMS.get("token");
+  if (p) {
+    try { localStorage.setItem(TOKEN_KEY, p); } catch (_) {}
+    history.replaceState({}, "", location.pathname);
+    return p;
+  }
+  try { return localStorage.getItem(TOKEN_KEY) || ""; } catch (_) { return ""; }
+}
+
+const esc = (s) => { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; };
+const out = (msg) => { document.getElementById("out").textContent = msg; };
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}`, ...(opts.headers || {}) },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+  return body;
+}
+
+function alter(s) {
+  if (s == null) return "";
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
+const ENGINE_NAMES = { claude: "Claude", codex: "Codex", "google-pro": "Google Pro",
+                       gemini: "Gemini", aios: "AI-OS Worker" };
+
+function renderWorkers(list) {
+  const el = document.getElementById("workers");
+  if (!list.length) {
+    el.innerHTML = `<div class="idle">Niemand arbeitet gerade.</div>`;
+    return;
+  }
+  el.innerHTML = list.map((w) => `
+    <div class="worker">
+      <div class="w-top">
+        <span class="w-who">${esc(ENGINE_NAMES[w.engine] || w.engine)}</span>
+        <span class="w-model">${esc(w.model || "")}</span>
+        <span class="w-age">seit ${esc(alter(w.age_s))}</span>
+      </div>
+      <div class="w-what">${esc(w.message || "(ohne Auftragstext)")}</div>
+    </div>`).join("");
+}
+
+function renderQueue(q) {
+  document.getElementById("queue").innerHTML = `
+    <span class="num"><b>${q.inbox}</b><span>im Posteingang</span></span>
+    <span class="num"><b>${q.running}</b><span>laufen</span></span>
+    <span class="num"><b>${q.queued}</b><span>warten</span></span>`;
+}
+
+const MODES = [["cost", "Sparsam"], ["speed", "Schnell"], ["thorough", "Gründlich"]];
+
+function renderSafety(s) {
+  const freeze = document.getElementById("freeze");
+  freeze.textContent = s.global_freeze ? "Alles angehalten — hier weiterlaufen lassen"
+                                       : "Alles anhalten";
+  freeze.classList.toggle("on", !!s.global_freeze);
+
+  document.getElementById("router").innerHTML = MODES.map(([id, label]) =>
+    `<button data-mode="${id}" aria-pressed="${s.router_mode === id}">${label}</button>`).join("");
+  document.querySelectorAll("[data-mode]").forEach((b) =>
+    b.addEventListener("click", () => set({ router_mode: b.dataset.mode })));
+
+  const paid = document.getElementById("paid");
+  paid.textContent = s.paid_opt_in ? "an" : "aus";
+  paid.setAttribute("aria-pressed", String(!!s.paid_opt_in));
+
+  document.getElementById("cap").textContent = `${(s.daily_spend_cap ?? 0).toFixed(2)} $`;
+  document.getElementById("spent-note").textContent =
+    `heute ${(s.daily_spent_usd ?? 0).toFixed(2)} $ von ${(s.daily_spend_cap ?? 0).toFixed(2)} $`;
+}
+
+function renderServices(list) {
+  const failed = list.filter((s) => s.active === "failed");
+  const active = list.filter((s) => s.active === "active");
+  const rest = list.length - failed.length - active.length;
+  // Nur "failed" ist rot. Ein Timer-Dienst, der gerade nicht läuft, ist kein
+  // Fehler, sondern der Normalzustand - ihn zu färben wäre ein Daueralarm.
+  document.getElementById("services").innerHTML =
+    failed.map((s) => `<div class="row bad"><span>${esc(s.name)}</span><span>${esc(s.sub)}</span></div>`).join("")
+    + active.map((s) => `<div class="row"><span>${esc(s.name)}</span><span class="dim">läuft</span></div>`).join("")
+    + (rest ? `<div class="row dim"><span>${rest} weitere schlafen zwischen ihren Terminen</span><span></span></div>` : "");
+}
+
+let failures = 0;
+
+async function tick() {
+  try {
+    const d = await api("/api/workers");
+    renderWorkers(d.engines || []);
+    renderQueue(d.queue || { inbox: 0, running: 0, queued: 0 });
+    renderSafety(d.safety || {});
+    renderServices(d.services || []);
+    failures = 0;
+    document.getElementById("pulse").textContent =
+      new Date().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  } catch (e) {
+    failures++;
+    document.getElementById("pulse").textContent = `keine Verbindung (${failures})`;
+    if (failures === 1) out(`Fehler: ${e.message}`);
+  }
+}
+
+async function set(patch) {
+  try {
+    await api("/api/safety-controls", { method: "POST", body: JSON.stringify(patch) });
+    await tick();
+  } catch (e) { out(`Fehler: ${e.message}`); }
+}
+
+document.getElementById("freeze").addEventListener("click", (e) => {
+  const on = e.currentTarget.classList.contains("on");
+  // Anhalten geht sofort, Weiterlaufenlassen nicht: das eine ist die sichere
+  // Richtung, das andere nimmt eine Bremse weg.
+  if (on && !confirm("Alles wieder laufen lassen?")) return;
+  set({ global_freeze: !on });
+});
+
+document.getElementById("paid").addEventListener("click", (e) =>
+  set({ paid_opt_in: e.currentTarget.getAttribute("aria-pressed") !== "true" }));
+
+document.getElementById("cap").addEventListener("click", () => {
+  const raw = prompt("Tageslimit für bezahlte Modelle in US-Dollar:");
+  if (raw === null) return;
+  const v = Number(raw.replace(",", "."));
+  if (!Number.isFinite(v) || v < 0) { out("Bitte eine Zahl ab 0."); return; }
+  set({ daily_spend_cap: v });
+});
+
+document.getElementById("ckpt").addEventListener("click", async () => {
+  const label = prompt("Wofür ist dieser Punkt?", "vor dem Layout");
+  if (!label) return;
+  out("lege an …");
+  try {
+    const r = await api("/api/checkpoint-create", { method: "POST", body: JSON.stringify({ label }) });
+    out(`Angelegt: ${r.id} (${r.files_count} Dateien)`);
+  } catch (e) { out(`Fehler: ${e.message}`); }
+});
+
+document.getElementById("ckpt-list").addEventListener("click", async () => {
+  out("hole …");
+  try {
+    const r = await api("/api/checkpoints");
+    const list = r.checkpoints || [];
+    out(list.length
+      ? list.map((c) => `${c.id} · ${c.label} · ${c.files_count} Dateien`).join("\n")
+      : "Noch keine Punkte.");
+  } catch (e) { out(`Fehler: ${e.message}`); }
+});
+
+document.getElementById("ideas").addEventListener("click", async () => {
+  out("frage die Engines …");
+  try {
+    await api("/api/suggestions-generate", { method: "POST", body: "{}" });
+    out("Läuft. Die Vorschläge tauchen im Vorschläge-Bildschirm auf, sobald sie da sind.");
+  } catch (e) { out(`Fehler: ${e.message}`); }
+});
+
+const forced = PARAMS.get("light");
+if (forced && window.fxSetLight) window.fxSetLight(forced);
+
+tick();
+// Vier Sekunden: schnell genug, dass man beim Starten eines Jobs zusieht, wie
+// er auftaucht, langsam genug, dass es kein Dauerfeuer auf den Server ist.
+setInterval(tick, 4000);
+})();
+</script>
+</body>
+</html>

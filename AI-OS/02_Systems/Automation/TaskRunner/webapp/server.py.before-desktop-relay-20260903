@@ -29,7 +29,6 @@ import select
 import socket
 import sys
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -72,7 +71,6 @@ API_ROUTES = {
     ("POST", "/api/job-claim"): api.post_job_claim,
     ("POST", "/api/job-result"): api.post_job_result,
     ("POST", "/api/device-action"): api.post_device_action,
-    ("POST", "/api/desktop/poll"): api.post_desktop_poll,
     # POST because they take a query body; both are reads and change nothing.
     ("POST", "/api/snipes"): api.get_snipes,
     ("POST", "/api/vault-search"): api.get_vault_search,
@@ -123,7 +121,6 @@ API_ROUTES = {
 # there is no reason to make the client base64 a file to fit a JSON shape.
 RAW_ROUTES = {
     ("POST", "/api/upload"): api.post_upload,
-    ("POST", "/api/desktop/frame"): api.post_desktop_frame,
 }
 
 
@@ -185,7 +182,7 @@ class Handler(BaseHTTPRequestHandler):
         Never buffered on this side: only the newest frame is ever sent, so a
         slow phone browser falls back to a lower frame rate rather than
         drifting steadily further into the past."""
-        if not (self._authorized() or self._authorized_query(query)):
+        if not self._authorized_query(query):
             self.send_error(401, "unauthorized")
             return
         name = (query.get("device") or [""])[0]
@@ -193,42 +190,6 @@ class Handler(BaseHTTPRequestHandler):
             entry = api._device(name)
         except ValueError as e:
             self.send_error(400, str(e))
-            return
-        if entry.get("kind") == "desktop":
-            try:
-                entry["module"].stream_start()
-            except Exception as e:  # laptop agent is allowed to be asleep
-                self.send_error(503, str(e)[:120])
-                return
-            boundary = "aiosframe"
-            self.send_response(200)
-            self.send_header("Content-Type",
-                             f"multipart/x-mixed-replace; boundary={boundary}")
-            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
-            self.send_header("Connection", "close")
-            self.end_headers()
-            last_mtime = 0
-            try:
-                while not self._client_gone():
-                    try:
-                        path = entry["module"].screenshot()
-                        mtime = os.stat(path).st_mtime_ns
-                        if mtime != last_mtime:
-                            with open(path, "rb") as f:
-                                frame = f.read()
-                            self.wfile.write(
-                                f"--{boundary}\r\nContent-Type: image/jpeg\r\n"
-                                f"Content-Length: {len(frame)}\r\n\r\n".encode("ascii"))
-                            self.wfile.write(frame)
-                            self.wfile.write(b"\r\n")
-                            last_mtime = mtime
-                    except (OSError, RuntimeError):
-                        pass
-                    time.sleep(0.08)
-            except (BrokenPipeError, ConnectionResetError):
-                pass
-            finally:
-                entry["module"].stream_stop()
             return
         try:
             size = api.device_size(entry)
@@ -443,15 +404,13 @@ class Handler(BaseHTTPRequestHandler):
                 return
             name = os.path.basename(parsed.path)
             full = os.path.join(api.SCREENSHOT_DIR, name)
-            if (not os.path.isfile(full)
-                    or not name.lower().endswith((".png", ".jpg", ".jpeg"))):
+            if not os.path.isfile(full) or not name.endswith(".png"):
                 self.send_error(404)
                 return
             with open(full, "rb") as f:
                 body = f.read()
             self.send_response(200)
-            self.send_header("Content-Type", mimetypes.guess_type(name)[0]
-                             or "application/octet-stream")
+            self.send_header("Content-Type", "image/png")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()

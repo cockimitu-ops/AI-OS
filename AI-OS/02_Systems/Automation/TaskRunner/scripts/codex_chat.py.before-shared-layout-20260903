@@ -158,66 +158,64 @@ def _login_status():
                    "im Terminal `codex login` und mit dem ChatGPT-Konto anmelden")
 
 
-def ask(message, model=None, cwd=None, resume=None, read_only=False,
-        include_briefing=True):
+def ask(message, model=None, cwd=None, resume=None, read_only=False):
     """One turn. -> {"reply", "model"}. Raises CodexError with what it said."""
-    # Managed conversations already supply a cursor-aware briefing/context.
-    # Keep direct CLI and worker callers backward-compatible by default.
-    if include_briefing:
-        message = shared_briefing.prepend(message)
+    message = shared_briefing.prepend(message)
     model = model or DEFAULT_MODEL
     with tempfile.NamedTemporaryFile("w+", suffix=".txt", delete=False) as last:
         last_path = last.name
-    # -s/-C belong to exec, not its resume subcommand (checked against the
-    # installed CLI). Putting them after resume makes every second turn fail.
-    argv = [BIN, "exec", "-s", "read-only" if read_only else SANDBOX,
-            "-C", cwd or PROJECT_DIR]
+    argv = [BIN, "exec"]
     if resume:
         argv += ["resume", resume]
     if model and model != "auto":
         argv += ["-m", model]
-    argv += ["--json", "--skip-git-repo-check",
+    argv += ["-s", "read-only" if read_only else SANDBOX, "--skip-git-repo-check",
+             "-C", cwd or PROJECT_DIR,
              "-o", last_path, "-"]          # "-" : prompt comes from stdin
     try:
-        try:
-            proc = subprocess.run(argv, input=message.encode("utf-8"),
-                                  capture_output=True, timeout=TIMEOUT_S)
-        except FileNotFoundError:
-            raise CodexError("Codex ist nicht installiert")
-        except subprocess.TimeoutExpired:
-            raise CodexError(f"Codex hat in {TIMEOUT_S}s nicht geantwortet")
-        except OSError as exc:
-            raise CodexError(f"Codex konnte nicht starten: {exc}")
-        try:
-            with open(last_path, encoding="utf-8") as handle:
-                reply = handle.read().strip()
-        except OSError:
-            reply = ""
+        proc = subprocess.run(argv, input=message.encode("utf-8"),
+                              capture_output=True, timeout=TIMEOUT_S)
+    except FileNotFoundError:
+        raise CodexError("Codex ist nicht installiert")
+    except subprocess.TimeoutExpired:
+        raise CodexError(f"Codex hat in {TIMEOUT_S}s nicht geantwortet")
+    finally:
+        pass
+    try:
+        with open(last_path, encoding="utf-8") as f:
+            reply = f.read().strip()
+    except OSError:
+        reply = ""
+    try:
+        os.unlink(last_path)
+    except OSError:
+        pass
+    if not reply:
+        # Nothing in the answer file: say what the process said instead of
+        # reporting an empty success.
         err = (proc.stderr or b"").decode("utf-8", "replace").strip()
         out = (proc.stdout or b"").decode("utf-8", "replace").strip()
-        if proc.returncode or not reply:
-            # Partial output after a failed turn must not advance the native
-            # conversation cursor or look like a completed answer.
-            raise CodexError((err or out or f"Codex endete mit Code {proc.returncode}")[:600])
+        raise CodexError((err or out or f"Codex endete mit Code {proc.returncode}")[:600])
 
-        session_id = resume or None
-        for line in out.splitlines():
-            try:
-                event = json.loads(line)
-            except (ValueError, TypeError):
-                continue
-            if (isinstance(event, dict) and event.get("type") == "thread.started"
-                    and isinstance(event.get("thread_id"), str) and event["thread_id"]):
-                # Only this process's event stream identifies its session.
-                # The newest file may belong to a concurrent, unrelated chat.
-                session_id = event["thread_id"]
-                break
-        return {"reply": reply, "model": model, "session_id": session_id}
-    finally:
-        try:
-            os.unlink(last_path)
-        except OSError:
-            pass
+    session_id = None
+    import glob
+    try:
+        sessions = glob.glob(os.path.expanduser("~/.codex/sessions/**/*.jsonl"), recursive=True)
+        if sessions:
+            newest = max(sessions, key=os.path.getmtime)
+            with open(newest, encoding="utf-8") as sf:
+                for line in sf:
+                    try:
+                        ev = json.loads(line)
+                        if ev.get("type") == "session_meta" and ev.get("payload", {}).get("session_id"):
+                            session_id = ev["payload"]["session_id"]
+                            break
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+    return {"reply": reply, "model": model, "session_id": session_id}
 
 
 def main(argv=None):
@@ -229,14 +227,13 @@ def main(argv=None):
     ap.add_argument("--prompt-file")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--read-only", action="store_true")
-    ap.add_argument("--no-briefing", action="store_true")
     ap.add_argument("message", nargs="*")
     args = ap.parse_args(argv)
     text = (open(args.prompt_file, encoding="utf-8").read()
             if args.prompt_file else " ".join(args.message))
     try:
         out = ask(text, model=args.model, cwd=args.cwd, resume=args.resume,
-                  read_only=args.read_only, include_briefing=not args.no_briefing)
+                  read_only=args.read_only)
     except CodexError as e:
         if args.json:
             print(json.dumps({"is_error": True, "result": str(e)}, ensure_ascii=False))

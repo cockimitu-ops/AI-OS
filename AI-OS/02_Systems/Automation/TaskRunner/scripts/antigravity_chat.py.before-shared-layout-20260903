@@ -50,13 +50,12 @@ def usage():
         return {"live": False, "error": str(exc)[:180]}
 
 
-def ask(message, model=None, cwd=None, read_only=False, conversation=None,
-        include_briefing=True):
+def ask(message, model=None, cwd=None, read_only=False, conversation=None):
     """One non-interactive account-backed Google AI Pro turn."""
     model = model or DEFAULT_MODEL
-    prompt = shared_briefing.prepend(message) if include_briefing else message
+    prompt = shared_briefing.prepend(message)
     argv = [BIN, "-p", prompt, "--output-format", "json", "--model", model,
-            "--print-timeout", f"{TIMEOUT_S}s", "--add-dir", cwd or PROJECT_DIR]
+            "--print-timeout", f"{TIMEOUT_S}s"]
     if conversation:
         argv += ["--conversation", conversation, "--continue"]
     if read_only:
@@ -98,15 +97,13 @@ def main(argv=None):
     parser.add_argument("--prompt-file")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--read-only", action="store_true")
-    parser.add_argument("--no-briefing", action="store_true")
     parser.add_argument("--conversation")
     parser.add_argument("message", nargs="*")
     args = parser.parse_args(argv)
     message = (open(args.prompt_file, encoding="utf-8").read()
                if args.prompt_file else " ".join(args.message))
     try:
-        result = ask(message, model=args.model, read_only=args.read_only,
-                     conversation=args.conversation, include_briefing=not args.no_briefing)
+        result = ask(message, model=args.model, read_only=args.read_only, conversation=args.conversation)
         print(json.dumps({"is_error": False, "result": result["reply"], "model": result["model"], "usage": result["usage"], "session_id": result.get("session_id")}, ensure_ascii=False) if args.json else result["reply"])
     except GoogleProError as exc:
         data = {"is_error": True, "result": str(exc)}

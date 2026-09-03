@@ -238,7 +238,7 @@ OPENROUTER_MONTHLY_BUDGET_USD = float(os.environ.get(
 OPENROUTER_PAID_INPUT_PER_M = float(os.environ.get("OPENROUTER_PAID_INPUT_PER_M", "0.4875"))
 OPENROUTER_PAID_OUTPUT_PER_M = float(os.environ.get("OPENROUTER_PAID_OUTPUT_PER_M", "1.56"))
 
-if os.environ.get("OPENROUTER_PAID_ENABLED", "").lower() == "true" and os.environ.get("OPENROUTER_API_KEY"):
+if safety_controls.state().get("paid_opt_in", False) and os.environ.get("OPENROUTER_API_KEY"):
     # context_window/max_tokens set explicitly, same reason as the free
     # nemotron entry above: verified live 2026-08-31 that without them, Open
     # Interpreter can't auto-detect this model's window and silently
@@ -978,11 +978,28 @@ def _rewrite_in_his_voice(output, thread_id, entry):
     return output
 
 
+SHARED_HISTORY_RE = re.compile(r"^\s*<!--\s*shared-history\s*-->\s*\n?", re.I)
+
+
+def _parse_shared_history(raw, thread_id):
+    """Only conversation-managed web tasks replace the worker's own history.
+
+    The leading thread identity still marks an interactive chat for its
+    timeout and voice profile; the adjacent marker disables only duplicate
+    memory. A marker quoted later in ordinary prompt text is not a directive.
+    """
+    match = SHARED_HISTORY_RE.match(raw or "")
+    if not (thread_id and thread_id.startswith("web_conv_") and match):
+        return False, raw
+    return True, raw[match.end():]
+
+
 def _run_task(task_path, filename):
     with open(task_path, "r", encoding="utf-8") as f:
         raw = f.read()
 
     thread_id, raw = memory.parse_directive(raw)
+    shared_history, raw = _parse_shared_history(raw, thread_id)
     agent_name, raw = agents.parse_directive(raw)
     model_pref, raw = agents.parse_model_directive(raw)
     handoff_depth, raw = agents.parse_handoff_depth(raw)
@@ -990,7 +1007,7 @@ def _run_task(task_path, filename):
     propose, instruction = _parse_propose(raw)
 
     # A bare follow-up stays in whatever role the conversation was already in.
-    if not agent_name and thread_id:
+    if not agent_name and thread_id and not shared_history:
         agent_name = agents.resolve(memory.last_agent(thread_id) or "")
 
     # Nothing named an agent and no thread implied one, so orchestrate: pick
@@ -1015,7 +1032,7 @@ def _run_task(task_path, filename):
         model_pref = agents.model_preference(agent_name)
 
     system_prompt = _system_prompt_for(agent_name, thread_id)
-    history = memory.as_messages(thread_id) if thread_id else None
+    history = memory.as_messages(thread_id) if thread_id and not shared_history else None
     # Same signal the voice profile uses: a thread id means a human is waiting
     # on the other end, and nothing else does.
     interactive = bool(thread_id and thread_id.startswith(VOICE_THREAD_PREFIXES))
@@ -1041,49 +1058,75 @@ def _run_task(task_path, filename):
     print(f"[*] Processing task: {filename}{label}", flush=True)
     output = None
     errors = []
-    for entry in chain_for(model_pref):
-        model = entry["model"]
-        if entry["delay"]:
-            time.sleep(entry["delay"])
-        # Live check, not a build-time decision: MODEL_CHAIN is built once at
-        # process start in a Restart=always service that runs for days, so
-        # "has this month's budget run out" has to be asked fresh on every
-        # task, not baked in when the chain was constructed.
-        if entry["paid"]:
-            if not spend_guard.can_spend(spend_guard.load_ledger(), OPENROUTER_MONTHLY_BUDGET_USD):
-                print(f"[!] {model} skipped - monthly budget "
-                      f"(${OPENROUTER_MONTHLY_BUDGET_USD:.2f}) reached")
-                errors.append(f"{model}: skipped, monthly budget reached")
-                continue
-        try:
-            with _time_limit(attempt_budget):
-                output = _attempt(model, instruction, system_prompt, history,
-                                  api_base=entry["api_base"], api_key=entry["api_key"],
-                                  context_window=entry["context_window"],
-                                  max_tokens=entry["max_tokens"])
+    if propose:
+        # Brainstorming a proposal must never spend real budget on the local
+        # MODEL_CHAIN (which can include the paid GLM/OpenRouter route) - it
+        # goes straight to the same three engines Felix already reviews
+        # proposals from, never GLM. This has to run INSTEAD of the chain
+        # below, not after it: running it after meant a real (and often
+        # rate-limited) chain attempt happened first regardless, its ERROR
+        # output then skipped this block entirely, and no proposal was ever
+        # produced. (2026-09-02)
+        import engines
+        for eng in ["google-pro", "codex", "claude"]:
+            try:
+                ticket = engines.send(eng, instruction, read_only=True)
+                res = engines.result(eng, ticket["job"])
+                if res.get("ok"):
+                    output = res.get("reply")
+                    break
+                errors.append(f"{eng}: {res.get('error')}")
+            except Exception as e:
+                errors.append(f"{eng}: {type(e).__name__}: {e}")
+    else:
+        for entry in chain_for(model_pref):
+            model = entry["model"]
+            if entry["delay"]:
+                time.sleep(entry["delay"])
+            # Live check, not a build-time decision: MODEL_CHAIN is built once at
+            # process start in a Restart=always service that runs for days, so
+            # "has this month's budget run out" has to be asked fresh on every
+            # task, not baked in when the chain was constructed.
             if entry["paid"]:
-                _record_paid_spend(model, instruction, system_prompt, history, output)
-            output = _rewrite_in_his_voice(output, thread_id, entry)
-            break
-        except Exception as e:
-            print(f"[!] {model} failed ({e})")
-            errors.append(f"{model}: {type(e).__name__}: {e}")
+                if not safety_controls.state().get("paid_opt_in"):
+                    print(f"[!] {model} skipped - Paid Opt-in is disabled")
+                    errors.append(f"{model}: skipped, Paid Opt-in is disabled")
+                    continue
+                if not spend_guard.can_spend(spend_guard.load_ledger(), OPENROUTER_MONTHLY_BUDGET_USD):
+                    print(f"[!] {model} skipped - monthly budget "
+                          f"(${OPENROUTER_MONTHLY_BUDGET_USD:.2f}) reached")
+                    errors.append(f"{model}: skipped, monthly budget reached")
+                    continue
+            try:
+                with _time_limit(attempt_budget):
+                    output = _attempt(model, instruction, system_prompt, history,
+                                      api_base=entry["api_base"], api_key=entry["api_key"],
+                                      context_window=entry["context_window"],
+                                      max_tokens=entry["max_tokens"])
+                if entry["paid"]:
+                    _record_paid_spend(model, instruction, system_prompt, history, output)
+                output = _rewrite_in_his_voice(output, thread_id, entry)
+                break
+            except Exception as e:
+                print(f"[!] {model} failed ({e})")
+                errors.append(f"{model}: {type(e).__name__}: {e}")
 
-    if output is None and CLAUDE_ESCALATION_ENABLED:
-        print("[!] All free models failed; escalating to Claude (Pro quota - last resort)")
-        try:
-            output = _attempt_claude(instruction)
-        except Exception as e:
-            errors.append(f"claude -p {CLAUDE_MODEL}: {type(e).__name__}: {e}")
+        if output is None and CLAUDE_ESCALATION_ENABLED:
+            print("[!] All free models failed; escalating to Claude (Pro quota - last resort)")
+            try:
+                output = _attempt_claude(instruction)
+            except Exception as e:
+                errors.append(f"claude -p {CLAUDE_MODEL}: {type(e).__name__}: {e}")
 
     if output is None:
         error_lines = "\n".join(f"- {line}" for line in errors)
         note = (
             ""
-            if CLAUDE_ESCALATION_ENABLED
+            if propose or CLAUDE_ESCALATION_ENABLED
             else "\n(Escalation: disabled pending ToS review - see CLAUDE_ESCALATION_ENABLED comment)"
         )
         output = f"ERROR during execution. All models failed:\n{error_lines}{note}"
+        safety_controls.escalate_error(f"AI-OS Worker Task: {filename}", output)
 
     # A successful agent can hand its own output to another agent by ending
     # with `<!-- handoff: Agent: reason -->` - see agents.py. Checked before
@@ -1105,7 +1148,7 @@ def _run_task(task_path, filename):
 
     # Only successful turns enter memory. Replaying "all models failed" as
     # context teaches the model nothing and spends budget a real turn needs.
-    if thread_id and not output.startswith("ERROR"):
+    if thread_id and not shared_history and not output.startswith("ERROR"):
         memory.save_turn(thread_id, instruction, output, agent_name)
 
     # A proposal run's output goes into the store and nowhere else - not to

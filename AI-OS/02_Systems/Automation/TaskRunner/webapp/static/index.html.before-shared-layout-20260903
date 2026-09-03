@@ -28,7 +28,6 @@
     <span id="conn-dot" class="dot" title="Verbindung"></span>
   </div>
 </header>
-<button id="fx-daystrip" type="button" aria-label="Tageslicht wählen" title="Tageslicht wählen"></button>
 
 <main id="screens">
 
@@ -281,7 +280,6 @@
      deshalb steht sie hier ohne weitere Absicherung. -->
 <script src="paint-motifs.js"></script>
 <script src="fx.js"></script>
-<script src="brush-meter.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

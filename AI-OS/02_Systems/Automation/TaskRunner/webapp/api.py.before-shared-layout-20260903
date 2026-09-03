@@ -18,7 +18,6 @@ fancier.
 import concurrent.futures
 import threading
 import json
-import math
 import os
 import re
 import subprocess
@@ -36,7 +35,6 @@ import knowledge_store
 import memory
 import money_board
 import dmarc_prospector
-import desktop_relay
 import flip_log
 import notifications
 import safety_controls
@@ -67,15 +65,11 @@ VOICE_DIR = os.path.join(TASK_RUNNER_DIR, "voice")
 # memory before writing it - server.py refuses on Content-Length before any
 # of it is read, so an oversized POST costs nothing.
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
-MAX_APK_UPLOAD_BYTES = 250 * 1024 * 1024
 # Deliberately narrow: the only thing this is for is getting chat exports and
 # similar plain data onto the server. Anything executable or web-servable
 # would be a genuinely different feature with genuinely different questions
 # to answer first.
 ALLOWED_UPLOAD_EXT = (".txt", ".zip", ".csv", ".json", ".md",
-                      # APKs can only be consumed by the explicit Pico
-                      # install action; uploads are never served back.
-                      ".apk",
                       # Photos: needed both for sending a design reference and
                       # for the photo-to-notes path (Felix does not type notes
                       # on his phone, he photographs slides and boards).
@@ -321,17 +315,13 @@ SCREENSHOT_DIR = os.path.join(TASK_RUNNER_DIR, "phone", "screenshots")
 # below is written against whichever one this table names, so adding a third
 # device is a row here rather than a branch everywhere.
 DEVICES = {
-    "laptop": {"label": "KALI ASUS", "module": desktop_relay,
-               "rooted": False, "kind": "desktop"},
-    "poco": {"label": "Poco X3 Pro", "module": phone_root, "rooted": True,
-             "kind": "phone"},
-    "nothing": {"label": "Nothing Phone 2a", "module": phone, "rooted": False,
-                "kind": "phone"},
+    "poco": {"label": "Poco X3 Pro", "module": phone_root, "rooted": True},
+    "nothing": {"label": "Nothing Phone 2a", "module": phone, "rooted": False},
     # Listed before it is reachable, on purpose. An absent row would read as
     # "not supported"; a row that says why it is offline reads as "one cable
     # away", which is what it is - see scripts/pico_setup.sh.
     "pico": {"label": "Pico 4", "module": pico, "rooted": False,
-             "kind": "headset", "extra": {"install"}},
+             "extra": {"install"}},
 }
 
 # A panel is an at-a-glance view; waiting longer than this for a phone that
@@ -354,8 +344,6 @@ DEVICE_PROBE_S = 8
 # with a reason rather than attempted and failed with a stack trace.
 BASE_ACTIONS = {"screenshot", "tap", "swipe", "key", "text", "open", "status",
                 "notifications", "apps", "stream_start", "stream_stop"}
-DESKTOP_ACTIONS = {"screenshot", "tap", "swipe", "scroll", "key", "text",
-                   "status", "stream_start", "stream_stop"}
 # Root-only because dismissing the keyguard needs it. Listed separately from
 # the read verbs because it is the one thing that makes live control usable at
 # all - see phone_root.unlock().
@@ -370,8 +358,7 @@ DANGEROUS_ACTIONS = {"uninstall", "rm", "reboot", "wipe"}
 # Verbs a single device has that the others do not - sideloading an APK is
 # the whole point of a headset and meaningless on a phone Felix carries.
 EXTRA_ACTIONS = {"install"}
-DEVICE_ACTIONS = (BASE_ACTIONS | DESKTOP_ACTIONS | ROOT_ACTIONS |
-                  DANGEROUS_ACTIONS | EXTRA_ACTIONS)
+DEVICE_ACTIONS = BASE_ACTIONS | ROOT_ACTIONS | DANGEROUS_ACTIONS | EXTRA_ACTIONS
 
 # A shell command from the panel is interactive - Felix is watching it. A long
 # one belongs in the task queue, not in a request a phone browser is holding
@@ -431,8 +418,7 @@ def get_devices(_body):
     phone being off must not blank the panel for the other."""
     def probe(item):
         key, entry = item
-        row = {"id": key, "label": entry["label"], "rooted": entry["rooted"],
-               "kind": entry.get("kind", "phone")}
+        row = {"id": key, "label": entry["label"], "rooted": entry["rooted"]}
         try:
             state = entry["module"].status()
             # From the same round trip status() already made. A separate
@@ -446,14 +432,11 @@ def get_devices(_body):
                 "current_app": state.get("current_app"),
                 "width": size[0] if size else None,
                 "height": size[1] if size else None,
-                "actions": sorted((DESKTOP_ACTIONS if entry.get("kind") == "desktop"
-                                   else BASE_ACTIONS) | entry.get("extra", set()) | (
+                "actions": sorted(BASE_ACTIONS | entry.get("extra", set()) | (
                     ROOT_ACTIONS | DANGEROUS_ACTIONS if entry["rooted"] else set())),
             })
         except Exception as e:  # noqa: BLE001 - a device being away is normal
             row.update({"reachable": False, "reason": str(e)[:140]})
-            if key == "pico" and not pico.configured():
-                row["setup_required"] = True
         return row
 
     # Probed in parallel AND on a deadline. Sequentially, one sleeping phone
@@ -487,8 +470,7 @@ def get_devices(_body):
     for key, entry in DEVICES.items():
         if key not in answered:
             out.append({"id": key, "label": entry["label"],
-                        "rooted": entry["rooted"],
-                        "kind": entry.get("kind", "phone"), "reachable": False,
+                        "rooted": entry["rooted"], "reachable": False,
                         "reason": f"keine Antwort in {DEVICE_PROBE_S}s"})
     return 200, {"devices": sorted(out, key=lambda r: (not r["reachable"], r["id"]))}
 
@@ -524,18 +506,11 @@ def post_device_action(body):
         return 400, {"error": str(e)}
     mod = entry["module"]
     extra = entry.get("extra", set())
-    if (entry.get("kind") != "desktop"
-            and action in (ROOT_ACTIONS | DANGEROUS_ACTIONS)
-            and not entry["rooted"]):
-        return 200, {"ok": False,
-                     "error": f"{entry['label']} hat kein root - '{action}' geht dort nicht"}
-    allowed = (DESKTOP_ACTIONS if entry.get("kind") == "desktop"
-               else BASE_ACTIONS | extra | (ROOT_ACTIONS | DANGEROUS_ACTIONS
-                                             if entry["rooted"] else set()))
-    if action not in allowed:
-        return 400, {"error": f"'{action}' wird von {entry['label']} nicht unterstützt"}
     if action in extra:
         pass       # a verb this device has and the others do not
+    elif action in (ROOT_ACTIONS | DANGEROUS_ACTIONS) and not entry["rooted"]:
+        return 200, {"ok": False,
+                     "error": f"{entry['label']} hat kein root - '{action}' geht dort nicht"}
 
     def _num(name, default=None):
         try:
@@ -566,11 +541,6 @@ def post_device_action(body):
         # --- live video ---------------------------------------------------
         if action == "stream_start":
             size = device_size(entry)
-            if entry.get("kind") == "desktop":
-                mod.stream_start()
-                return 200, {"ok": True,
-                             "width": size[0] if size else None,
-                             "height": size[1] if size else None}
             serial = _device_serial(entry)
             enc = phone_stream.encode_size(size[0] if size else None,
                                            size[1] if size else None)
@@ -579,9 +549,6 @@ def post_device_action(body):
                          "width": size[0] if size else None,
                          "height": size[1] if size else None}
         if action == "stream_stop":
-            if entry.get("kind") == "desktop":
-                mod.stream_stop()
-                return 200, {"ok": True}
             phone_stream.stop(_device_serial(entry))
             return 200, {"ok": True}
 
@@ -605,16 +572,7 @@ def post_device_action(body):
         if action == "calls":
             return 200, {"ok": True, "calls": mod.call_log(limit=_num("limit", 20))}
         if action == "install":
-            # The browser names an uploaded APK, never an arbitrary server
-            # path. Installing a file is intended; exposing the server's
-            # filesystem layout to a request is not.
-            name = safe_upload_name(_str("name"))
-            if not name or not name.lower().endswith(".apk"):
-                return 400, {"error": "install braucht eine hochgeladene APK"}
-            path = os.path.join(UPLOAD_DIR, name)
-            if not os.path.isfile(path):
-                return 400, {"error": "APK nicht gefunden"}
-            return 200, {"ok": True, "output": mod.install(path)}
+            return 200, {"ok": True, "output": mod.install(_str("path"))}
         if action == "unlock":
             mod.unlock()
             return 200, {"ok": True}
@@ -664,24 +622,12 @@ def post_device_action(body):
             x, y = _num("x"), _num("y")
             if x is None or y is None:
                 return 400, {"error": "tap needs x and y"}
-            if entry.get("kind") == "desktop":
-                button = _str("button") or "left"
-                clicks = _num("clicks", 1)
-                if button not in ("left", "right") or clicks not in (1, 2):
-                    return 400, {"error": "tap button/clicks ungültig"}
-                mod.tap(x, y, button=button, clicks=clicks)
-            else:
-                mod.tap(x, y)
+            mod.tap(x, y)
         elif action == "swipe":
             coords = [_num(k) for k in ("x1", "y1", "x2", "y2")]
             if any(c is None for c in coords):
                 return 400, {"error": "swipe needs x1,y1,x2,y2"}
             mod.swipe(*coords, ms=_num("ms") or 300)
-        elif action == "scroll":
-            dy = _num("dy")
-            if dy is None or not -2400 <= dy <= 2400:
-                return 400, {"error": "scroll braucht dy zwischen -2400 und 2400"}
-            mod.scroll(dy, x=_num("x"), y=_num("y"))
         elif action == "key":
             mod.key(_str("key"))
         elif action == "text":
@@ -694,21 +640,6 @@ def post_device_action(body):
         return 200, {"ok": True}
     except Exception as e:  # noqa: BLE001 - surface the device's own message
         return 200, {"ok": False, "error": str(e)[:400]}
-
-
-def post_desktop_poll(_body):
-    """Laptop heartbeat plus one bounded batch of queued input actions."""
-    return 200, desktop_relay.poll()
-
-
-def post_desktop_frame(query, raw):
-    """Replace the one latest laptop frame; no frame history is retained."""
-    try:
-        width = (query.get("width") or [""])[0]
-        height = (query.get("height") or [""])[0]
-        return 200, desktop_relay.accept_frame(raw, width, height)
-    except (TypeError, ValueError, OSError) as exc:
-        return 400, {"error": str(exc)[:200]}
 
 
 # --- snipes --------------------------------------------------------------
@@ -1096,8 +1027,7 @@ def post_upload(query, raw):
                               f"(allowed: {', '.join(ALLOWED_UPLOAD_EXT)})"}
     if not raw:
         return 400, {"error": "empty file"}
-    limit = MAX_APK_UPLOAD_BYTES if name.lower().endswith(".apk") else MAX_UPLOAD_BYTES
-    if len(raw) > limit:
+    if len(raw) > MAX_UPLOAD_BYTES:
         return 413, {"error": "file too large"}
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     path, final_name = _unique_path(name)
@@ -1309,72 +1239,6 @@ def _aios_services():
         rows = []
     _services_cache.update(at=now, value=rows)
     return rows
-
-
-# --- VR-Raum: wo jedes Gerät virtuell hängt --------------------------------
-#
-# Die Godot-App fragt das beim Start ab und schreibt es, sobald Felix ein
-# Panel loslässt. Zentral gespeichert statt nur im Headset, aus demselben
-# Grund wie der Rest der AI-OS: eine neu installierte App darf nicht bei
-# einem leeren Raum anfangen, und ein zweites Gerät (Laptop im Headset-Modus,
-# ein zweiter Pico) soll denselben Raum sehen, nicht seinen eigenen.
-VR_LAYOUT_PATH = os.path.join(TASK_RUNNER_DIR, "spend", "vr_layout.json")
-VR_LAYOUT_LOCK = threading.Lock()
-
-
-def get_vr_layout(_body):
-    with VR_LAYOUT_LOCK:
-        try:
-            with open(VR_LAYOUT_PATH, encoding="utf-8") as f:
-                layout = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            layout = {}
-    return 200, {"panels": layout}
-
-
-def post_vr_layout(body):
-    """Eine Panel-Position setzen oder löschen.
-
-    Ein Panel pro Aufruf, nicht der ganze Raum auf einmal: zwei Controller-
-    Hände, die gleichzeitig zwei Panels loslassen, dürfen sich nicht
-    gegenseitig überschreiben, wenn beide Anfragen kurz hintereinander beim
-    Server ankommen."""
-    body = body or {}
-    device = (body.get("device") or "").strip()
-    if (not device or len(device) > 120
-            or not re.fullmatch(r"[A-Za-z0-9_.:-]+", device)):
-        return 400, {"error": "device fehlt"}
-    pos, rot = body.get("position"), body.get("rotation")
-    if not body.get("remove"):
-        if not (isinstance(pos, list) and len(pos) == 3
-                and isinstance(rot, list) and len(rot) == 3):
-            return 400, {"error": "position/rotation müssen je [x,y,z] sein"}
-        try:
-            pos = [float(v) for v in pos]
-            rot = [float(v) for v in rot]
-            scale = float(body.get("scale", 1.0))
-        except (TypeError, ValueError):
-            return 400, {"error": "position/rotation/scale müssen Zahlen sein"}
-        if not all(math.isfinite(v) for v in pos + rot + [scale]) or scale <= 0:
-            return 400, {"error": "position/rotation/scale müssen endliche Werte sein"}
-        scale = min(2.5, max(0.35, scale))
-    with VR_LAYOUT_LOCK:
-        try:
-            with open(VR_LAYOUT_PATH, encoding="utf-8") as f:
-                layout = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            layout = {}
-        if body.get("remove"):
-            layout.pop(device, None)
-        else:
-            layout[device] = {"position": pos, "rotation": rot,
-                              "scale": scale, "updated": time.time()}
-        os.makedirs(os.path.dirname(VR_LAYOUT_PATH), exist_ok=True)
-        tmp = f"{VR_LAYOUT_PATH}.tmp.{os.getpid()}.{threading.get_ident()}"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(layout, f, indent=2, ensure_ascii=False)
-        os.replace(tmp, VR_LAYOUT_PATH)
-    return 200, {"panels": layout}
 
 
 def get_workers(_body):
@@ -1637,35 +1501,6 @@ def post_conversations(body):
         return 200, {"conversations": conversation_store.list_conversations(
             engine=engine, limit=min(int(body.get("limit") or 50), 200))}
 
-    if action == 'attach':
-        if engine != 'claude':
-            return 400, {'error': 'Nur vorhandene lokale Claude-Sitzungen können importiert werden.'}
-        session_id = (body.get('session_id') or '').strip()
-        if not session_id or not claude_chat.SESSION_ID_RE.fullmatch(session_id):
-            return 400, {'error': 'ungültige session_id'}
-        # Serialize first import across processes; never create duplicate copies
-        # when two browser tabs open the same native session simultaneously.
-        with conversation_store._transaction('native_import_claude'):
-            conversation_id = conversation_store.find_session('claude', session_id)
-            if not conversation_id:
-                try:
-                    native = claude_chat.transcript(session_id, limit=400)
-                except (ValueError, FileNotFoundError) as exc:
-                    return 400, {'error': str(exc)}
-                if not native.get('session_id') or native.get('error'):
-                    return 404, {'error': native.get('error') or 'Sitzung nicht gefunden'}
-                conversation_id = conversation_store.create('claude', title=native.get('title'))
-                record = conversation_store.read(conversation_id)
-                for message in [m for m in native.get('messages', []) if not m.get('tool')][-400:]:
-                    if message.get('tool') or message.get('role') not in ('user', 'assistant'):
-                        continue
-                    record = conversation_store.append(conversation_id, message['role'],
-                        message.get('text') or '', engine='claude' if message['role'] == 'assistant' else None,
-                        session_id=session_id if message['role'] == 'assistant' else None)
-                conversation_store.set_session_id(conversation_id, session_id, engine='claude',
-                                                  seen_seq=record['next_seq'] - 1)
-        return 200, {'conversation': conversation_store.read(conversation_id)}
-
     if action == "create":
         if not engine:
             return 400, {"error": "engine is required"}
@@ -1687,7 +1522,7 @@ def post_conversations(body):
             return 404, {"error": f"unbekannte conversation_id: {conversation_id!r}"}
         return 200, {"conversation": record}
 
-    return 400, {"error": f"unbekannte action: {action!r} (list|create|read|attach)"}
+    return 400, {"error": f"unbekannte action: {action!r} (list|create|read)"}
 
 
 def get_gemini_thread(body):

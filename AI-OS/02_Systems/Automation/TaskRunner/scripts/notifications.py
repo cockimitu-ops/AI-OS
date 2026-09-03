@@ -150,6 +150,11 @@ def watch_job(engine, job, conversation_id=None, preview=None, record_reply=None
             text = f"{cur_engine}: {reply[:300]}" if reply else f"{cur_engine} ist fertig."
         else:
             text = f"{cur_engine}: {res.get('error', 'Fehlgeschlagen')[:300]}"
+            try:
+                import safety_controls
+                safety_controls.escalate_error(f"Background Job ({cur_engine})", text)
+            except Exception:
+                pass
         add(text, conversation_id=conversation_id, engine=cur_engine, job_id=cur_job)
         if record_reply and res.get("ready"):
             try:

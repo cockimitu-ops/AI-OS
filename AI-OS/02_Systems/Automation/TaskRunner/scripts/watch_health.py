@@ -226,6 +226,11 @@ def main(argv=None):
             sniper.send_telegram(format_report(rows))
         except Exception as e:  # noqa: BLE001 - a failed notification must not
             print(f"[!] Telegram: {e}")  # turn a health check into an outage
+        try:
+            import safety_controls
+            safety_controls.escalate_error("watch_health.py", format_report(rows))
+        except Exception:
+            pass
     return 1 if problems(rows) else 0
 
 

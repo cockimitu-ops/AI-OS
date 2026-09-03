@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>AI-OS · Heute Feld (Layout-Prototyp)</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font: 16px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    color: var(--ink);
+    background: var(--ground);
+    overflow: hidden;
+  }
+
+  :root, body[data-light="dawn"] {
+    --ink: #1b2029; --ink-dim: #4a5464; --ground: #bcc0c4;
+    --gesso: rgba(240,242,244,.86); --gesso-lit: rgba(255,255,255,.95);
+    --gesso-dim: rgba(70,80,95,.18); --gate: #b4501f;
+    --shadow: rgba(255,255,255,.85);
+  }
+  body[data-light="day"] {
+    --ink: #1e2118; --ink-dim: #4e5445; --ground: #e2dcc8;
+    --gesso: rgba(247,244,233,.86); --gesso-lit: rgba(255,255,255,.96);
+    --gesso-dim: rgba(60,66,44,.18); --gate: #7a5a18;
+    --shadow: rgba(255,255,255,.9);
+  }
+  body[data-light="dusk"] {
+    --ink: #241a1c; --ink-dim: #5c4749; --ground: #c49e94;
+    --gesso: rgba(251,240,234,.86); --gesso-lit: rgba(255,255,255,.95);
+    --gesso-dim: rgba(80,50,50,.2); --gate: #b03a28;
+    --shadow: rgba(255,255,255,.8);
+  }
+  body[data-light="night"] {
+    --ink: #eef2fb; --ink-dim: #9aa8c4; --ground: #141a28;
+    --gesso: rgba(30,38,58,.80); --gesso-lit: rgba(150,170,210,.24);
+    --gesso-dim: rgba(0,0,0,.4); --gate: #d8996a;
+    --shadow: rgba(0,0,0,.85);
+  }
+
+  #fx-grain { position: fixed; inset: -50%; z-index: 60; pointer-events: none;
+              opacity: .06; mix-blend-mode: multiply; }
+  body[data-light="night"] #fx-grain { mix-blend-mode: overlay; opacity: .04; }
+
+  .wrap {
+    position: relative; z-index: 20; height: 100%;
+    display: flex; flex-direction: column;
+    padding: max(18px, env(safe-area-inset-top)) 16px 16px;
+    gap: 14px;
+    pointer-events: none; /* Let clicks pass through to canvas where possible, or handle on items */
+  }
+
+  header, .question, .rest, .pipe, dialog { pointer-events: auto; }
+  header, .question, .rest, .pipe { text-shadow: 0 1px 3px var(--shadow), 0 0 2px var(--shadow); }
+
+  header { display: flex; align-items: baseline; justify-content: space-between; }
+  .mark { font-size: 12px; letter-spacing: .22em; font-weight: 600; opacity: .6; }
+  .when { font-size: 12px; opacity: .55; font-style: italic; }
+
+  .question { font-size: 27px; line-height: 1.15; font-weight: 600; letter-spacing: -.02em; }
+  .question span { display: block; font-size: 14px; font-weight: 400;
+                   opacity: .9; letter-spacing: 0; margin-top: 5px; }
+
+  /* We position the text labels absolutely over the field, matching where the motifs are painted. */
+  .stack { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+
+  /* Semantic button text layer */
+  .field-label {
+    position: absolute;
+    transform: translateX(-50%);
+    text-align: center;
+    cursor: pointer;
+    pointer-events: auto;
+    font-family: inherit;
+    font-size: 16px; 
+    font-weight: 600;
+    color: var(--ink);
+    background: none;
+    border: none;
+    padding: 0;
+    outline-offset: 4px;
+    text-shadow: 0 1px 4px var(--shadow), 0 -1px 3px var(--shadow), 0 0 2px var(--shadow), 0 1px 1px var(--shadow);
+  }
+  .field-label:focus-visible { outline: 2px solid var(--gate); border-radius: 3px; }
+  .field-label .field-meta { display: block; opacity: .9; }
+
+  .field-label-text {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .field-label.gate-text {
+    font-weight: 700;
+  }
+
+  /* Shared slip style for dialog contents and token prompts */
+  .gesso-slip {
+    background: var(--gesso);
+    border-radius: 3px;
+    padding: 18px 16px;
+    box-shadow: inset 0 1px 0 var(--gesso-lit), inset 0 -1px 0 var(--gesso-dim),
+                0 6px 20px -6px rgba(0,0,0,.5);
+    text-align: left;
+    color: var(--ink);
+  }
+  .gesso-slip.gate-text {
+    border-left: 3px solid var(--gate);
+    padding-left: 13px;
+  }
+
+  .field-meta {
+    font-size: 13px; font-weight: 500; opacity: 0.75; margin-top: 2px;
+  }
+  .field-why { font-size: 13.5px; line-height: 1.5; color: var(--ink-dim); margin-top: 10px; }
+
+  .rest { background: none; border: 0; color: inherit; font: inherit;
+          font-size: 13.5px; opacity: .6; text-align: left; padding: 10px 2px;
+          cursor: pointer; border-top: 1px solid var(--gesso-dim); margin-top: auto; }
+
+  .pipe { font-size: 12.5px; line-height: 1.55; opacity: .6; }
+  .pipe b { font-weight: 700; opacity: .85; }
+
+  dialog {
+    border: 0; padding: 0; background: none; color: var(--ink);
+    width: min(430px, 94vw); margin: auto auto 0; max-height: 80vh; overflow-y: auto;
+  }
+  dialog::backdrop { background: rgba(0,0,0,.42); }
+  
+  #action-dialog {
+    width: min(340px, 94vw); margin: auto;
+  }
+
+  .sheet { background: var(--gesso); border-radius: 3px 3px 0 0; padding: 18px 16px 22px;
+           box-shadow: inset 0 1px 0 var(--gesso-lit), 0 -6px 30px -8px rgba(0,0,0,.5); }
+  .sheet h2 { font-size: 13px; letter-spacing: .16em; text-transform: uppercase;
+              opacity: .55; margin-bottom: 12px; font-weight: 600; }
+  .row { display: flex; justify-content: space-between; gap: 12px;
+         padding: 9px 0; border-bottom: 1px solid var(--gesso-dim); font-size: 14px; }
+  .row:last-of-type { border-bottom: 0; }
+  .row .r-eur { font-weight: 700; white-space: nowrap; opacity: .8; }
+  .close { margin-top: 14px; width: 100%; background: none; border: 1px solid var(--gesso-dim);
+           border-radius: 3px; padding: 11px; font: inherit; color: inherit; cursor: pointer; }
+  .note { font-size: 11.5px; opacity: .45; margin-top: 14px; line-height: 1.5; }
+</style>
+</head>
+<body data-screen="screen-today">
+
+<canvas id="fx-canvas" aria-hidden="true"></canvas>
+<div id="fx-grain" aria-hidden="true"></div>
+
+<div class="wrap">
+  <header>
+    <span class="mark">AI · OS</span>
+    <span class="when" id="when"></span>
+  </header>
+  <div class="question">Was machst du als Nächstes?<span id="sub">…</span></div>
+
+  <div class="stack" id="stack"></div>
+
+  <button class="rest" id="rest-btn">…</button>
+  <div class="pipe" id="pipe"></div>
+</div>
+
+<dialog id="action-dialog" aria-labelledby="ad-action">
+  <div class="gesso-slip" id="ad-slip">
+    <div id="ad-gate-label" style="display:none; font-size:11px;letter-spacing:.16em;font-weight:700;text-transform:uppercase;color:var(--gate);margin-bottom:6px">Zuerst</div>
+    <div style="font-size:17px;font-weight:600" id="ad-action"></div>
+    <div class="field-meta" id="ad-meta"></div>
+    <div class="field-why" id="ad-note"></div>
+    <button class="close" id="ad-close" style="margin-top: 16px;">Zu</button>
+  </div>
+</dialog>
+
+<dialog id="sheet">
+  <div class="sheet">
+    <h2>Alles andere</h2>
+    <div id="rest-rows"></div>
+    <p class="note">Layout-Prototyp: die Zahlen sind echt, die Karten lassen sich
+       aufklappen. Erledigt-Haken und die übrigen Screens sind hier bewusst
+       nicht verdrahtet — das ist die nächste Stufe, nicht diese.</p>
+    <button class="close" id="close-btn">Zu</button>
+  </div>
+</dialog>
+
+<script src="paint-motifs.js"></script>
+<script src="fx.js"></script>
+<script>
+(() => {
+"use strict";
+
+const TOKEN_KEY = "aios_web_token";
+const PARAMS = new URLSearchParams(location.search);
+
+function token() {
+  const p = PARAMS.get("token");
+  if (p) {
+    PARAMS.delete("token");
+    try { localStorage.setItem(TOKEN_KEY, p); } catch (_) {}
+    history.replaceState({}, "", location.pathname);
+    return p;
+  }
+  try { return localStorage.getItem(TOKEN_KEY) || ""; } catch (_) { return ""; }
+}
+
+const eur = (n) => `${Math.round(n)} €`;
+const esc = (s) => { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; };
+
+function dauer(min) {
+  if (!min) return "läuft nebenbei";
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60), r = min % 60;
+  return r ? `${h} h ${r} min` : `${h} h`;
+}
+
+function card(a, rank) {
+  const btn = document.createElement("button");
+  btn.id = `btn-rank-${rank}`;
+  btn.className = "field-label" + (a.gates ? " gate-text" : "");
+  btn.type = "button";
+  btn.setAttribute("aria-haspopup", "dialog");
+  btn.setAttribute("aria-controls", "action-dialog");
+  btn.dataset.rank = rank + 1; // 1-based rank mapping for semantic checks
+  if (a.gates) btn.dataset.gate = "true";
+  
+  btn.innerHTML = `<span class="field-label-text">${a.gates === true ? "Zuerst: " : ""}${esc(a.action)}</span>
+    <span class="field-meta">${a.euros ? esc(eur(a.euros)) : "kein Geld"} · ${esc(dauer(a.minutes))}</span>`;
+
+  // Register object in fx.js painting queue
+  if (window.fxPlaceObject) {
+    const layout = window.fxPlaceObject(rank + 1, a);
+    if (layout) {
+      btn.style.left = layout.x + "px";
+      btn.style.top = (layout.y - layout.height / 2) + "px";
+      btn.style.width = layout.labelWidth + "px";
+      btn.style.paddingTop = (layout.height + 8) + "px";
+    }
+  }
+  
+  btn.addEventListener("click", () => {
+    const ad = document.getElementById("action-dialog");
+    const slip = document.getElementById("ad-slip");
+    
+    if (a.gates) slip.classList.add("gate-text");
+    else slip.classList.remove("gate-text");
+    
+    document.getElementById("ad-gate-label").style.display = a.gates ? "block" : "none";
+    document.getElementById("ad-action").textContent = a.action;
+    document.getElementById("ad-meta").textContent = 
+      (a.euros ? eur(a.euros) : "kein Geld") + " · " + dauer(a.minutes);
+    
+    const noteEl = document.getElementById("ad-note");
+    noteEl.textContent = a.note || "";
+    noteEl.style.display = a.note ? "block" : "none";
+    
+    ad.showModal();
+  });
+  
+  return btn;
+}
+
+window.addEventListener("fxobjectschange", () => {
+  for (let i = 0; i < 3; i++) {
+    const btn = document.getElementById(`btn-rank-${i}`);
+    if (btn && window.fxObjectLayout) {
+      const layout = window.fxObjectLayout(i + 1);
+      if (layout) {
+        btn.style.left = layout.x + "px";
+        btn.style.top = (layout.y - layout.height / 2) + "px";
+        btn.style.width = layout.labelWidth + "px";
+        btn.style.paddingTop = (layout.height + 8) + "px";
+      }
+    }
+  }
+});
+
+function askForToken(stack, msg) {
+  window.fxClearObjects?.();
+  window.fxRepaint?.();
+  document.getElementById("sub").textContent = "";
+  document.getElementById("pipe").textContent = "";
+  document.getElementById("rest-btn").style.display = "none";
+  stack.innerHTML = `
+    <div class="gesso-slip" style="position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:300px; pointer-events:auto;">
+      <div style="font-size:11px;letter-spacing:.16em;font-weight:700;text-transform:uppercase;color:var(--gate);margin-bottom:6px">Zugang</div>
+      <div style="font-size:17px;font-weight:600">${esc(msg)}</div>
+      <div class="field-why" style="display:block">Derselbe Token wie in der App. Einmal
+        eingeben, dann merkt der Browser ihn sich.</div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <input id="tok" type="password" aria-label="Zugangs-Token" autocomplete="off" autocapitalize="off"
+               spellcheck="false" placeholder="Token"
+               style="flex:1;min-width:0;font:inherit;font-size:15px;padding:10px;
+                      border:1px solid var(--gesso-dim);border-radius:3px;
+                      background:transparent;color:inherit">
+        <button id="tok-save" style="font:inherit;font-size:15px;padding:10px 16px;
+                border:1px solid var(--gesso-dim);border-radius:3px;
+                background:transparent;color:inherit;cursor:pointer">Los</button>
+      </div>
+    </div>`;
+  const save = () => {
+    const v = document.getElementById("tok").value.trim();
+    if (!v) return;
+    try { localStorage.setItem(TOKEN_KEY, v); } catch (_) {}
+    load();
+  };
+  document.getElementById("tok-save").addEventListener("click", save);
+  document.getElementById("tok").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") save();
+  });
+}
+
+async function load() {
+  const stack = document.getElementById("stack");
+  const t = token();
+  if (!t) { askForToken(stack, "Einmal den Token, dann läuft es."); return; }
+  let data;
+  try {
+    const res = await fetch("/api/today", { headers: { Authorization: `Bearer ${t}` } });
+    if (res.status === 401) { askForToken(stack, "Der Token stimmt nicht."); return; }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    data = await res.json();
+  } catch (e) {
+    stack.innerHTML = `<div class="gesso-slip" style="position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:300px; pointer-events:auto;"><div style="font-weight:600">${esc(e.message)}</div></div>`;
+    return;
+  }
+
+  const actions = Array.isArray(data.next_actions) ? data.next_actions : [];
+  
+  // Sort by euros descending, pulling gates to the very front, preserving original stable order for equal values.
+  const ordered = [...actions].sort((a, b) => {
+    if (a.gates === true && b.gates !== true) return -1;
+    if (a.gates !== true && b.gates === true) return 1;
+    return (b.euros || 0) - (a.euros || 0);
+  });
+
+  const drei = ordered.slice(0, 3);
+  const rest = ordered.slice(3);
+
+  if (window.fxClearObjects) window.fxClearObjects();
+  stack.innerHTML = "";
+  
+  drei.forEach((a, i) => stack.appendChild(card(a, i)));
+  
+  if (window.fxRepaint) window.fxRepaint();
+
+  const summe = drei.reduce((s, a) => s + (a.euros || 0), 0);
+  const zeit = drei.reduce((s, a) => s + (a.minutes || 0), 0);
+  document.getElementById("sub").textContent =
+    drei.length ? `${eur(summe)} in ${dauer(zeit)}, wenn du diese ${drei.length} Handlungen angehst.`
+      : "Für heute ist gerade keine Handlung offen.";
+
+  const btn = document.getElementById("rest-btn");
+  btn.style.display = "";
+  btn.textContent = rest.length
+    ? `noch ${rest.length} weitere · zusammen ${eur(rest.reduce((s, a) => s + (a.euros || 0), 0))} →`
+    : "nichts weiter offen";
+  document.getElementById("rest-rows").innerHTML = rest.length
+    ? rest.map((a) => `<div class="row"><span>${esc(a.action)}</span>
+        <span class="r-eur">${a.euros ? esc(eur(a.euros)) : "—"}</span></div>`).join("")
+    : `<div class="row"><span>Nichts weiter offen.</span><span></span></div>`;
+
+  const s = data.signals || {};
+  const parts = [];
+  if (s.leads_mailable != null)
+    parts.push(`<b>${s.leads_mailable}</b> Leads mit Postadresse warten`);
+  if (s.letters_sent != null)
+    parts.push(`<b>${s.letters_sent}</b> Briefe sind bisher raus`);
+  if (s.flips && s.flips.open != null)
+    parts.push(`<b>${s.flips.open}</b> Flips offen`);
+  document.getElementById("pipe").innerHTML = parts.join(" · ");
+}
+
+function stamp() {
+  const names = { dawn: "Morgen", day: "Mittag", dusk: "Abend", night: "Nacht" };
+  const l = window.fxLight ? window.fxLight() : null;
+  document.getElementById("when").textContent = l ? names[l.name] || l.name : "";
+}
+
+const sheet = document.getElementById("sheet");
+document.getElementById("rest-btn").addEventListener("click", () => sheet.showModal());
+document.getElementById("close-btn").addEventListener("click", () => sheet.close());
+
+const actionSheet = document.getElementById("action-dialog");
+document.getElementById("ad-close").addEventListener("click", () => actionSheet.close());
+
+const forced = PARAMS.get("light");
+if (forced && window.fxSetLight) window.fxSetLight(forced);
+
+stamp();
+setInterval(stamp, 60000);
+load();
+})();
+</script>
+</body>
+</html>

@@ -394,10 +394,23 @@ def result(job_id):
                 data = json.load(f)
         except (OSError, json.JSONDecodeError) as e:
             return {"ready": True, "ok": False, "error": f"Antwort unlesbar: {e}"}
+        is_err = bool(data.get("is_error"))
+        text = data.get("result") or ""
         return {
             "ready": True,
-            "ok": not data.get("is_error"),
-            "reply": data.get("result") or "",
+            "ok": not is_err,
+            # On a real failure (2026-09-03: a bare Anthropic 500 mid-turn),
+            # the CLI puts the readable message in "result", same field as a
+            # normal reply - so `error` was never set, only `reply` was.
+            # engines.py's automatic limit-handoff reads res["error"]
+            # (is_limit(res.get("error"))), so a genuine session-limit hit
+            # here could never trigger it: the text existed, just under the
+            # wrong key. app.js's chat bubble happened to fall back to
+            # `reply` and showed the message anyway, which is why this went
+            # unnoticed - the handoff silently never fired, not that nothing
+            # showed.
+            "error": text if is_err else None,
+            "reply": text,
             "usd": data.get("total_cost_usd"),
             "turns": data.get("num_turns"),
             "duration_ms": data.get("duration_ms"),

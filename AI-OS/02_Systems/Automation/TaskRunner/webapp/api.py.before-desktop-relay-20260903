@@ -18,7 +18,6 @@ fancier.
 import concurrent.futures
 import threading
 import json
-import math
 import os
 import re
 import subprocess
@@ -36,7 +35,6 @@ import knowledge_store
 import memory
 import money_board
 import dmarc_prospector
-import desktop_relay
 import flip_log
 import notifications
 import safety_controls
@@ -321,8 +319,6 @@ SCREENSHOT_DIR = os.path.join(TASK_RUNNER_DIR, "phone", "screenshots")
 # below is written against whichever one this table names, so adding a third
 # device is a row here rather than a branch everywhere.
 DEVICES = {
-    "laptop": {"label": "KALI ASUS", "module": desktop_relay,
-               "rooted": False, "kind": "desktop"},
     "poco": {"label": "Poco X3 Pro", "module": phone_root, "rooted": True,
              "kind": "phone"},
     "nothing": {"label": "Nothing Phone 2a", "module": phone, "rooted": False,
@@ -354,8 +350,6 @@ DEVICE_PROBE_S = 8
 # with a reason rather than attempted and failed with a stack trace.
 BASE_ACTIONS = {"screenshot", "tap", "swipe", "key", "text", "open", "status",
                 "notifications", "apps", "stream_start", "stream_stop"}
-DESKTOP_ACTIONS = {"screenshot", "tap", "swipe", "scroll", "key", "text",
-                   "status", "stream_start", "stream_stop"}
 # Root-only because dismissing the keyguard needs it. Listed separately from
 # the read verbs because it is the one thing that makes live control usable at
 # all - see phone_root.unlock().
@@ -370,8 +364,7 @@ DANGEROUS_ACTIONS = {"uninstall", "rm", "reboot", "wipe"}
 # Verbs a single device has that the others do not - sideloading an APK is
 # the whole point of a headset and meaningless on a phone Felix carries.
 EXTRA_ACTIONS = {"install"}
-DEVICE_ACTIONS = (BASE_ACTIONS | DESKTOP_ACTIONS | ROOT_ACTIONS |
-                  DANGEROUS_ACTIONS | EXTRA_ACTIONS)
+DEVICE_ACTIONS = BASE_ACTIONS | ROOT_ACTIONS | DANGEROUS_ACTIONS | EXTRA_ACTIONS
 
 # A shell command from the panel is interactive - Felix is watching it. A long
 # one belongs in the task queue, not in a request a phone browser is holding
@@ -446,8 +439,7 @@ def get_devices(_body):
                 "current_app": state.get("current_app"),
                 "width": size[0] if size else None,
                 "height": size[1] if size else None,
-                "actions": sorted((DESKTOP_ACTIONS if entry.get("kind") == "desktop"
-                                   else BASE_ACTIONS) | entry.get("extra", set()) | (
+                "actions": sorted(BASE_ACTIONS | entry.get("extra", set()) | (
                     ROOT_ACTIONS | DANGEROUS_ACTIONS if entry["rooted"] else set())),
             })
         except Exception as e:  # noqa: BLE001 - a device being away is normal
@@ -524,18 +516,11 @@ def post_device_action(body):
         return 400, {"error": str(e)}
     mod = entry["module"]
     extra = entry.get("extra", set())
-    if (entry.get("kind") != "desktop"
-            and action in (ROOT_ACTIONS | DANGEROUS_ACTIONS)
-            and not entry["rooted"]):
-        return 200, {"ok": False,
-                     "error": f"{entry['label']} hat kein root - '{action}' geht dort nicht"}
-    allowed = (DESKTOP_ACTIONS if entry.get("kind") == "desktop"
-               else BASE_ACTIONS | extra | (ROOT_ACTIONS | DANGEROUS_ACTIONS
-                                             if entry["rooted"] else set()))
-    if action not in allowed:
-        return 400, {"error": f"'{action}' wird von {entry['label']} nicht unterstützt"}
     if action in extra:
         pass       # a verb this device has and the others do not
+    elif action in (ROOT_ACTIONS | DANGEROUS_ACTIONS) and not entry["rooted"]:
+        return 200, {"ok": False,
+                     "error": f"{entry['label']} hat kein root - '{action}' geht dort nicht"}
 
     def _num(name, default=None):
         try:
@@ -566,11 +551,6 @@ def post_device_action(body):
         # --- live video ---------------------------------------------------
         if action == "stream_start":
             size = device_size(entry)
-            if entry.get("kind") == "desktop":
-                mod.stream_start()
-                return 200, {"ok": True,
-                             "width": size[0] if size else None,
-                             "height": size[1] if size else None}
             serial = _device_serial(entry)
             enc = phone_stream.encode_size(size[0] if size else None,
                                            size[1] if size else None)
@@ -579,9 +559,6 @@ def post_device_action(body):
                          "width": size[0] if size else None,
                          "height": size[1] if size else None}
         if action == "stream_stop":
-            if entry.get("kind") == "desktop":
-                mod.stream_stop()
-                return 200, {"ok": True}
             phone_stream.stop(_device_serial(entry))
             return 200, {"ok": True}
 
@@ -664,24 +641,12 @@ def post_device_action(body):
             x, y = _num("x"), _num("y")
             if x is None or y is None:
                 return 400, {"error": "tap needs x and y"}
-            if entry.get("kind") == "desktop":
-                button = _str("button") or "left"
-                clicks = _num("clicks", 1)
-                if button not in ("left", "right") or clicks not in (1, 2):
-                    return 400, {"error": "tap button/clicks ungültig"}
-                mod.tap(x, y, button=button, clicks=clicks)
-            else:
-                mod.tap(x, y)
+            mod.tap(x, y)
         elif action == "swipe":
             coords = [_num(k) for k in ("x1", "y1", "x2", "y2")]
             if any(c is None for c in coords):
                 return 400, {"error": "swipe needs x1,y1,x2,y2"}
             mod.swipe(*coords, ms=_num("ms") or 300)
-        elif action == "scroll":
-            dy = _num("dy")
-            if dy is None or not -2400 <= dy <= 2400:
-                return 400, {"error": "scroll braucht dy zwischen -2400 und 2400"}
-            mod.scroll(dy, x=_num("x"), y=_num("y"))
         elif action == "key":
             mod.key(_str("key"))
         elif action == "text":
@@ -694,21 +659,6 @@ def post_device_action(body):
         return 200, {"ok": True}
     except Exception as e:  # noqa: BLE001 - surface the device's own message
         return 200, {"ok": False, "error": str(e)[:400]}
-
-
-def post_desktop_poll(_body):
-    """Laptop heartbeat plus one bounded batch of queued input actions."""
-    return 200, desktop_relay.poll()
-
-
-def post_desktop_frame(query, raw):
-    """Replace the one latest laptop frame; no frame history is retained."""
-    try:
-        width = (query.get("width") or [""])[0]
-        height = (query.get("height") or [""])[0]
-        return 200, desktop_relay.accept_frame(raw, width, height)
-    except (TypeError, ValueError, OSError) as exc:
-        return 400, {"error": str(exc)[:200]}
 
 
 # --- snipes --------------------------------------------------------------
@@ -1319,16 +1269,14 @@ def _aios_services():
 # einem leeren Raum anfangen, und ein zweites Gerät (Laptop im Headset-Modus,
 # ein zweiter Pico) soll denselben Raum sehen, nicht seinen eigenen.
 VR_LAYOUT_PATH = os.path.join(TASK_RUNNER_DIR, "spend", "vr_layout.json")
-VR_LAYOUT_LOCK = threading.Lock()
 
 
 def get_vr_layout(_body):
-    with VR_LAYOUT_LOCK:
-        try:
-            with open(VR_LAYOUT_PATH, encoding="utf-8") as f:
-                layout = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            layout = {}
+    try:
+        with open(VR_LAYOUT_PATH, encoding="utf-8") as f:
+            layout = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        layout = {}
     return 200, {"panels": layout}
 
 
@@ -1341,39 +1289,32 @@ def post_vr_layout(body):
     Server ankommen."""
     body = body or {}
     device = (body.get("device") or "").strip()
-    if (not device or len(device) > 120
-            or not re.fullmatch(r"[A-Za-z0-9_.:-]+", device)):
+    if not device:
         return 400, {"error": "device fehlt"}
-    pos, rot = body.get("position"), body.get("rotation")
-    if not body.get("remove"):
+    try:
+        with open(VR_LAYOUT_PATH, encoding="utf-8") as f:
+            layout = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        layout = {}
+    if body.get("remove"):
+        layout.pop(device, None)
+    else:
+        pos = body.get("position")
+        rot = body.get("rotation")
         if not (isinstance(pos, list) and len(pos) == 3
                 and isinstance(rot, list) and len(rot) == 3):
             return 400, {"error": "position/rotation müssen je [x,y,z] sein"}
-        try:
-            pos = [float(v) for v in pos]
-            rot = [float(v) for v in rot]
-            scale = float(body.get("scale", 1.0))
-        except (TypeError, ValueError):
-            return 400, {"error": "position/rotation/scale müssen Zahlen sein"}
-        if not all(math.isfinite(v) for v in pos + rot + [scale]) or scale <= 0:
-            return 400, {"error": "position/rotation/scale müssen endliche Werte sein"}
-        scale = min(2.5, max(0.35, scale))
-    with VR_LAYOUT_LOCK:
-        try:
-            with open(VR_LAYOUT_PATH, encoding="utf-8") as f:
-                layout = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            layout = {}
-        if body.get("remove"):
-            layout.pop(device, None)
-        else:
-            layout[device] = {"position": pos, "rotation": rot,
-                              "scale": scale, "updated": time.time()}
-        os.makedirs(os.path.dirname(VR_LAYOUT_PATH), exist_ok=True)
-        tmp = f"{VR_LAYOUT_PATH}.tmp.{os.getpid()}.{threading.get_ident()}"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(layout, f, indent=2, ensure_ascii=False)
-        os.replace(tmp, VR_LAYOUT_PATH)
+        layout[device] = {
+            "position": [float(v) for v in pos],
+            "rotation": [float(v) for v in rot],
+            "scale": float(body.get("scale", 1.0)),
+            "updated": time.time(),
+        }
+    os.makedirs(os.path.dirname(VR_LAYOUT_PATH), exist_ok=True)
+    tmp = f"{VR_LAYOUT_PATH}.tmp.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(layout, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, VR_LAYOUT_PATH)
     return 200, {"panels": layout}
 
 

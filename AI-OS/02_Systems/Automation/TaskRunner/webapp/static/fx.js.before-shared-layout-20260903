@@ -86,13 +86,7 @@
       // Streute die freie Textur genauso viel Orange, gäbe es ein Dutzend
       // kleiner Sonnen statt einer.
       accentRate: 0.015,
-      scenes: {
-        "screen-today": ["cliff", "sun", "sailboats"],
-        "screen-money": ["bridge", "haystacks"],
-        "screen-devices": ["willow", "sailboats"],
-        "screen-chat": ["pond"],
-        "default": ["cliff", "sun", "sailboats"]
-      },
+      scene: ["cliff", "sun", "sailboats"],
     },
     day: {
       ref: "Le Bassin aux nymphéas (1899)",
@@ -105,13 +99,7 @@
                  [214,206,172],[142,124,160],[92,132,112]],
       accent: [[226,138,150],[240,214,96]],
       accentRate: 0.05,
-      scenes: {
-        "screen-today": ["poplars", "bridge", "willow", "pond"],
-        "screen-money": ["bridge", "haystacks"],
-        "screen-devices": ["willow", "sailboats"],
-        "screen-chat": ["pond"],
-        "default": ["poplars", "bridge", "willow", "pond"]
-      },
+      scene: ["poplars", "bridge", "willow", "pond"],
     },
     dusk: {
       ref: "Le Parlement, coucher de soleil",
@@ -124,13 +112,7 @@
                  [232,190,150],[168,126,132],[96,88,130]],
       accent: [[240,88,64],[252,206,110]],
       accentRate: 0.05,
-      scenes: {
-        "screen-today": ["cathedral", "spires", "sun", "sailboats"],
-        "screen-money": ["bridge", "haystacks"],
-        "screen-devices": ["willow", "sailboats"],
-        "screen-chat": ["pond"],
-        "default": ["cathedral", "spires", "sun", "sailboats"]
-      },
+      scene: ["cathedral", "spires", "sun", "sailboats"],
     },
     night: {
       ref: "Nymphéas, effet du soir",
@@ -143,28 +125,9 @@
                  [58,48,88],[26,58,78],[38,30,58]],
       accent: [[92,150,150],[150,130,90]],
       accentRate: 0.05,
-      scenes: {
-        "screen-today": ["poplars", "willow", "pond-dim"],
-        "screen-money": ["bridge", "haystacks"],
-        "screen-devices": ["willow", "sailboats"],
-        "screen-chat": ["pond-dim"],
-        "default": ["poplars", "willow", "pond-dim"]
-      },
+      scene: ["poplars", "willow", "pond-dim"],
     },
   };
-
-  // The secondary rooms retain their identity under every light as well.
-  for (const light of Object.values(LIGHTS)) {
-    Object.assign(light.scenes, {
-      "screen-costs": ["haystacks", "poplars"],
-      "screen-command": ["cathedral", "spires"],
-      "screen-proposals": ["poppies", "haystacks"],
-      "screen-dmarc": ["bridge", "poplars"],
-      "screen-snipes": ["cliff", "sailboats"],
-      "screen-flips": ["haystacks", "sailboats"],
-      "screen-downloads": ["willow", "bridge"],
-    });
-  }
 
   // Grenzen für jemanden, der regelmäßig um zwei Uhr nachts wach ist: die
   // Nacht läuft lang, der Morgen ist kurz, und der Abend fängt früh genug an,
@@ -339,7 +302,7 @@
   function sunDisc(ctxs, col) {
     // Muss deutlich größer und dichter sein als jeder Strich ringsum, sonst
     // verschwindet die Sonne im Feld statt es zu tragen.
-    const cx = W * rand(0.44, 0.56), cy = H * (fieldBounds ? L.horizon - rand(.05, .10) : rand(0.38, 0.44));
+    const cx = W * rand(0.44, 0.56), cy = H * rand(0.38, 0.44);
     const r = Math.min(W, H) * 0.11;
     for (let i = 0; i < 30; i++) {
       const a = Math.random() * Math.PI * 2, jr = rand(0, r * 0.35);
@@ -359,7 +322,7 @@
   }
 
   function spires(ctxs, col) {
-    const baseY = H * (fieldBounds ? L.horizon + rand(0, .06) : rand(0.56, 0.64));
+    const baseY = H * rand(0.56, 0.64);
     const n = 9 + ((Math.random() * 4) | 0);
     for (let i = 0; i < n; i++) {
       const x = (i / n) * W + rand(-10, 10);
@@ -461,105 +424,10 @@
     drainId = requestAnimationFrame(step);
   }
 
-  function sceneForScreen() {
-    const scenes = L.scenes || {};
-    return scenes[document.body.dataset.screen || "screen-today"] || scenes.default || [];
-  }
-
-  const fieldObjects = new Map();
-  let fieldBounds = null;
-  function orderedObjects() {
-    return [...fieldObjects.values()].sort((a, b) =>
-      Number(b.item.gates === true) - Number(a.item.gates === true) || a.rank - b.rank);
-  }
-
-  function objectLayout(rank) {
-    const objects = orderedObjects();
-    const index = Math.max(0, objects.findIndex(o => o.rank === rank));
-    if (fieldBounds && objects.length) {
-      const {top, bottom, labelHeights} = fieldBounds;
-      const sizes = [.29, .20, .145];
-      let layouts;
-      // Label text and the footer own their space. Motifs shrink first on a
-      // short viewport; neither a background nor a hit target covers them.
-      for (let scale = 1; scale >= .3; scale -= .1) {
-        layouts = objects.map((obj, i) => {
-          const width = Math.min(W, H * .64) * sizes[i] * scale;
-          return {rank: obj.rank, x: W * [.5, .26, .75][i], width, height: width * .7,
-            labelWidth: Math.min(i === 0 ? 310 : 195, W * (i === 0 ? .91 : .47)),
-            labelHeight: labelHeights[obj.rank] || 88};
-        });
-        const primary = layouts[0];
-        primary.y = bottom - primary.labelHeight - 8 - primary.height / 2;
-        const upperEnd = primary.y - primary.height / 2 - 24;
-        for (let i = 1; i < layouts.length; i++) {
-          const p = layouts[i];
-          p.y = upperEnd - p.labelHeight - 8 - p.height / 2;
-          if (i === 2) p.y = Math.min(p.y, layouts[1].y - 24);
-        }
-        if (Math.min(...layouts.map(p => p.y - p.height / 2)) >= top) break;
-      }
-      return layouts[index];
-    }
-    const pos = [{x: .5, near: .51, size: .29},
-      {x: .26, near: .23, size: .20}, {x: .75, near: .04, size: .145}][index];
-    const width = Math.min(W, H * .64) * pos.size;
-    return {
-      rank, x: W * pos.x, y: H * (L.horizon + (1 - L.horizon) * pos.near),
-      width, height: width * .7,
-      labelWidth: Math.min(index === 0 ? 310 : 195, W * (index === 0 ? .91 : .47)),
-    };
-  }
-
-  function paintFieldObject(ctxs, object, motifs) {
-    const p = objectLayout(object.rank), x = p.x, y = p.y, r = p.width / 2;
-    const col = L.accent[object.rank % L.accent.length];
-    // Positions and silhouettes are deterministic; only the bristle texture
-    // varies. Absolute coordinates survive the deferred stroke queue.
-    if (motifs.includes("pond") || motifs.includes("pond-dim")) {
-      const leaf = mix(L.water[0], L.sky[0], .55);
-      for (let i = 1; i < 24; i++) {
-        const a = i / 24 * Math.PI * 2;
-        stroke(ctxs, x + Math.cos(a) * r * .67, y + Math.sin(a) * r * .35,
-          r * .74, r * .25, a + Math.PI / 2, leaf, .94);
-      }
-      for (let i = 0; i < 7; i++) {
-        const a = i / 7 * Math.PI * 2;
-        stroke(ctxs, x + Math.cos(a) * r * .12, y - r * .14 + Math.sin(a) * r * .09,
-          r * .30, r * .16, a, mix(col, [255, 245, 220], .45), .96);
-      }
-    } else if (motifs.includes("sailboats")) {
-      const dark = shade(L.water[0], .52), sail = mix(col, L.haze, .48);
-      for (let i = 0; i < 12; i++) {
-        const t = i / 12;
-        stroke(ctxs, x + r * (.28 - t * .28), y + r * (.12 - t * .73),
-          r * .80 * (1 - t) + 2, r * .09, 0, sail, .94);
-      }
-      stroke(ctxs, x, y - r * .20, r * .85, Math.max(2, r * .05), Math.PI / 2, dark, .95);
-      for (let i = 0; i < 4; i++) {
-        stroke(ctxs, x, y + r * (.17 + i * .06), r * (1.65 - i * .19), r * .09, 0, dark, .94);
-      }
-    } else {
-      for (let i = 0; i < 13; i++) {
-        const t = i / 12;
-        stroke(ctxs, x, y + r * (t * .9 - .45), r * (.3 + 1.45 * Math.sin(t * Math.PI / 2)),
-          r * .12, 0, mix(col, L.haze, t * .3), .92);
-      }
-    }
-  }
-
   function paint() {
     // Einen laufenden Auftrag abbrechen, sonst malen zwei Bilder übereinander,
     // wenn schnell das Licht gewechselt wird.
     if (drainId !== null) { cancelAnimationFrame(drainId); drainId = null; }
-
-    L = LIGHTS[lightName];
-    if (fieldBounds && fieldObjects.size) {
-      const far = objectLayout(orderedObjects().at(-1).rank);
-      // The optional field composition adapts its horizon to available space;
-      // the ordinary app keeps the original horizon of its current light.
-      L = {...L, horizon: Math.max(fieldBounds.top / H, (far.y - far.height * .12) / H)};
-    }
 
     const ctxs = layers.map((c) => {
       const cx = c.getContext("2d");
@@ -625,10 +493,7 @@
     // Die Szene zuletzt, nicht zuerst: sonst wäscht der freie Teppich darüber
     // jede erkennbare Form wieder aus. Monet hat genauso gearbeitet - erst die
     // Fläche, dann das, woran das Auge sich festhält.
-    const sceneMotifs = sceneForScreen();
-    lastScene = sceneMotifs.join("|");
-    document.body.dataset.fxScene = sceneMotifs.join(" ");
-    for (const m of sceneMotifs) runMotif(m, ctxs);
+    for (const m of (L.scene || [])) runMotif(m, ctxs);
 
     // Akzente: kurz, dick, satt, wenige. Das Letzte, was auf ein Bild kommt,
     // und das Erste, was man sieht.
@@ -637,15 +502,9 @@
              rand(-0.5, 0.5), one(L.accent), rand(0.35, 0.7));
     }
 
-    if ((document.body.dataset.screen || "screen-today") === "screen-today") {
-      // Far objects first, so the nearest one is never washed over.
-      orderedObjects().reverse().forEach(obj => paintFieldObject(ctxs, obj, sceneMotifs));
-    }
-
     const tasks = queue;
     queue = null;
     drain(tasks);
-    window.dispatchEvent(new CustomEvent("fxobjectschange"));
   }
 
   // --- die Leinwand --------------------------------------------------------
@@ -726,48 +585,7 @@
       c.style.width = W + "px";
       c.style.height = H + "px";
     }
-    positionDaystrip();
     paint();
-  }
-
-  function positionDaystrip() {
-    const header = document.querySelector(".topbar");
-    if (header) document.body.style.setProperty("--fx-header-bottom", `${header.getBoundingClientRect().bottom}px`);
-  }
-
-  function updateDaystrip(now = new Date()) {
-    const strip = document.getElementById("fx-daystrip");
-    if (!strip) return;
-    const names = {dawn: "Morgen", day: "Tag", dusk: "Abend", night: "Nacht"};
-    if (!strip.dataset.init) {
-      strip.dataset.init = "1";
-      // Starting at dawn makes the eight-hour night one uninterrupted band.
-      for (const [name, hours] of [["dawn", 3], ["day", 8], ["dusk", 5], ["night", 8]]) {
-        const segment = document.createElement("span");
-        segment.dataset.light = name;
-        segment.style.flex = `${hours} 0 0`;
-        segment.style.background = `rgb(${LIGHTS[name].ground.join(",")})`;
-        segment.setAttribute("aria-hidden", "true");
-        strip.appendChild(segment);
-      }
-      const mark = document.createElement("span");
-      mark.id = "fx-daystrip-mark";
-      mark.setAttribute("aria-hidden", "true");
-      strip.appendChild(mark);
-      strip.addEventListener("click", () => document.getElementById("light-btn")?.click());
-      const header = document.querySelector(".topbar");
-      if (header && typeof ResizeObserver === "function") new ResizeObserver(positionDaystrip).observe(header);
-      positionDaystrip();
-    }
-    const hours = now.getHours() + now.getMinutes() / 60;
-    const offset = (hours - 6 + 24) % 24;
-    document.getElementById("fx-daystrip-mark").style.left = `${(offset / 24 * 100).toFixed(3)}%`;
-    const actual = lightForHour(hours);
-    const next = {dawn: ["day", "09:00"], day: ["dusk", "17:00"], dusk: ["night", "22:00"], night: ["dawn", "06:00"]}[actual];
-    const clock = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-    const label = `${clock} · ${names[next[0]]} ab ${next[1]} · Licht wählen`;
-    strip.setAttribute("aria-label", label);
-    strip.title = label;
   }
 
   // Geprüft statt geplant: ein Telefon, das von Mitternacht bis acht schlief,
@@ -775,8 +593,6 @@
   function refreshLight() {
     const name = manual || lightForHour(new Date().getHours());
     document.body.dataset.light = name;
-    updateDaystrip();
-
     if (name === lightName) return;
     lightName = name;
     L = LIGHTS[name];
@@ -793,63 +609,14 @@
     resizeTimer = setTimeout(resize, 180);
   });
 
-  let paintingPaused = false;
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
-      if (drainId !== null) { cancelAnimationFrame(drainId); drainId = null; paintingPaused = true; }
+      if (drainId !== null) { cancelAnimationFrame(drainId); drainId = null; }
       if (tiltId !== null) { cancelAnimationFrame(tiltId); tiltId = null; }
     } else {
       refreshLight();
-      if (paintingPaused) { paintingPaused = false; window.fxRepaint(); }
     }
   });
-
-  // --- Layout Hooks (Neu) --------------------------------------------------
-  window.fxPlaceObject = function(rank, item) {
-    if (!Number.isInteger(rank) || rank < 1 || rank > 3) return null;
-    fieldObjects.set(rank, {rank, item: item && typeof item === "object" ? item : {action: String(item || "")}});
-    return objectLayout(rank);
-  };
-  window.fxObjectLayout = rank => fieldObjects.has(rank) ? objectLayout(rank) : null;
-  window.fxSetFieldBounds = function(bounds) {
-    const next = bounds && Number.isFinite(bounds.top) && Number.isFinite(bounds.bottom)
-      && bounds.bottom > bounds.top ? {
-        top: Math.max(0, Math.round(bounds.top)), bottom: Math.min(H, Math.round(bounds.bottom)),
-        labelHeights: Object.fromEntries([1, 2, 3].map(rank =>
-          [rank, Math.max(0, Math.ceil(Number(bounds.labelHeights?.[rank]) || 0))])),
-      } : null;
-    if (JSON.stringify(next) === JSON.stringify(fieldBounds)) return false;
-    fieldBounds = next;
-    window.fxRepaint();
-    return true;
-  };
-  window.fxClearObjects = function() {
-    fieldObjects.clear();
-  };
-
-  let repaintId = null;
-  window.fxRepaint = function() {
-    // A request during drain must replace the old painting, never disappear.
-    if (repaintId !== null) cancelAnimationFrame(repaintId);
-    repaintId = requestAnimationFrame(() => {
-      repaintId = null;
-      paint();
-    });
-  };
-
-  let lastScene = sceneForScreen().join("|");
-  new MutationObserver(() => {
-    const currentScene = sceneForScreen().join("|");
-    if (currentScene !== lastScene) {
-      lastScene = currentScene;
-      window.fxRepaint();
-    }
-  }).observe(document.body, { attributes: true, attributeFilter: ["data-screen"] });
-
-  window.fxSetGrainBoost = function(boost = 1) {
-    const value = Number(boost);
-    document.body.style.setProperty("--grain-boost", String(Number.isFinite(value) ? Math.max(1, Math.min(2.5, value)) : 1));
-  };
 
   // --- die Schnittstelle, unverändert ---------------------------------------
 

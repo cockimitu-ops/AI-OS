@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>AI-OS · Heute (Layout-Prototyp)</title>
+<!--
+  LAYOUT-PROTOTYP, Richtung B mit dem Material aus A.
+
+  Steht neben der App und ändert nichts an ihr. Liest echte Daten aus
+  /api/money-board - keine erfundenen Zahlen, weil ein Layout, das man mit
+  Platzhaltern beurteilt, genau die Frage offen lässt, für die man es baut:
+  ob die echten Sätze zu lang sind, ob die echten Beträge tragen.
+
+  DIE ENTSCHEIDUNG DAHINTER
+
+  Dein Wissenskern sagt es selbst: gebaut ist alles, jede Einnahmequelle
+  hängt nur noch an deiner Zeit. Ein Bildschirm, der dir fünf Nullen und
+  sieben Kacheln zeigt, hilft dagegen nicht - er beschreibt einen Zustand,
+  statt eine Handlung zu verlangen. Deshalb steht hier genau eine Frage, und
+  darunter drei Antworten, nach Geld sortiert.
+
+  Alles andere - Geräte, Kosten, Vorschläge, Chat - liegt hinter einem
+  einzigen Griff. Nicht weil es unwichtig wäre, sondern weil es dich nichts
+  kostet, es NICHT zu sehen, solange die drei oben offen sind.
+
+  MATERIAL
+
+  Gesso statt Glas. Kein backdrop-filter: Milchglas ist glatt, kalt und
+  maschinell, also das Gegenteil der Malerei dahinter - und dreißig
+  gleichzeitig weichgezeichnete Flächen sind auf einem Telefon ausserdem
+  der Unterschied zwischen flüssigem und ruckelndem Scrollen. Eine Tafel ist
+  hier matt grundiertes Papier: Kante oben hell, unten dunkel, so als läge
+  Farbe darauf.
+-->
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font: 16px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    color: var(--ink);
+    background: var(--ground);
+    overflow: hidden;
+  }
+
+  /* Die vier Lichter, die fx.js stempelt. Nur Tinte und Grundierung - alles
+     andere erbt davon, damit eine fünfte Palette eine Datenänderung bleibt
+     und keine zweite Formatvorlage. */
+  :root, body[data-light="dawn"] {
+    --ink: #1b2029; --ink-dim: #4a5464; --ground: #bcc0c4;
+    --gesso: rgba(240,242,244,.86); --gesso-lit: rgba(255,255,255,.95);
+    --gesso-dim: rgba(70,80,95,.18); --gate: #b4501f;
+  }
+  body[data-light="day"] {
+    --ink: #1e2118; --ink-dim: #4e5445; --ground: #e2dcc8;
+    --gesso: rgba(247,244,233,.86); --gesso-lit: rgba(255,255,255,.96);
+    --gesso-dim: rgba(60,66,44,.18); --gate: #7a5a18;
+  }
+  body[data-light="dusk"] {
+    --ink: #241a1c; --ink-dim: #5c4749; --ground: #c49e94;
+    --gesso: rgba(251,240,234,.86); --gesso-lit: rgba(255,255,255,.95);
+    --gesso-dim: rgba(80,50,50,.2); --gate: #b03a28;
+  }
+  body[data-light="night"] {
+    --ink: #eef2fb; --ink-dim: #9aa8c4; --ground: #141a28;
+    --gesso: rgba(30,38,58,.80); --gesso-lit: rgba(150,170,210,.24);
+    --gesso-dim: rgba(0,0,0,.4); --gate: #d8996a;
+  }
+
+  #fx-grain { position: fixed; inset: -50%; z-index: 60; pointer-events: none;
+              opacity: .06; mix-blend-mode: multiply; }
+  body[data-light="night"] #fx-grain { mix-blend-mode: overlay; opacity: .04; }
+
+  .wrap {
+    position: relative; z-index: 20; height: 100%;
+    display: flex; flex-direction: column;
+    padding: max(18px, env(safe-area-inset-top)) 16px 16px;
+    gap: 14px;
+  }
+
+  header { display: flex; align-items: baseline; justify-content: space-between; }
+  .mark { font-size: 12px; letter-spacing: .22em; font-weight: 600; opacity: .6; }
+  .when { font-size: 12px; opacity: .55; font-style: italic; }
+
+  /* Die Frage. Gross genug, dass sie die Antwort rahmt statt sie zu
+     kommentieren - sie ist der einzige Satz auf dem Schirm, der nicht aus
+     der Datenbank kommt. */
+  .question { font-size: 27px; line-height: 1.15; font-weight: 600; letter-spacing: -.02em; }
+  .question span { display: block; font-size: 14px; font-weight: 400;
+                   opacity: .6; letter-spacing: 0; margin-top: 5px; }
+
+  .stack { display: flex; flex-direction: column; gap: 11px; overflow-y: auto; flex: 1;
+           margin: 0 -2px; padding: 0 2px 4px; }
+
+  .card {
+    background: var(--gesso); border-radius: 3px; padding: 15px 16px;
+    box-shadow: inset 0 1px 0 var(--gesso-lit), inset 0 -1px 0 var(--gesso-dim),
+                0 3px 14px -6px rgba(0,0,0,.45);
+    cursor: pointer; -webkit-tap-highlight-color: transparent;
+  }
+  /* Das Gate bekommt eine Kante in Warnfarbe statt eine eigene Fläche: es ist
+     dieselbe Sorte Sache wie die anderen, nur die erste. Eine andersfarbige
+     Karte würde behaupten, es sei eine andere Sorte. */
+  .card.gate { border-left: 3px solid var(--gate); padding-left: 13px; }
+
+  .rank { font-size: 11px; letter-spacing: .16em; font-weight: 700;
+          text-transform: uppercase; color: var(--gate); margin-bottom: 6px; }
+  .card:not(.gate) .rank { color: var(--ink-dim); font-weight: 600; }
+
+  .what { font-size: 17px; line-height: 1.32; font-weight: 600; letter-spacing: -.01em; }
+
+  .cost { display: flex; align-items: baseline; gap: 12px; margin-top: 10px; }
+  .eur { font-size: 25px; font-weight: 700; letter-spacing: -.03em; }
+  .eur.none { font-size: 15px; font-weight: 600; opacity: .55; letter-spacing: 0; }
+  .min { font-size: 13px; opacity: .6; }
+
+  .why { font-size: 13.5px; line-height: 1.5; color: var(--ink-dim);
+         margin-top: 10px; display: none; }
+  .card.open .why { display: block; }
+  .more-hint { font-size: 11.5px; opacity: .45; margin-top: 8px; }
+  .card.open .more-hint { display: none; }
+
+  /* Zwei und drei sind Einzeiler, bis man sie antippt. Du machst ohnehin eine
+     Sache nach der anderen - die zweite ausführlich zu zeigen, während die
+     erste noch offen ist, kostet nur Platz, den das Bild darunter besser
+     gebrauchen kann. Aufgeklappt sehen sie aus wie die erste. */
+  .card.slim { padding: 12px 14px; }
+  .card.slim .rank { margin-bottom: 4px; }
+  .card.slim .what {
+    font-size: 15px; font-weight: 600;
+    display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .card.slim.open .what { -webkit-line-clamp: unset; overflow: visible; font-size: 17px; }
+  .card.slim .cost { margin-top: 7px; }
+  .card.slim .eur { font-size: 18px; }
+  .card.slim.open .eur { font-size: 25px; }
+  .card.slim .more-hint { display: none; }
+  .card.slim.open .more-hint { display: none; }
+
+  /* Der eine Griff für alles andere. Bewusst leise: er soll erreichbar sein,
+     nicht einladend. */
+  .rest { background: none; border: 0; color: inherit; font: inherit;
+          font-size: 13.5px; opacity: .6; text-align: left; padding: 10px 2px;
+          cursor: pointer; border-top: 1px solid var(--gesso-dim); }
+
+  .pipe { font-size: 12.5px; line-height: 1.55; opacity: .6; }
+  .pipe b { font-weight: 700; opacity: .85; }
+
+  dialog {
+    border: 0; padding: 0; background: none; color: var(--ink);
+    width: min(430px, 94vw); margin: auto auto 0; max-height: 80vh;
+  }
+  dialog::backdrop { background: rgba(0,0,0,.42); }
+  .sheet { background: var(--gesso); border-radius: 3px 3px 0 0; padding: 18px 16px 22px;
+           box-shadow: inset 0 1px 0 var(--gesso-lit), 0 -6px 30px -8px rgba(0,0,0,.5); }
+  .sheet h2 { font-size: 13px; letter-spacing: .16em; text-transform: uppercase;
+              opacity: .55; margin-bottom: 12px; font-weight: 600; }
+  .row { display: flex; justify-content: space-between; gap: 12px;
+         padding: 9px 0; border-bottom: 1px solid var(--gesso-dim); font-size: 14px; }
+  .row:last-of-type { border-bottom: 0; }
+  .row .r-eur { font-weight: 700; white-space: nowrap; opacity: .8; }
+  .close { margin-top: 14px; width: 100%; background: none; border: 1px solid var(--gesso-dim);
+           border-radius: 3px; padding: 11px; font: inherit; color: inherit; cursor: pointer; }
+  .note { font-size: 11.5px; opacity: .45; margin-top: 14px; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<canvas id="fx-canvas" aria-hidden="true"></canvas>
+<div id="fx-grain" aria-hidden="true"></div>
+
+<div class="wrap">
+  <header>
+    <span class="mark">AI · OS</span>
+    <span class="when" id="when"></span>
+  </header>
+
+  <div class="question">Was machst du als Nächstes?<span id="sub">…</span></div>
+
+  <div class="stack" id="stack"></div>
+
+  <button class="rest" id="rest-btn">…</button>
+  <div class="pipe" id="pipe"></div>
+</div>
+
+<dialog id="sheet">
+  <div class="sheet">
+    <h2>Alles andere</h2>
+    <div id="rest-rows"></div>
+    <p class="note">Layout-Prototyp: die Zahlen sind echt, die Karten lassen sich
+       aufklappen. Erledigt-Haken und die übrigen Screens sind hier bewusst
+       nicht verdrahtet — das ist die nächste Stufe, nicht diese.</p>
+    <button class="close" id="close-btn">Zu</button>
+  </div>
+</dialog>
+
+<script src="paint-motifs.js"></script>
+<script src="fx.js"></script>
+<script>
+(() => {
+"use strict";
+
+// Denselben Schlüssel wie die App: wer die App auf dem Gerät schon geöffnet
+// hat, hat den Token bereits, und dieser Prototyp fragt ihn nicht noch mal ab.
+const TOKEN_KEY = "aios_web_token";
+
+// Vor allem anderen ausgelesen: token() räumt die Adresszeile auf und nimmt
+// dabei auch ?light= mit. Erlaubt, jedes Licht anzusehen, ohne auf die
+// passende Tageszeit zu warten - die dunkle Fassung ist die, bei der Text auf
+// Farbe am ehesten kippt.
+const PARAMS = new URLSearchParams(location.search);
+
+function token() {
+  const p = PARAMS.get("token");
+  if (p) {
+    try { localStorage.setItem(TOKEN_KEY, p); } catch (_) {}
+    history.replaceState({}, "", location.pathname);
+    return p;
+  }
+  try { return localStorage.getItem(TOKEN_KEY) || ""; } catch (_) { return ""; }
+}
+
+const eur = (n) => `${Math.round(n)} €`;
+const esc = (s) => { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; };
+
+function dauer(min) {
+  if (!min) return "läuft nebenbei";
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60), r = min % 60;
+  return r ? `${h} h ${r} min` : `${h} h`;
+}
+
+const RANKS = ["Zuerst", "Dann", "Danach"];
+
+function card(a, i) {
+  const el = document.createElement("div");
+  // Nur die erste Karte steht ausführlich da. Ist die erste das Gate, bleibt
+  // sie es trotzdem - was blockiert, muss man lesen können, ohne es
+  // aufzuklappen.
+  el.className = "card" + (a.gates ? " gate" : "") + (i > 0 ? " slim" : "");
+  el.innerHTML = `
+    <div class="rank">${a.gates ? "Zuerst — blockiert den Rest" : esc(RANKS[i] || "Danach")}</div>
+    <div class="what">${esc(a.action)}</div>
+    <div class="cost">
+      <span class="eur${a.euros ? "" : " none"}">${a.euros ? esc(eur(a.euros)) : "kein Geld, aber Pflicht"}</span>
+      <span class="min">${esc(dauer(a.minutes))}</span>
+    </div>
+    <div class="why">${esc(a.note || "")}</div>
+    ${a.note ? '<div class="more-hint">antippen für den Grund</div>' : ""}`;
+  el.addEventListener("click", () => el.classList.toggle("open"));
+  return el;
+}
+
+// Kein Token, kein Zugang - aber das ist kein Grund für eine Sackgasse. Die
+// erste Fassung schrieb "Token fehlt, einmal mit ?token=… öffnen" und liess
+// Felix damit stehen: eine Fehlermeldung, die Arbeit verlangt, statt sie
+// abzunehmen. Hier steht stattdessen ein Feld, das dieselbe Stelle im
+// Speicher füllt, die auch die App benutzt - einmal eingeben, nie wieder.
+function askForToken(stack, msg) {
+  // Die Platzhalter aufräumen: drei einsame "…" um ein Eingabefeld herum
+  // sehen nach halb geladen aus, nicht nach "hier fehlt nur der Schlüssel".
+  document.getElementById("sub").textContent = "";
+  document.getElementById("pipe").textContent = "";
+  document.getElementById("rest-btn").style.display = "none";
+  stack.innerHTML = `
+    <div class="card">
+      <div class="rank">Zugang</div>
+      <div class="what">${esc(msg)}</div>
+      <div class="why" style="display:block">Derselbe Token wie in der App. Einmal
+        eingeben, dann merkt der Browser ihn sich.</div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <input id="tok" type="password" autocomplete="off" autocapitalize="off"
+               spellcheck="false" placeholder="Token"
+               style="flex:1;min-width:0;font:inherit;font-size:15px;padding:10px;
+                      border:1px solid var(--gesso-dim);border-radius:3px;
+                      background:transparent;color:inherit">
+        <button id="tok-save" style="font:inherit;font-size:15px;padding:10px 16px;
+                border:1px solid var(--gesso-dim);border-radius:3px;
+                background:transparent;color:inherit;cursor:pointer">Los</button>
+      </div>
+    </div>`;
+  const save = () => {
+    const v = document.getElementById("tok").value.trim();
+    if (!v) return;
+    try { localStorage.setItem(TOKEN_KEY, v); } catch (_) {}
+    load();
+  };
+  document.getElementById("tok-save").addEventListener("click", save);
+  document.getElementById("tok").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") save();
+  });
+}
+
+async function load() {
+  const stack = document.getElementById("stack");
+  const t = token();
+  if (!t) { askForToken(stack, "Einmal den Token, dann läuft es."); return; }
+  let data;
+  try {
+    const res = await fetch("/api/money-board", { headers: { Authorization: `Bearer ${t}` } });
+    if (res.status === 401) { askForToken(stack, "Der Token stimmt nicht."); return; }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    data = await res.json();
+  } catch (e) {
+    stack.innerHTML = `<div class="card"><div class="what">${esc(e.message)}</div></div>`;
+    return;
+  }
+
+  const actions = data.actions || [];
+  const drei = actions.slice(0, 3);
+  const rest = actions.slice(3);
+
+  stack.innerHTML = "";
+  drei.forEach((a, i) => stack.appendChild(card(a, i)));
+
+  // Die Zeile unter der Frage sagt, worum es insgesamt geht - der Rest der
+  // Antwort steht in den Karten.
+  const summe = drei.reduce((s, a) => s + (a.euros || 0), 0);
+  const zeit = drei.reduce((s, a) => s + (a.minutes || 0), 0);
+  document.getElementById("sub").textContent =
+    `${eur(summe)} in ${dauer(zeit)}, wenn du die drei heute wegräumst.`;
+
+  const btn = document.getElementById("rest-btn");
+  // Wieder einblenden: askForToken() hatte ihn versteckt, und load() läuft
+  // nach der Eingabe erneut - ohne das bliebe der Griff für immer weg.
+  btn.style.display = "";
+  btn.textContent = rest.length
+    ? `noch ${rest.length} weitere · zusammen ${eur(rest.reduce((s, a) => s + (a.euros || 0), 0))} →`
+    : "nichts weiter offen";
+  document.getElementById("rest-rows").innerHTML = rest.length
+    ? rest.map((a) => `<div class="row"><span>${esc(a.action)}</span>
+        <span class="r-eur">${a.euros ? esc(eur(a.euros)) : "—"}</span></div>`).join("")
+    : `<div class="row"><span>Nichts weiter offen.</span><span></span></div>`;
+
+  // Die Leitung darunter: warum die drei überhaupt etwas wert sind.
+  const s = data.signals || {};
+  const parts = [];
+  if (s.leads_mailable != null)
+    parts.push(`<b>${s.leads_mailable}</b> Leads mit Postadresse warten`);
+  if (s.letters_sent != null)
+    parts.push(`<b>${s.letters_sent}</b> Briefe sind bisher raus`);
+  if (s.flips && s.flips.open != null)
+    parts.push(`<b>${s.flips.open}</b> Flips offen`);
+  document.getElementById("pipe").innerHTML = parts.join(" · ");
+}
+
+// Welches Licht gerade brennt - dieselbe Quelle wie die Malerei darunter.
+function stamp() {
+  const names = { dawn: "Morgen", day: "Mittag", dusk: "Abend", night: "Nacht" };
+  const l = window.fxLight ? window.fxLight() : null;
+  document.getElementById("when").textContent = l ? names[l.name] || l.name : "";
+}
+
+const sheet = document.getElementById("sheet");
+document.getElementById("rest-btn").addEventListener("click", () => sheet.showModal());
+document.getElementById("close-btn").addEventListener("click", () => sheet.close());
+
+const forced = PARAMS.get("light");
+if (forced && window.fxSetLight) window.fxSetLight(forced);
+
+stamp();
+setInterval(stamp, 60000);
+load();
+})();
+</script>
+</body>
+</html>

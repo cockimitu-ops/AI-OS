@@ -152,10 +152,10 @@ def recent_activity(max_chars=MAX_JOURNAL_CONTEXT_CHARS):
     return "## Recent activity across engines (attributed, may be partial)\n" + "\n".join(lines)
 
 
-def system_instruction(include_activity=True):
+def system_instruction():
     """Shared instruction block for engines with a system-prompt channel."""
     core = load()
-    activity = recent_activity() if include_activity else ""
+    activity = recent_activity()
     lead = (
         "You are one of several AI engines serving Felix in AI-OS. "
         "Treat the standing context below as current project context. "

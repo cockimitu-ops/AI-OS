@@ -60,8 +60,15 @@ sleep 2
 # Die Adresse, unter der der Server das Headset später findet. Tailscale
 # zuerst: eine 100.x-Adresse funktioniert auch ausserhalb der Wohnung, eine
 # 192.168.x nur zuhause.
+#
+# "|| true" ist hier Pflicht, nicht Kosmetik: ohne Tailscale auf dem Headset
+# (der normale erste Durchlauf) findet grep keine 100.x-Adresse, meldet exit 1,
+# und pipefail+set -e beendeten das ganze Skript genau hier - bevor der extra
+# dafür vorgesehene Fallback auf die WLAN-Adresse unten je drankam. Beobachtet
+# 2026-09-03: Skript brach kommentarlos mit exit 1 direkt nach "restarting in
+# TCP mode" ab, obwohl das Headset längst eine gültige WLAN-Adresse hatte.
 IP="$(adb -s "$SERIAL" shell ip -4 addr show 2>/dev/null \
-      | grep -oE 'inet 100\.[0-9.]+' | head -1 | awk '{print $2}')"
+      | grep -oE 'inet 100\.[0-9.]+' | head -1 | awk '{print $2}')" || true
 [ -n "$IP" ] || IP="$(adb -s "$SERIAL" shell ip -4 addr show wlan0 2>/dev/null \
       | grep -oE 'inet [0-9.]+' | head -1 | awk '{print $2}')"
 
